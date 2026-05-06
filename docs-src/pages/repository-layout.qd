@@ -1,0 +1,59 @@
+.docname {Repository Layout}
+.docauthor {BakingRL}
+.include {docs}
+.doclang {en}
+
+BakingRL is intentionally split into focused repositories.
+
+## BakingRL
+
+The host application:
+
+```txt
+src/              Svelte frontend
+src-tauri/        Rust/Tauri backend
+docs-src/         Quarkdown source documentation
+doc_bak/          Archived Markdown documentation
+```
+
+The host owns package discovery, package validation, runtime permissions,
+telemetry ingestion, native windows, local storage, and frontend editors.
+
+## BakingRLSDK
+
+The SDK repository contains:
+
+- `@bakingrl/plugin-sdk` TypeScript contracts and helper functions.
+- `create-bakingrl-plugin` scaffolder.
+- `bakingrl-plugin` helper CLI.
+- Plugin author documentation.
+
+Before npm publication, install the SDK globally from the local checkout:
+
+```sh
+cd ../BakingRLSDK
+npm install
+npm install -g . --force
+```
+
+## BakingRLPlugins
+
+The plugin repository contains first-party and experimental plugin packages.
+Its root scripts rely on the globally installed SDK helper commands:
+
+```sh
+cd ../BakingRLPlugins
+npm run create -- my-plugin
+npm run build
+npm run validate
+```
+
+Plugin packages should not be copied back into the host repository. They are
+installed into BakingRL as local app-data packages or `.brlp` bundles.
+
+## Why Split The Repositories
+
+- Host releases do not need to include plugin source.
+- SDK documentation can target plugin authors directly.
+- First-party plugins can be versioned, tested, and distributed separately.
+- The host can enforce clear package boundaries at runtime.

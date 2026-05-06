@@ -1,0 +1,37 @@
+.docname {BakingRL Documentation}
+.docauthor {BakingRL}
+.include {docs}
+.doclang {en}
+
+BakingRL is a desktop host for Rocket League telemetry overlays. It connects to
+the local telemetry stream, normalizes match events, loads plugin packages, and
+renders plugin-powered visuals in Tauri windows and OBS browser sources.
+
+The core idea is simple: the host is responsible for trust, lifecycle, and
+runtime integration; plugins are responsible for presentation, small services,
+connectors, and reusable page content.
+
+## Start Here
+
+- [Overview](pages/overview.qd): what BakingRL is and what problem it solves.
+- [Setup](pages/setup.qd): local development requirements and run commands.
+- [Architecture](pages/architecture.qd): host process, frontend, runtime, and
+  data flow.
+- [Plugin System](pages/plugin-system.qd): the central model behind packages,
+  exports, permissions, and host APIs.
+- [Plugin Lifecycle](pages/plugin-lifecycle.qd): install, validate, enable,
+  load, mount, reload, and uninstall.
+- [Plugin Security](pages/plugin-security.qd): why plugin code is not trusted
+  and where enforcement happens.
+
+## Repository Split
+
+The project is split across three sibling repositories:
+
+```txt
+BakingRL/         Host application
+BakingRLSDK/      SDK, generator, helper CLI, plugin-author documentation
+BakingRLPlugins/  First-party and experimental plugins
+```
+
+Keep them side by side during local development.

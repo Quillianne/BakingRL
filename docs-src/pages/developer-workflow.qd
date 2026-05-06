@@ -1,0 +1,71 @@
+.docname {Developer Workflow}
+.docauthor {BakingRL}
+.include {docs}
+.doclang {en}
+
+This workflow is for contributors working on the host application.
+
+## App Checks
+
+```sh
+npm run check
+npm run build
+cargo check --manifest-path src-tauri/Cargo.toml
+```
+
+Run these before committing host changes.
+
+## App Development
+
+```sh
+npm run tauri dev
+```
+
+The Tauri command starts the Vite development server and the Rust host process.
+
+## Documentation
+
+```sh
+npm run docs:build
+npm run docs:dev
+```
+
+The generated site is written to `docs-site/` and should not be committed.
+
+## Plugin Development Loop
+
+Host contributors often need a local plugin to test runtime behavior:
+
+```sh
+cd ../BakingRLSDK
+npm install
+npm install -g . --force
+
+cd ../BakingRLPlugins
+npm run create -- test-plugin
+cd test-plugin
+npm install
+npm run build
+npm run validate
+npm run install:local
+
+cd ../../BakingRL
+npm run tauri dev
+```
+
+Reload packages from the BakingRL UI after installing or updating a local
+package.
+
+## Change Boundaries
+
+- Host behavior belongs in `BakingRL`.
+- SDK contracts and scaffolding belong in `BakingRLSDK`.
+- First-party plugin source belongs in `BakingRLPlugins`.
+- Generated bundles and build outputs should stay out of Git unless explicitly
+  required.
+
+## Commit Guidance
+
+Use separate commits for separate repositories. A host change that requires SDK
+or plugin updates should be committed independently in each repo with clear
+messages.

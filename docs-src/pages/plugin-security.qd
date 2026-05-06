@@ -1,0 +1,75 @@
+.docname {Plugin Security}
+.docauthor {BakingRL}
+.include {docs}
+.doclang {en}
+
+BakingRL treats plugin packages as untrusted. The SDK improves developer
+experience, but security enforcement belongs to the host.
+
+## Security Boundary
+
+The host owns the security boundary because it controls:
+
+- package installation;
+- archive extraction;
+- manifest parsing;
+- permission resolution;
+- network access;
+- registry writes;
+- service calls;
+- component imports;
+- runtime teardown.
+
+Plugin code should never be considered a trusted enforcement layer.
+
+## Permission Model
+
+Permissions should be explicit and narrow. Examples:
+
+- A connector requests access to a specific HTTPS origin.
+- A service requests access to a specific registry namespace.
+- A visual requests component or service access through package references.
+
+The host should reject requests outside the effective permission set.
+
+## Package Boundaries
+
+Packages cannot import each other directly. Cross-package usage goes through the
+host:
+
+```txt
+visual -> context.components.load("package/component")
+visual -> context.services.call("package/service", "method", input)
+connector -> host-mediated HTTP/WebSocket API
+```
+
+This makes dependencies visible and enforceable.
+
+## Archive Safety
+
+Archive extraction must be defensive:
+
+- reject absolute paths;
+- reject traversal paths;
+- reject symlinks;
+- cap file size;
+- cap total uncompressed size;
+- verify hashes when provided;
+- verify signatures when required.
+
+## Runtime Safety
+
+Plugin runtime contexts should be revocable. When a package is disabled or
+reloaded, the host should stop subscriptions, unmount visuals, and dispose of
+service or connector instances.
+
+## Author Guidance
+
+Plugin authors should:
+
+- request the smallest possible permission set;
+- validate external input;
+- avoid storing secrets in package source;
+- avoid global mutable state unless cleanup is explicit;
+- expose small service methods instead of broad control APIs;
+- treat telemetry payloads and settings as untrusted data.

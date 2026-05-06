@@ -1,0 +1,126 @@
+.docname {Plugin System}
+.docauthor {BakingRL}
+.include {docs}
+.doclang {en}
+
+The plugin system is the most important boundary in BakingRL. A plugin is not a
+folder of arbitrary code that the app trusts. It is a package with a manifest,
+declared exports, declared permissions, and host-controlled runtime entry
+points.
+
+## Core Concepts
+
+## Package
+
+A package is the distributable unit. It has:
+
+- a stable package ID;
+- a version;
+- a `bakingrl.plugin.json` manifest;
+- built JavaScript entry files;
+- optional assets;
+- optional schemas;
+- optional bundle metadata such as hashes and signatures.
+
+Packages are installed into BakingRL's app-data package directory or imported
+from a `.brlp` bundle.
+
+## Manifest
+
+The manifest describes what the package provides. The host reads the manifest
+before loading code.
+
+The manifest answers:
+
+- What is the package ID?
+- Which exports exist?
+- Which files are entry points?
+- What permissions are requested?
+- Which settings and schemas are available?
+- Which page templates can be imported?
+
+## Exports
+
+Exports are named capabilities. BakingRL supports these categories:
+
+- `visuals`: browser modules mounted into overlays or pages.
+- `components`: reusable visual modules loaded by other visuals.
+- `services`: backend modules exposing callable methods.
+- `connectors`: backend modules with explicit network permissions.
+- `pages`: importable page templates.
+
+An export is always loaded by the host. Plugins do not directly load each other.
+
+## Visuals
+
+Visuals render UI. They receive a DOM root and a context object. They can:
+
+- subscribe to telemetry events;
+- read settings;
+- request package assets;
+- load components through the host;
+- call services through the host;
+- log diagnostics.
+
+Visuals should be deterministic and should clean up subscriptions during
+unmount.
+
+## Components
+
+Components are shared visual building blocks. A scoreboard visual might load a
+team badge component, for example. Component loading goes through the host so
+the host can resolve package references and enforce boundaries.
+
+## Services
+
+Services run backend logic. They are useful for stateful operations that should
+not live inside a visual. A service can expose methods such as `snapshot`,
+`reset`, or `recordMatch`.
+
+Services should expose narrow methods instead of broad generic access to host
+state.
+
+## Connectors
+
+Connectors are service-like exports designed for external systems. Examples:
+
+- OBS WebSocket integration.
+- Twitch API integration.
+- Tournament platform API integration.
+
+Connectors must declare network permissions. The host checks HTTP and WebSocket
+requests against those declarations.
+
+## Pages
+
+Pages are reusable layouts or templates that users can import into BakingRL.
+They are not free-form app routes. The host owns page creation, page editing,
+and page rendering.
+
+## Host APIs
+
+Plugins interact with BakingRL through explicit APIs:
+
+- event bus;
+- registry;
+- settings;
+- assets;
+- diagnostics;
+- component loading;
+- service RPC;
+- connector network wrappers.
+
+If a plugin needs a capability that is not available through one of these
+surfaces, the host or SDK should be extended deliberately instead of adding a
+local workaround.
+
+## What Plugins Must Not Assume
+
+- The host repository contains plugin source.
+- The package is loaded from a fixed absolute path.
+- Another package can be imported directly.
+- Local filesystem access is unrestricted.
+- Network access is unrestricted.
+- Runtime internals are stable public APIs.
+
+The manifest and SDK contracts are the public boundary.

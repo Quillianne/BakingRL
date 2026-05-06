@@ -1,0 +1,57 @@
+.docname {Telemetry Runtime}
+.docauthor {BakingRL}
+.include {docs}
+.doclang {en}
+
+BakingRL consumes Rocket League telemetry and exposes normalized events to the
+host UI and plugin runtime.
+
+## Flow
+
+```txt
+Rocket League local stream
+  -> ingestor
+  -> normalized event model
+  -> host event bus
+  -> overlays, pages, services, connectors
+```
+
+## Event Consumers
+
+Different runtime surfaces consume telemetry differently:
+
+- Visuals subscribe to live events to update DOM output.
+- Services can aggregate state or expose snapshots.
+- Connectors can forward selected information to permitted external systems.
+- Editors can use mock events to preview visuals without a live game.
+
+## Development Behavior
+
+Connection warnings are expected when Rocket League or the local telemetry
+source is not running:
+
+```txt
+Connection refused
+Le serveur tourne-t-il ?
+```
+
+This is a runtime availability issue, not a compile failure.
+
+## Event Design
+
+Telemetry events should be normalized before plugin code receives them. Plugin
+authors should not need to know transport-specific details.
+
+Good event contracts are:
+
+- typed;
+- stable;
+- documented in the SDK;
+- tolerant of unknown fields;
+- versioned when breaking changes are unavoidable.
+
+## Testing Without Rocket League
+
+The editor should support mock or recorded events for layout development. This
+keeps visual iteration fast and avoids requiring a live match for every UI
+change.

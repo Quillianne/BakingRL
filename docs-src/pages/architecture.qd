@@ -1,0 +1,76 @@
+.docname {Architecture}
+.docauthor {BakingRL}
+.include {docs}
+.doclang {en}
+
+BakingRL has two main layers: a trusted Rust/Tauri host and a Svelte frontend.
+Plugins run through host-controlled entry points rather than direct filesystem
+or process access.
+
+## High-Level Flow
+
+```txt
+Rocket League telemetry
+  -> ingestor
+  -> host event bus
+  -> plugin runtime APIs
+  -> overlay/page renderers
+```
+
+Package loading follows a separate path:
+
+```txt
+package source
+  -> install/extract
+  -> manifest validation
+  -> permission resolution
+  -> runtime registration
+  -> visual/service/connector/page availability
+```
+
+## Rust/Tauri Host
+
+The host is the trusted boundary. It owns:
+
+- Telemetry socket connections.
+- Package installation and extraction.
+- Manifest parsing and bundle validation.
+- Permission checks.
+- Registry access.
+- Service RPC routing.
+- Connector network access.
+- Window management.
+- Deep-link integration.
+- Local app-data paths.
+
+Plugin code should not bypass the host for these responsibilities.
+
+## Svelte Frontend
+
+The frontend owns:
+
+- Dashboard UI.
+- Package management UI.
+- Overlay editor.
+- Page editor.
+- Runtime preview surfaces.
+- OBS and overlay routes.
+
+Frontend routes render host state and mount plugin visuals through adapter APIs.
+
+## Plugin Runtime
+
+The plugin runtime is not a single unrestricted execution environment. It is a
+set of host-mediated surfaces:
+
+- Visuals mount into DOM roots owned by the host.
+- Components are imported by reference through the host.
+- Services expose methods through RPC.
+- Connectors declare network permissions and access network through host APIs.
+- Pages are templates imported into host-managed page layouts.
+
+## Data Ownership
+
+The host owns canonical state. Plugins receive views, events, and controlled
+APIs. This keeps plugin packages portable and prevents accidental coupling to
+local app internals.

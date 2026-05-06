@@ -1,0 +1,70 @@
+.docname {Troubleshooting}
+.docauthor {BakingRL}
+.include {docs}
+.doclang {en}
+
+This page lists common setup and runtime failures.
+
+## Missing GLib Or GTK Packages
+
+Rust crates such as `glib-sys`, `gtk-sys`, or `webkit2gtk-sys` use
+`pkg-config` to find native development libraries. If `pkg-config` cannot find
+`glib-2.0.pc` or WebKit/GTK files, install the Ubuntu native dependencies:
+
+```sh
+sudo apt install -y \
+  build-essential \
+  curl \
+  git \
+  pkg-config \
+  libdbus-1-dev \
+  libwebkit2gtk-4.1-dev \
+  libgtk-3-dev \
+  libayatana-appindicator3-dev \
+  librsvg2-dev
+```
+
+## V8 Linking Errors
+
+If a Linux build fails while linking a shared library and reports V8 relocation
+errors such as `R_X86_64_TPOFF32`, verify that the Tauri Rust crate is not
+being built as a shared library. The host should use `rlib` for the Rust
+library crate.
+
+## Telemetry Connection Refused
+
+This warning means the runtime cannot reach the local telemetry source yet. It
+is expected if Rocket League or the telemetry bridge is not running.
+
+## Deep-Link Registration Warning
+
+Deep-link registration may fail in development builds depending on desktop
+environment and registration state. It should be treated as a warning unless a
+feature under test depends on deep links.
+
+## EGL Or Mesa Warnings
+
+Linux graphics warnings can appear when the host environment has limited GPU or
+Mesa support. If the app window opens and rendering works, these warnings are
+usually environment noise rather than BakingRL application failures.
+
+## SvelteKit Base Config Warning
+
+If TypeScript or Vite warns that `.svelte-kit/tsconfig.json` is missing, run:
+
+```sh
+npm run check
+```
+
+or any script that starts with `svelte-kit sync`.
+
+## Plugin Not Visible
+
+Check:
+
+- the package was built;
+- `npm run validate` passes in the plugin repo;
+- `npm run install:local` copied the package to the expected app-data path;
+- the package manifest schema is supported;
+- the package is enabled in BakingRL;
+- the export reference matches the manifest.

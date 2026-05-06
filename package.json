@@ -9,6 +9,8 @@
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
+    "docs:build": "quarkdown c docs-src/main.qd -o docs-site --clean --subdoc-naming file-name",
+    "docs:dev": "quarkdown c docs-src/main.qd -o docs-site --clean --subdoc-naming file-name -p -w",
     "tauri": "tauri"
   },
   "license": "MIT",

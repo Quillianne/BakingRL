@@ -1,0 +1,48 @@
+.docname {Overview}
+.docauthor {BakingRL}
+.include {docs}
+.doclang {en}
+
+BakingRL is a desktop application that turns Rocket League telemetry into
+custom overlays and pages. It is not just a static overlay renderer: it is a
+runtime host that discovers plugin packages, validates them, runs trusted host
+services, and exposes controlled APIs to plugin code.
+
+## What BakingRL Does
+
+- Connects to Rocket League's local telemetry stream.
+- Converts raw telemetry into host events.
+- Loads installed plugin packages from app-data.
+- Enforces package boundaries and declared permissions.
+- Renders visuals in in-game overlays, stream overlays, OBS browser sources,
+  and custom pages.
+- Runs backend plugin exports through host-mediated service and connector APIs.
+- Provides package management, overlay editing, page editing, and diagnostics.
+
+## What This Repository Contains
+
+This repository contains the host application only:
+
+- Rust/Tauri backend.
+- Svelte frontend.
+- Telemetry ingestion.
+- Plugin package discovery and validation.
+- Runtime integration for visuals, services, connectors, and pages.
+- Editor and management UI.
+
+It does not contain plugin SDK source or first-party plugin source anymore.
+Those live in `BakingRLSDK` and `BakingRLPlugins`.
+
+## Design Goals
+
+- Keep the host small, trusted, and responsible for security boundaries.
+- Let plugins evolve independently from the desktop application.
+- Make plugin packages portable as `.brlp` bundles.
+- Keep local development simple by using sibling repositories for the moment then npm packages.
+
+## Who Should Read This Documentation
+
+- App contributors working on the host.
+- Plugin authors who need to understand what the host provides.
+- Maintainers reviewing package loading, security, or telemetry behavior.
+- Anyone debugging local development issues.

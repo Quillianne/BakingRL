@@ -1,0 +1,91 @@
+.docname {Plugin Package Format}
+.docauthor {BakingRL}
+.include {docs}
+.doclang {en}
+
+BakingRL packages are described by `bakingrl.plugin.json`.
+
+## Minimal Manifest
+
+```json
+{
+  "schema": "bakingrl.plugin/2",
+  "id": "com.example.my-package",
+  "name": "My Package",
+  "version": "1.0.0",
+  "exports": {
+    "visuals": {
+      "scoreboard": {
+        "entry": "dist/visuals/scoreboard.js",
+        "defaultSize": [760, 128]
+      }
+    }
+  }
+}
+```
+
+## Package ID
+
+The package ID is a stable identity. It should not change after publication.
+Use a reverse-DNS style convention:
+
+```txt
+com.bakingrl.scoreboard
+com.example.match-tools
+```
+
+## Export References
+
+Runtime references usually combine package ID and export name:
+
+```txt
+com.bakingrl.scoreboard/scoreboard
+com.example.match-tools/liveStats
+```
+
+The host resolves these references. Plugins should not resolve package paths
+manually.
+
+## Bundle Layout
+
+Typical package contents:
+
+```txt
+bakingrl.plugin.json
+dist/
+assets/
+schemas/
+manifest.hashes.json
+signature.ed25519
+```
+
+Only built runtime files should be required at install time. Source files,
+tests, and local build caches should not be part of production bundles unless
+there is a deliberate reason.
+
+## `.brlp` Archives
+
+`.brlp` files are package bundles. The host treats them as untrusted input and
+must reject unsafe archive contents:
+
+- absolute paths;
+- `../` path traversal;
+- symlinks;
+- oversized files;
+- unsupported manifest versions;
+- invalid hashes;
+- invalid signatures.
+
+## Settings And Schemas
+
+Settings are package-controlled defaults exposed through host UI and runtime
+contexts. Schemas make settings and service methods inspectable and safer to
+edit.
+
+Prefer explicit schemas for:
+
+- visual settings;
+- component props;
+- service method inputs;
+- connector settings;
+- page template inputs.

@@ -1,0 +1,42 @@
+.docname {Status And Roadmap}
+.docauthor {BakingRL}
+.include {docs}
+.doclang {en}
+
+The detailed historical Markdown status files were moved to `doc_bak/doc/status`.
+This Quarkdown documentation should become the maintained public source going
+forward.
+
+## Current Direction
+
+BakingRL is moving toward a clean v2 architecture:
+
+- host application in `BakingRL`;
+- SDK and generator in `BakingRLSDK`;
+- first-party plugins in `BakingRLPlugins`;
+- Quarkdown documentation for generated public docs;
+- package-based plugin distribution.
+
+## Documentation Direction
+
+The active documentation source is `docs-src/`. The generated site should be
+used for GitHub Pages or another static hosting target.
+
+The archived Markdown files are kept only for reference and migration history.
+Do not update them as the primary documentation source.
+
+## Near-Term Priorities
+
+- Keep host, SDK, and plugin responsibilities separated.
+- Stabilize package lifecycle behavior.
+- Improve package manager UI and diagnostics.
+- Make local plugin development frictionless.
+- Extend plugin API documentation as the SDK evolves.
+- Add more examples in `BakingRLPlugins`.
+
+## Open Documentation Work
+
+- Add diagrams once the plugin runtime implementation stabilizes.
+- Add screenshots for package installation and overlay editing.
+- Add a public plugin author tutorial that links to `BakingRLSDK`.
+- Add deployment instructions for generated Quarkdown docs.

@@ -1,0 +1,124 @@
+.docname {Plugin Lifecycle}
+.docauthor {BakingRL}
+.include {docs}
+.doclang {en}
+
+The plugin lifecycle describes how a package moves from source code to an
+enabled runtime capability inside BakingRL.
+
+## Author
+
+Plugin source is created in `BakingRLPlugins` or another external plugin
+repository:
+
+```sh
+cd ../BakingRLPlugins
+create-bakingrl-plugin my-plugin
+cd my-plugin
+npm install
+npm run build
+```
+
+The source package depends on `@bakingrl/plugin-sdk`. During local development,
+that dependency can point to the sibling `BakingRLSDK` checkout through a
+relative `file:` dependency.
+
+## Validate
+
+The helper CLI validates package structure:
+
+```sh
+npm run validate
+```
+
+Validation should fail before the package reaches BakingRL if:
+
+- the manifest is missing;
+- the schema version is unsupported;
+- required fields are absent;
+- entry files are missing;
+- page templates point outside the package;
+- bundle paths are unsafe.
+
+## Pack
+
+Packages can be packed as `.brlp` archives:
+
+```sh
+npm run pack
+```
+
+A `.brlp` archive is a ZIP-based distribution format containing the manifest,
+built files, assets, schemas, and optional hashes or signatures.
+
+## Install
+
+During local development:
+
+```sh
+npm run install:local
+```
+
+This copies the package into BakingRL's app-data package directory. The host
+discovers packages from that directory.
+
+## Discover
+
+At startup or reload time, the host scans installed packages and reads their
+manifests. Discovery does not imply trust. It only means the package is visible.
+
+## Validate In Host
+
+The host performs its own validation. The CLI is a developer convenience; it is
+not a security boundary.
+
+Host validation checks:
+
+- package path safety;
+- manifest schema;
+- entry references;
+- permissions;
+- hash metadata when present;
+- signature metadata when present;
+- package size and extraction constraints.
+
+## Enable
+
+Users enable packages explicitly. Enabled packages become available to overlay
+layouts, page layouts, services, and connectors according to their declared
+exports.
+
+## Load
+
+The host loads only the exports it needs:
+
+- Visuals load when a layout item or page item mounts.
+- Services load when the package is enabled or when a method is requested,
+  depending on runtime strategy.
+- Connectors load when enabled and permitted.
+- Page templates load when imported into a page.
+
+## Mount
+
+Mounting is where plugin code receives a runtime context. The host owns the
+context and can revoke it during reload or teardown.
+
+Visual mount example:
+
+```txt
+layout item
+  -> host resolves package/export
+  -> host creates DOM root
+  -> visual module mounts with VisualContext
+```
+
+## Reload
+
+Reload should tear down old runtime instances before loading new ones. Plugin
+authors should return cleanup functions or implement unmount handlers where the
+SDK expects them.
+
+## Uninstall
+
+Uninstall removes the package from the app-data package directory. User-owned
+state should only be removed when the UI explicitly asks for it.
