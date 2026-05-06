@@ -17,8 +17,8 @@ perso/
 ## Documentation
 
 The public documentation is authored with Quarkdown in
-[docs-src](docs-src). The old Markdown documentation has been moved to
-[doc_bak](doc_bak).
+[docs-src](docs-src). Historical drafts and working notes are kept outside the
+repository; `docs-src` is the maintained documentation source.
 
 Build the documentation site:
 

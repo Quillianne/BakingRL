@@ -13,7 +13,6 @@ The host application:
 src/              Svelte frontend
 src-tauri/        Rust/Tauri backend
 docs-src/         Quarkdown source documentation
-doc_bak/          Archived Markdown documentation
 ```
 
 The host owns package discovery, package validation, runtime permissions,

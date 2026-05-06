@@ -3,9 +3,8 @@
 .include {docs}
 .doclang {en}
 
-The detailed historical Markdown status files were moved to `doc_bak/doc/status`.
-This Quarkdown documentation should become the maintained public source going
-forward.
+This Quarkdown documentation is the maintained public source going forward.
+Historical drafts and loose planning notes live outside the repository.
 
 ## Current Direction
 
