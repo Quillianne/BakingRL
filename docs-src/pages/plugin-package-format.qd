@@ -17,7 +17,14 @@ BakingRL packages are described by `bakingrl.plugin.json`.
     "visuals": {
       "scoreboard": {
         "entry": "dist/visuals/scoreboard.js",
-        "defaultSize": [760, 128]
+        "defaultSize": [760, 128],
+        "settings": "schemas/scoreboard-settings.json"
+      }
+    },
+    "layouts": {
+      "stream": {
+        "path": "templates/stream-layout.json",
+        "title": "Stream Layout"
       }
     }
   }
@@ -46,6 +53,14 @@ com.example.match-tools/liveStats
 The host resolves these references. Plugins should not resolve package paths
 manually.
 
+## Layout Templates
+
+`exports.layouts` contains importable overlay layout templates. A layout
+template is a JSON layout definition that BakingRL imports into its
+host-owned overlay layout list. It is not an overlay runtime, an OBS source, or
+an app route. After import, users can route the resulting layout to the
+in-game overlay, the OBS stream output, or edit it like any other layout.
+
 ## Bundle Layout
 
 Typical package contents:
@@ -55,6 +70,7 @@ bakingrl.plugin.json
 dist/
 assets/
 schemas/
+templates/
 manifest.hashes.json
 signature.ed25519
 ```
@@ -81,6 +97,35 @@ must reject unsafe archive contents:
 Settings are package-controlled defaults exposed through host UI and runtime
 contexts. Schemas make settings and service methods inspectable and safer to
 edit.
+
+For visual exports, `settings` points to a JSON Schema object used by BakingRL
+to build a typed instance-settings form in the layout and page editors. The
+host currently supports simple object properties: `string`, `number`,
+`integer`, `boolean`, primitive `enum`/`oneOf`, array fields with primitive
+options, and `format: "color"`.
+
+```json
+{
+  "type": "object",
+  "title": "Scoreboard Settings",
+  "properties": {
+    "accent": {
+      "type": "string",
+      "format": "color",
+      "default": "#38bdf8"
+    },
+    "showBoost": {
+      "type": "boolean",
+      "default": true
+    },
+    "density": {
+      "type": "string",
+      "enum": ["compact", "comfortable"],
+      "default": "comfortable"
+    }
+  }
+}
+```
 
 Prefer explicit schemas for:
 

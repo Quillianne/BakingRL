@@ -10,6 +10,7 @@
   type PageLayout = {
     id: string;
     name: string;
+    favorite: boolean;
     width: number;
     height: number;
   };

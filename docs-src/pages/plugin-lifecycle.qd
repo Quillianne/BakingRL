@@ -38,6 +38,7 @@ Validation should fail before the package reaches BakingRL if:
 - required fields are absent;
 - entry files are missing;
 - page templates point outside the package;
+- layout templates point outside the package;
 - bundle paths are unsafe.
 
 ## Pack
@@ -97,6 +98,7 @@ The host loads only the exports it needs:
   depending on runtime strategy.
 - Connectors load when enabled and permitted.
 - Page templates load when imported into a page.
+- Layout templates load when imported into the host-owned overlay layout list.
 
 ## Mount
 

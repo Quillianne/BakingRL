@@ -97,7 +97,7 @@
     background?: PageBackground;
   };
 
-  type OverlayLayoutsFile = {
+  type OverlayLayoutCatalog = {
     active_layout_id: string;
     stream_layout_id: string;
     layouts: OverlayLayout[];
@@ -190,7 +190,7 @@
   let latestEvent: unknown = null;
   let lastMockEventId = 0;
   let packages = $state<PackageDescriptor[]>([]);
-  let overlays = $state<OverlayLayoutsFile | null>(null);
+  let overlayLayouts = $state<OverlayLayoutCatalog | null>(null);
   let pages = $state<PagesFile | null>(null);
   let eventActiveItems = $state(new Set<string>());
   let mountedItems = new Map<string, () => void>();
@@ -200,8 +200,8 @@
   let moduleVersion = 0;
 
   const persistedActiveOverlay = $derived.by(() => {
-    const selectedLayoutId = layoutId ?? (layoutType === "ingame" ? overlays?.active_layout_id : overlays?.stream_layout_id);
-    return overlays?.layouts.find((layout) => layout.id === selectedLayoutId) ?? null;
+    const selectedLayoutId = layoutId ?? (layoutType === "ingame" ? overlayLayouts?.active_layout_id : overlayLayouts?.stream_layout_id);
+    return overlayLayouts?.layouts.find((layout) => layout.id === selectedLayoutId) ?? null;
   });
   const persistedActivePage = $derived.by(() => {
     if (!layoutId) return null;
@@ -341,6 +341,14 @@
     return item.settings && typeof item.settings === "object" && !Array.isArray(item.settings) ? item.settings : {};
   }
 
+  function visualMountSignature(item: OverlayItem) {
+    return JSON.stringify({
+      package_id: item.package_id ?? null,
+      export_name: item.export_name ?? null,
+      settings: settingsObject(item)
+    });
+  }
+
   async function getPackageSettings(packageId: string) {
     const cached = settingsCache.get(packageId);
     if (cached) return cached;
@@ -475,6 +483,7 @@
     root.dataset.exportName = item.export_name;
     root.dataset.layerId = layer.id;
     root.dataset.layerKind = layer.kind;
+    root.dataset.mountSignature = visualMountSignature(item);
     applyItemStyle(root, layer, item, layout);
     host.appendChild(root);
 
@@ -606,6 +615,12 @@
     for (const { layer, item } of itemEntries) {
       const root = host?.querySelector<HTMLElement>(`[data-item-id="${item.id}"]`);
       if (root) {
+        if (itemKind(item) === "visual" && root.dataset.mountSignature !== visualMountSignature(item)) {
+          mountedItems.get(item.id)?.();
+          mountedItems.delete(item.id);
+          await mountItem(layer, item, layout);
+          continue;
+        }
         applyItemStyle(root, layer, item, layout);
         if (itemKind(item) !== "visual") renderNativeItem(root, item);
       } else {
@@ -623,7 +638,7 @@
     if (source === "page") {
       pages = await adapter.invoke<PagesFile>("get_pages");
     } else {
-      overlays = await adapter.invoke<OverlayLayoutsFile>("get_overlay_layouts");
+      overlayLayouts = await adapter.invoke<OverlayLayoutCatalog>("get_overlay_layouts");
     }
     if (activeLayout) await syncMountedItems(activeLayout);
   }
@@ -650,8 +665,8 @@
     }).then((unlisten) => {
       unlistenPackages = unlisten;
     });
-    void adapter.listen<OverlayLayoutsFile>("bakingrl-overlays-changed", (event) => {
-      overlays = event;
+    void adapter.listen<OverlayLayoutCatalog>("bakingrl-overlay-layouts-changed", (event) => {
+      overlayLayouts = event;
     }).then((unlisten) => {
       unlistenOverlays = unlisten;
     });

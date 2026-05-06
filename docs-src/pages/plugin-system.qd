@@ -38,6 +38,7 @@ The manifest answers:
 - What permissions are requested?
 - Which settings and schemas are available?
 - Which page templates can be imported?
+- Which overlay layout templates can be imported?
 
 ## Exports
 
@@ -48,6 +49,7 @@ Exports are named capabilities. BakingRL supports these categories:
 - `services`: backend modules exposing callable methods.
 - `connectors`: backend modules with explicit network permissions.
 - `pages`: importable page templates.
+- `layouts`: importable overlay layout templates.
 
 An export is always loaded by the host. Plugins do not directly load each other.
 
@@ -96,6 +98,14 @@ requests against those declarations.
 Pages are reusable layouts or templates that users can import into BakingRL.
 They are not free-form app routes. The host owns page creation, page editing,
 and page rendering.
+
+## Overlay Layouts
+
+Overlay layout templates are reusable layout definitions that users can import
+into BakingRL. They are not overlay runtimes themselves. After import, they
+become normal host-owned layouts, so routing to the in-game overlay or OBS
+stream output, editing, OBS URLs, and runtime rendering stay controlled by the
+host.
 
 ## Host APIs
 

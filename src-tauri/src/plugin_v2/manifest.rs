@@ -47,6 +47,7 @@ impl PluginPackageManifestV2 {
             + self.exports.services.len()
             + self.exports.connectors.len()
             + self.exports.pages.len()
+            + self.exports.layouts.len()
     }
 }
 
@@ -66,6 +67,8 @@ pub struct PluginExportsV2 {
     pub schemas: BTreeMap<String, SchemaExportV2>,
     #[serde(default)]
     pub pages: BTreeMap<String, PageExportV2>,
+    #[serde(default, alias = "overlays")]
+    pub layouts: BTreeMap<String, LayoutTemplateExportV2>,
 }
 
 impl PluginExportsV2 {
@@ -77,6 +80,7 @@ impl PluginExportsV2 {
             && self.assets.is_empty()
             && self.schemas.is_empty()
             && self.pages.is_empty()
+            && self.layouts.is_empty()
         {
             return Err("plugin must export at least one capability".to_string());
         }
@@ -106,6 +110,10 @@ impl PluginExportsV2 {
         }
         for (name, export) in &self.pages {
             validate_export_name("page", name)?;
+            export.validate()?;
+        }
+        for (name, export) in &self.layouts {
+            validate_export_name("layout", name)?;
             export.validate()?;
         }
         Ok(())
@@ -215,6 +223,20 @@ pub struct PageExportV2 {
 impl PageExportV2 {
     fn validate(&self) -> Result<(), String> {
         validate_relative_plugin_path("page.path", &self.path)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// Importable overlay layout template declared by a package.
+pub struct LayoutTemplateExportV2 {
+    pub path: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+}
+
+impl LayoutTemplateExportV2 {
+    fn validate(&self) -> Result<(), String> {
+        validate_relative_plugin_path("layout.path", &self.path)
     }
 }
 
@@ -433,6 +455,12 @@ mod tests {
                     "twitch": {
                         "entry": "dist/connectors/twitch.js"
                     }
+                },
+                "layouts": {
+                    "stream": {
+                        "path": "templates/stream-layout.json",
+                        "title": "Stream Layout"
+                    }
                 }
             },
             "imports": {
@@ -458,7 +486,7 @@ mod tests {
         .unwrap();
 
         manifest.validate().unwrap();
-        assert_eq!(manifest.export_count(), 4);
+        assert_eq!(manifest.export_count(), 5);
     }
 
     #[test]

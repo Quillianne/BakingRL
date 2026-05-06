@@ -450,18 +450,29 @@ pub struct OverlayLayer {
     pub items: Vec<OverlayItem>,
 }
 
+/// Host-owned composition that can be routed to an overlay runtime.
+///
+/// The overlay runtime is the display surface (in-game window or OBS route).
+/// The layout is the editable content model rendered on that surface.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct OverlayLayout {
+    #[serde(default)]
     pub id: String,
+    #[serde(default)]
     pub name: String,
+    #[serde(default = "default_overlay_width")]
     pub width: f64,
+    #[serde(default = "default_overlay_height")]
     pub height: f64,
     #[serde(default)]
     pub layers: Vec<OverlayLayer>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub items: Vec<OverlayItem>,
+    #[serde(default)]
+    pub template_source: Option<String>,
 }
 
+/// Persisted catalog of overlay layouts and their runtime routing.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct OverlayLayoutsFile {
     pub active_layout_id: String,
@@ -556,6 +567,8 @@ pub struct PageLayout {
     pub id: String,
     #[serde(default)]
     pub name: String,
+    #[serde(default)]
+    pub favorite: bool,
     #[serde(default = "default_page_width")]
     pub width: f64,
     #[serde(default = "default_page_height")]
@@ -593,6 +606,14 @@ fn default_opacity() -> f64 {
 
 fn default_layer_kind() -> String {
     "normal".to_string()
+}
+
+fn default_overlay_width() -> f64 {
+    1920.0
+}
+
+fn default_overlay_height() -> f64 {
+    1080.0
 }
 
 fn default_page_item_kind() -> String {

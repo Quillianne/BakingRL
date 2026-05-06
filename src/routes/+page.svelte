@@ -11,6 +11,14 @@
     type GameEventFrame,
     type RlTelemetryEventName
   } from "$lib/rlTelemetry";
+  import {
+    getInitialLocale,
+    localeOptions,
+    storeLocale,
+    translations,
+    type Locale,
+    type TranslationKey
+  } from "$lib/i18n";
   import { applyTheme, DEFAULT_THEME, getStoredTheme, THEMES, type ThemeId } from "$lib/themes";
 
   type VisualExportDescriptor = {
@@ -31,6 +39,13 @@
   };
 
   type PageExportDescriptor = {
+    name: string;
+    path: string;
+    title: string | null;
+    description: string | null;
+  };
+
+  type LayoutTemplateExportDescriptor = {
     name: string;
     path: string;
     title: string | null;
@@ -80,6 +95,7 @@
       assets: NamedExportDescriptor[];
       schemas: NamedExportDescriptor[];
       pages: PageExportDescriptor[];
+      layouts: LayoutTemplateExportDescriptor[];
     };
     imports: {
       components: string[];
@@ -98,6 +114,7 @@
     assets?: Record<string, unknown>;
     schemas?: Record<string, unknown>;
     pages?: Record<string, unknown>;
+    layouts?: Record<string, unknown>;
   };
 
   type BundleInspection = {
@@ -170,9 +187,10 @@
     height: number;
     layers: OverlayLayer[];
     items?: OverlayItem[];
+    template_source?: string | null;
   };
 
-  type OverlayLayoutsFile = {
+  type OverlayLayoutCatalog = {
     active_layout_id: string;
     stream_layout_id: string;
     layouts: OverlayLayout[];
@@ -208,6 +226,7 @@
   type PageLayout = {
     id: string;
     name: string;
+    favorite: boolean;
     width: number;
     height: number;
     background: {
@@ -298,21 +317,19 @@
   type DeveloperFrameTemplate = RlTelemetryEventName;
   const TELEMETRY_HELP_DISMISSED_KEY = "bakingrl.telemetryHelp.dismissed";
 
-  let activeTab = $state<"packages" | "overlays" | "pages" | "settings" | "developer">("packages");
+  let activeTab = $state<"home" | "pages" | "overlays" | "packages" | "developer" | "settings">("home");
   let settingsSection = $state<"appearance" | "telemetry" | "overlay">("appearance");
+  let locale = $state<Locale>("fr");
   let packages = $state<PackageDescriptor[]>([]);
-  let overlays = $state<OverlayLayoutsFile | null>(null);
+  let overlayLayouts = $state<OverlayLayoutCatalog | null>(null);
   let pages = $state<PagesFile | null>(null);
   let appSettings = $state<AppSettings | null>(null);
-  let packagesDir = $state("");
   let bundlePath = $state("");
   let bundleUrl = $state("");
   let gitRepo = $state("");
   let gitRev = $state("");
-  let selectedLayoutId = $state("");
   let expandedLayoutId = $state("");
-  let selectedVisualRef = $state("");
-  let newOverlayName = $state("");
+  let newLayoutName = $state("");
   let newPageName = $state("");
   let expandedPageId = $state("");
   let message = $state("");
@@ -331,31 +348,15 @@
   let developerFrameTemplate = $state<DeveloperFrameTemplate>("UpdateState");
   let developerFrameJson = $state(telemetryFrameTemplateJson("UpdateState"));
 
-  const visualExports = $derived(
-    packages.filter((pkg) => pkg.enabled).flatMap((pkg) =>
-      pkg.exports.visuals.map((visual) => ({
-        package: pkg,
-        visual,
-        ref: `${pkg.id}/${visual.name}`
-      }))
-    )
-  );
-
-  const activeLayout = $derived(
-    overlays?.layouts.find((layout) => layout.id === selectedLayoutId) ??
-      overlays?.layouts.find((layout) => layout.id === overlays?.active_layout_id) ??
-      null
-  );
-
   const obsBaseUrl = $derived(
     appSettings ? `http://${appSettings.obs.host}:${appSettings.obs.port}` : ""
   );
   const telemetryConnected = $derived(telemetryStatus?.state === "connected");
   const telemetryStatusLabel = $derived.by(() => {
-    if (!telemetryStatus) return "Checking";
-    if (telemetryStatus.state === "connected") return "Connected";
-    if (telemetryStatus.state === "connecting") return "Connecting";
-    return "Disconnected";
+    if (!telemetryStatus) return t("common.loading");
+    if (telemetryStatus.state === "connected") return t("common.connected");
+    if (telemetryStatus.state === "connecting") return t("common.connecting");
+    return t("common.disconnected");
   });
   const sortedDeveloperTelemetryGroups = $derived.by(() => {
     return [...developerTelemetryGroups].sort((a, b) => {
@@ -366,17 +367,49 @@
     });
   });
 
+  const enabledPackageCount = $derived(packages.filter((pkg) => pkg.enabled).length);
+  const packageErrorCount = $derived(packages.filter((pkg) => pkg.error).length);
+  const overlayLayoutCount = $derived(overlayLayouts?.layouts.length ?? 0);
+  const pageCount = $derived(pages?.pages.length ?? 0);
+  const homeInGameLayout = $derived(
+    overlayLayouts?.layouts.find((layout) => layout.id === overlayLayouts?.active_layout_id) ?? null
+  );
+  const homeStreamLayout = $derived(
+    overlayLayouts?.layouts.find((layout) => layout.id === overlayLayouts?.stream_layout_id) ?? null
+  );
+  const favoritePages = $derived(pages?.pages.filter((page) => page.favorite) ?? []);
+  const homeMainLayouts = $derived(
+    [
+      { kind: "ingame", label: t("home.ingameLayout"), layout: homeInGameLayout },
+      { kind: "stream", label: t("home.streamLayout"), layout: homeStreamLayout }
+    ] as const
+  );
+
+  function t(key: TranslationKey) {
+    return translations[locale][key];
+  }
+
+  function tx(key: TranslationKey, values: Record<string, string | number>) {
+    return Object.entries(values).reduce(
+      (text, [name, value]) => text.replaceAll(`{${name}}`, String(value)),
+      t(key)
+    );
+  }
+
+  function setLocale(nextLocale: Locale) {
+    locale = nextLocale;
+    storeLocale(nextLocale);
+  }
+
   async function refresh() {
     packages = await invoke<PackageDescriptor[]>("list_packages");
-    packagesDir = await invoke<string>("packages_dir");
-    overlays = await invoke<OverlayLayoutsFile>("get_overlay_layouts");
+    overlayLayouts = await invoke<OverlayLayoutCatalog>("get_overlay_layouts");
     pages = await invoke<PagesFile>("get_pages");
     appSettings = await invoke<AppSettings>("get_app_settings");
     telemetryStatus = await invoke<TelemetryConnectionStatus>("get_telemetry_status");
     overlayMonitors = await invoke<OverlayMonitor[]>("list_overlay_monitors");
     registryEntries = await invoke<RegistryEntry[]>("registry_entries");
-    selectedLayoutId = overlays.active_layout_id;
-    if (expandedLayoutId && !overlays.layouts.some((layout) => layout.id === expandedLayoutId)) {
+    if (expandedLayoutId && !overlayLayouts.layouts.some((layout) => layout.id === expandedLayoutId)) {
       expandedLayoutId = "";
     }
     if (expandedPageId && !pages.pages.some((page) => page.id === expandedPageId)) {
@@ -389,7 +422,7 @@
     message = "";
     try {
       packages = await invoke<PackageDescriptor[]>("reload_packages");
-      message = "Packages reloaded successfully.";
+      message = t("msg.packagesReloaded");
     } catch (error) {
       message = String(error);
     } finally {
@@ -428,9 +461,9 @@
 
   function removePackage(pkg: PackageDescriptor) {
     askConfirmation({
-      title: "Remove package",
-      message: `Remove "${pkg.name}" and its installed files? This cannot be undone.`,
-      confirmLabel: "Remove",
+      title: t("confirm.removePackageTitle"),
+      message: tx("confirm.removePackageMessage", { name: pkg.name }),
+      confirmLabel: t("common.remove"),
       run: () => removePackageConfirmed(pkg)
     });
   }
@@ -442,7 +475,7 @@
       packages = await invoke<PackageDescriptor[]>("remove_package", {
         packageId: pkg.id
       });
-      message = "Package removed successfully.";
+      message = t("msg.packageRemoved");
     } catch (error) {
       message = String(error);
     } finally {
@@ -487,10 +520,10 @@
       await refresh();
       message =
         sourceKind === "file"
-          ? "Package installed from file."
+          ? t("msg.installedFile")
           : sourceKind === "url"
-            ? "Package installed from URL."
-            : "Package installed from Git.";
+            ? t("msg.installedUrl")
+            : t("msg.installedGit");
     } catch (error) {
       message = String(error);
     } finally {
@@ -546,7 +579,7 @@
         : deepLink;
       await setPendingInstall({ kind: "url", label, ...prepared });
     } catch (error) {
-      message = `Deep link rejected: ${String(error)}`;
+      message = `${t("msg.deepLinkRejected")}: ${String(error)}`;
     } finally {
       busy = false;
     }
@@ -580,16 +613,15 @@
     }
   }
 
-  async function createOverlay() {
+  async function createOverlayLayout() {
     busy = true;
     message = "";
     try {
-      overlays = await invoke<OverlayLayoutsFile>("create_overlay_layout", {
-        name: newOverlayName.trim() || "Untitled Overlay"
+      overlayLayouts = await invoke<OverlayLayoutCatalog>("create_overlay_layout", {
+        name: newLayoutName.trim() || t("overlays.untitled")
       });
-      selectedLayoutId = overlays.active_layout_id;
-      expandedLayoutId = selectedLayoutId;
-      newOverlayName = "";
+      expandedLayoutId = overlayLayouts.active_layout_id;
+      newLayoutName = "";
     } catch (error) {
       message = String(error);
     } finally {
@@ -601,8 +633,8 @@
     busy = true;
     message = "";
     try {
-      overlays = await invoke<OverlayLayoutsFile>("save_overlay_layout", { layout });
-      message = "Overlay layout saved.";
+      overlayLayouts = await invoke<OverlayLayoutCatalog>("save_overlay_layout", { layout });
+      message = t("msg.overlaySaved");
     } catch (error) {
       message = String(error);
     } finally {
@@ -611,7 +643,6 @@
   }
 
   function toggleLayoutDetails(layoutId: string) {
-    selectedLayoutId = layoutId;
     expandedLayoutId = expandedLayoutId === layoutId ? "" : layoutId;
   }
 
@@ -624,11 +655,11 @@
   }
 
   function isInGameLayout(layout: OverlayLayout) {
-    return overlays?.active_layout_id === layout.id;
+    return overlayLayouts?.active_layout_id === layout.id;
   }
 
   function isStreamLayout(layout: OverlayLayout) {
-    return overlays?.stream_layout_id === layout.id;
+    return overlayLayouts?.stream_layout_id === layout.id;
   }
 
   async function renameLayout(layout: OverlayLayout, name: string) {
@@ -653,14 +684,14 @@
   }
 
   function deleteLayout(layout: OverlayLayout) {
-    if ((overlays?.layouts.length ?? 0) <= 1) {
-      message = "At least one overlay layout is required.";
+    if ((overlayLayouts?.layouts.length ?? 0) <= 1) {
+      message = t("msg.overlayRequired");
       return;
     }
     askConfirmation({
-      title: "Delete layout",
-      message: `Delete "${layout.name}"? This cannot be undone.`,
-      confirmLabel: "Delete",
+      title: t("confirm.deleteLayoutTitle"),
+      message: tx("confirm.deleteLayoutMessage", { name: layout.name }),
+      confirmLabel: t("common.delete"),
       run: () => deleteLayoutConfirmed(layout.id)
     });
   }
@@ -669,12 +700,11 @@
     busy = true;
     message = "";
     try {
-      overlays = await invoke<OverlayLayoutsFile>("delete_overlay_layout", { layoutId });
-      selectedLayoutId = overlays.active_layout_id;
+      overlayLayouts = await invoke<OverlayLayoutCatalog>("delete_overlay_layout", { layoutId });
       if (expandedLayoutId === layoutId) {
         expandedLayoutId = "";
       }
-      message = "Overlay layout deleted.";
+      message = t("msg.overlayDeleted");
     } catch (error) {
       message = String(error);
     } finally {
@@ -682,15 +712,14 @@
     }
   }
 
-  async function activateOverlay(layoutId: string, stream = false) {
+  async function routeOverlayLayout(layoutId: string, stream = false) {
     busy = true;
     message = "";
     try {
-      overlays = await invoke<OverlayLayoutsFile>(
+      overlayLayouts = await invoke<OverlayLayoutCatalog>(
         stream ? "set_stream_overlay_layout" : "set_active_overlay_layout",
         { layoutId }
       );
-      selectedLayoutId = layoutId;
     } catch (error) {
       message = String(error);
     } finally {
@@ -698,52 +727,23 @@
     }
   }
 
-  function addVisualToLayout(layout = activeLayout) {
-    if (!layout || !selectedVisualRef) return;
-    const selected = visualExports.find((entry) => entry.ref === selectedVisualRef);
-    if (!selected) return;
-    const layer = normalLayers(layout)[0] ?? layout.layers[0];
-    if (!layer) return;
-    const item: OverlayItem = {
-      id: `item-${Date.now()}`,
-      package_id: selected.package.id,
-      export_name: selected.visual.name,
-      name: selected.visual.name,
-      x: 80,
-      y: 80,
-      width: selected.visual.default_width,
-      height: selected.visual.default_height,
-      z_index: layer.items.length + 10,
-      visible: true,
-      locked: false,
-      opacity: 1,
-      settings: {}
-    };
-    layer.items = [...layer.items, item];
-    void saveLayout(layout);
-  }
-
   function removeItem(layout: OverlayLayout, itemId: string) {
-    const itemName = layout.layers.flatMap((layer) => layer.items).find((item) => item.id === itemId)?.name ?? "this item";
+    const itemName = layout.layers.flatMap((layer) => layer.items).find((item) => item.id === itemId)?.name ?? t("common.items");
     askConfirmation({
-      title: "Remove item",
-      message: `Remove "${itemName}" from "${layout.name}"?`,
-      confirmLabel: "Remove",
+      title: t("confirm.removeItemTitle"),
+      message: tx("confirm.removeItemMessage", { item: itemName, layout: layout.name }),
+      confirmLabel: t("common.remove"),
       run: () => removeItemConfirmed(layout.id, itemId)
     });
   }
 
   function removeItemConfirmed(layoutId: string, itemId: string) {
-    const layout = overlays?.layouts.find((candidate) => candidate.id === layoutId);
+    const layout = overlayLayouts?.layouts.find((candidate) => candidate.id === layoutId);
     if (!layout) return;
     for (const layer of layout.layers) {
       layer.items = layer.items.filter((item) => item.id !== itemId);
     }
     void saveLayout(layout);
-  }
-
-  function normalLayers(layout: OverlayLayout) {
-    return [...(layout.layers ?? [])].filter((layer) => layer.kind !== "event").sort((a, b) => a.order - b.order);
   }
 
   function sortedLayers(layout: OverlayLayout) {
@@ -764,7 +764,7 @@
 
   async function copyText(value: string, label: string) {
     await navigator.clipboard.writeText(value);
-    message = `${label} copied to clipboard.`;
+    message = `${label} ${t("msg.copied")}`;
   }
 
   function openPreview(value: string) {
@@ -773,10 +773,28 @@
 
   async function openLayoutEditor(layoutId: string) {
     try {
-      await invoke("open_overlay_editor", { layoutId });
+      await invoke("open_overlay_layout_editor", { layoutId });
     } catch (error) {
       message = String(error);
       window.location.href = `/editor/layout/${layoutId}`;
+    }
+  }
+
+  async function importPackageLayout(packageId: string, exportName: string) {
+    busy = true;
+    message = "";
+    try {
+      overlayLayouts = await invoke<OverlayLayoutCatalog>("import_package_layout", {
+        packageId,
+        exportName
+      });
+      activeTab = "overlays";
+      expandedLayoutId = overlayLayouts.active_layout_id;
+      message = t("msg.overlayImported");
+    } catch (error) {
+      message = String(error);
+    } finally {
+      busy = false;
     }
   }
 
@@ -785,7 +803,7 @@
     message = "";
     try {
       pages = await invoke<PagesFile>("create_page", {
-        name: newPageName.trim() || "Untitled Page"
+        name: newPageName.trim() || t("pages.untitled")
       });
       expandedPageId = pages.pages[0]?.id ?? "";
       newPageName = "";
@@ -801,7 +819,7 @@
     message = "";
     try {
       pages = await invoke<PagesFile>("save_page", { page });
-      message = "Page saved.";
+      message = t("msg.pageSaved");
     } catch (error) {
       message = String(error);
     } finally {
@@ -843,13 +861,17 @@
     await savePage({ ...page, settings: { ...page.settings, open_target: openTarget } });
   }
 
+  async function togglePageFavorite(page: PageLayout) {
+    await savePage({ ...page, favorite: !page.favorite });
+  }
+
   async function duplicatePage(pageId: string) {
     busy = true;
     message = "";
     try {
       pages = await invoke<PagesFile>("duplicate_page", { pageId });
       expandedPageId = pages.pages[0]?.id ?? "";
-      message = "Page duplicated.";
+      message = t("msg.pageDuplicated");
     } catch (error) {
       message = String(error);
     } finally {
@@ -859,9 +881,9 @@
 
   function deletePage(page: PageLayout) {
     askConfirmation({
-      title: "Delete page",
-      message: `Delete "${page.name}"? This cannot be undone.`,
-      confirmLabel: "Delete",
+      title: t("confirm.deletePageTitle"),
+      message: tx("confirm.deletePageMessage", { name: page.name }),
+      confirmLabel: t("common.delete"),
       run: () => deletePageConfirmed(page.id)
     });
   }
@@ -872,7 +894,7 @@
     try {
       pages = await invoke<PagesFile>("delete_page", { pageId });
       if (expandedPageId === pageId) expandedPageId = "";
-      message = "Page deleted.";
+      message = t("msg.pageDeleted");
     } catch (error) {
       message = String(error);
     } finally {
@@ -890,7 +912,7 @@
       });
       activeTab = "pages";
       expandedPageId = pages.pages[0]?.id ?? "";
-      message = "Page imported.";
+      message = t("msg.pageImported");
     } catch (error) {
       message = String(error);
     } finally {
@@ -912,10 +934,19 @@
   }
 
   const pageTemplates = $derived(
-    packages.flatMap((pkg) =>
+    packages.filter((pkg) => pkg.enabled).flatMap((pkg) =>
       pkg.exports.pages.map((page) => ({
         package: pkg,
         page
+      }))
+    )
+  );
+
+  const layoutTemplates = $derived(
+    packages.filter((pkg) => pkg.enabled).flatMap((pkg) =>
+      pkg.exports.layouts.map((layoutTemplate) => ({
+        package: pkg,
+        layoutTemplate
       }))
     )
   );
@@ -928,7 +959,7 @@
       appSettings.overlay.monitor_id = appSettings.overlay.monitor_id || null;
       appSettings = await invoke<AppSettings>("save_app_settings", { settings: appSettings });
       overlayMonitors = await invoke<OverlayMonitor[]>("list_overlay_monitors");
-      message = "Settings saved successfully.";
+      message = t("msg.settingsSaved");
     } catch (error) {
       message = String(error);
     } finally {
@@ -944,7 +975,8 @@
       pkg.exports.connectors.length +
       pkg.exports.assets.length +
       pkg.exports.schemas.length +
-      pkg.exports.pages.length
+      pkg.exports.pages.length +
+      pkg.exports.layouts.length
     );
   }
 
@@ -961,7 +993,8 @@
       Object.keys(exports.connectors ?? {}).length +
       Object.keys(exports.assets ?? {}).length +
       Object.keys(exports.schemas ?? {}).length +
-      Object.keys(exports.pages ?? {}).length
+      Object.keys(exports.pages ?? {}).length +
+      Object.keys(exports.layouts ?? {}).length
     );
   }
 
@@ -985,31 +1018,31 @@
 
     return [
       {
-        title: "Telemetry Bus",
+        title: t("permissions.telemetryBus"),
         rows: [
-          { label: "Read events", values: permissionValueList(bus.read), emptyLabel: "No telemetry read access" },
-          { label: "Publish events", values: permissionValueList(bus.publish), emptyLabel: "Cannot publish events" }
+          { label: t("permissions.readEvents"), values: permissionValueList(bus.read), emptyLabel: t("permissions.noReadEvents") },
+          { label: t("permissions.publishEvents"), values: permissionValueList(bus.publish), emptyLabel: t("permissions.noPublishEvents") }
         ]
       },
       {
-        title: "Registry",
+        title: t("permissions.registry"),
         rows: [
-          { label: "Read keys", values: permissionValueList(registry.read), emptyLabel: "No registry read access" },
-          { label: "Write keys", values: permissionValueList(registry.write), emptyLabel: "No registry write access" }
+          { label: t("permissions.readKeys"), values: permissionValueList(registry.read), emptyLabel: t("permissions.noReadKeys") },
+          { label: t("permissions.writeKeys"), values: permissionValueList(registry.write), emptyLabel: t("permissions.noWriteKeys") }
         ]
       },
       {
-        title: "Network",
+        title: t("permissions.network"),
         rows: [
-          { label: "HTTP hosts", values: permissionValueList(network.http), emptyLabel: "No HTTP access" },
-          { label: "WebSocket hosts", values: permissionValueList(network.websocket), emptyLabel: "No WebSocket access" }
+          { label: t("permissions.httpHosts"), values: permissionValueList(network.http), emptyLabel: t("permissions.noHttp") },
+          { label: t("permissions.websocketHosts"), values: permissionValueList(network.websocket), emptyLabel: t("permissions.noWebsocket") }
         ]
       },
       {
-        title: "Storage",
+        title: t("permissions.storage"),
         rows: [
-          { label: "Read storage", values: permissionValueList(storageRead), emptyLabel: "No storage read access" },
-          { label: "Write storage", values: permissionValueList(storageWrite), emptyLabel: "No storage write access" }
+          { label: t("permissions.readStorage"), values: permissionValueList(storageRead), emptyLabel: t("permissions.noReadStorage") },
+          { label: t("permissions.writeStorage"), values: permissionValueList(storageWrite), emptyLabel: t("permissions.noWriteStorage") }
         ]
       }
     ];
@@ -1080,7 +1113,7 @@
         Data: parsed.Data ?? {}
       };
       await invoke("emit_developer_telemetry", { frame });
-      message = `Developer frame "${frame.Event}" sent.`;
+      message = `${t("msg.developerFrameSent")} (${frame.Event})`;
     } catch (error) {
       message = error instanceof Error ? error.message : String(error);
     }
@@ -1121,6 +1154,7 @@
   }
 
   onMount(() => {
+    locale = getInitialLocale();
     currentTheme = applyTheme(getStoredTheme());
     if (!telemetryHelpDismissed()) {
       openTelemetryHelp(false);
@@ -1136,7 +1170,7 @@
       void getCurrent()
         .then(handleDeepLinkUrls)
         .catch((error) => {
-          message = `Deep link unavailable: ${String(error)}`;
+          message = `${t("msg.deepLinkUnavailable")}: ${String(error)}`;
         });
       void onOpenUrl((urls) => {
         void handleDeepLinkUrls(urls);
@@ -1145,7 +1179,7 @@
           unlistenDeepLinks = unlisten;
         })
         .catch((error) => {
-          message = `Deep link listener unavailable: ${String(error)}`;
+          message = `${t("msg.deepLinkListenerUnavailable")}: ${String(error)}`;
         });
     }
     void listen<PackageDescriptor[]>("bakingrl-packages-changed", (event) => {
@@ -1153,8 +1187,8 @@
     }).then((unlisten) => {
       unlistenPackages = unlisten;
     });
-    void listen<OverlayLayoutsFile>("bakingrl-overlays-changed", (event) => {
-      overlays = event.payload;
+    void listen<OverlayLayoutCatalog>("bakingrl-overlay-layouts-changed", (event) => {
+      overlayLayouts = event.payload;
     }).then((unlisten) => {
       unlistenOverlays = unlisten;
     });
@@ -1194,6 +1228,7 @@
     title={confirmRequest?.title}
     message={confirmRequest?.message}
     confirmLabel={confirmRequest?.confirmLabel}
+    cancelLabel={t("common.cancel")}
     danger
     onconfirm={confirmAction}
     oncancel={cancelConfirmation}
@@ -1204,7 +1239,7 @@
       <button
         type="button"
         class="telemetry-help-scrim"
-        aria-label="Close telemetry setup help"
+        aria-label={t("telemetry.helpClose")}
         onclick={closeTelemetryHelp}
       ></button>
       <div
@@ -1216,31 +1251,31 @@
       >
         <div class="telemetry-help-copy">
           <span class="badge route">Rocket League Telemetry</span>
-          <h2 id="telemetry-help-title">Enable Rocket League telemetry</h2>
-          <p>Rocket League must expose its local Stats API before BakingRL can receive live match data.</p>
+          <h2 id="telemetry-help-title">{t("telemetry.helpTitle")}</h2>
+          <p>{t("telemetry.helpDesc")}</p>
         </div>
 
         <ol class="telemetry-help-steps">
-          <li>Close Rocket League before editing the telemetry config.</li>
-          <li>Open <code>&lt;Rocket League install&gt;\TAGame\Config\DefaultStatsAPI.ini</code>.</li>
-          <li>Set <code>PacketSendRate</code> to a value above <code>0</code>, for example <code>30</code>.</li>
-          <li>Set <code>Port</code> to <code>{appSettings?.telemetry.rocket_league_port ?? telemetryStatus?.port ?? 49123}</code>.</li>
-          <li>Save the file, restart Rocket League, then join a match or open a replay.</li>
+          <li>{t("telemetry.stepClose")}</li>
+          <li>{t("telemetry.stepOpen")} <code>&lt;Rocket League install&gt;\TAGame\Config\DefaultStatsAPI.ini</code>.</li>
+          <li>{t("telemetry.stepPacket")}</li>
+          <li>{t("telemetry.stepPort")} <code>{appSettings?.telemetry.rocket_league_port ?? telemetryStatus?.port ?? 49123}</code>.</li>
+          <li>{t("telemetry.stepRestart")}</li>
         </ol>
 
         <div class="telemetry-help-note">
-          <strong>Expected connection</strong>
+          <strong>{t("telemetry.expected")}</strong>
           <span>
-            BakingRL listens on
+            {t("telemetry.listensOn")}
             <code>{appSettings?.telemetry.rocket_league_host ?? telemetryStatus?.host ?? "127.0.0.1"}:{appSettings?.telemetry.rocket_league_port ?? telemetryStatus?.port ?? 49123}</code>.
-            Keep this host and port aligned with Rocket League.
+            {t("telemetry.keepAligned")}
           </span>
         </div>
 
         <label class="checkbox-label telemetry-help-check">
           <input type="checkbox" bind:checked={telemetryHelpDontShow} />
           <span class="checkmark"></span>
-          Don't show this again
+          {t("telemetry.dontShow")}
         </label>
 
         <div class="telemetry-help-actions">
@@ -1255,25 +1290,44 @@
       <div class="logo-icon"></div>
       <div>
         <h1>BakingRL</h1>
-        <p class="subtitle" title={packagesDir}>{packagesDir || "Loading package directory..."}</p>
+        <p class="subtitle">Your RL Companion</p>
       </div>
     </div>
-    <nav class="tabs" aria-label="Dashboard sections">
-      <button class="tab-btn" class:active={activeTab === "packages"} onclick={() => (activeTab = "packages")}>
-        Packages
-      </button>
-      <button class="tab-btn" class:active={activeTab === "overlays"} onclick={() => (activeTab = "overlays")}>
-        Overlays
-      </button>
-      <button class="tab-btn" class:active={activeTab === "pages"} onclick={() => (activeTab = "pages")}>
-        My Pages
-      </button>
-      <button class="tab-btn" class:active={activeTab === "settings"} onclick={() => (activeTab = "settings")}>
-        Settings
-      </button>
-      <button class="tab-btn" class:active={activeTab === "developer"} onclick={() => (activeTab = "developer")}>
-        Developer
-      </button>
+    <nav class="tabs" aria-label={t("home.title")}>
+      <div class="tab-group primary">
+        <button class="tab-btn" class:active={activeTab === "home"} onclick={() => (activeTab = "home")}>
+          {t("nav.home")}
+        </button>
+        <button class="tab-btn" class:active={activeTab === "pages"} onclick={() => (activeTab = "pages")}>
+          {t("nav.pages")}
+        </button>
+        <button class="tab-btn" class:active={activeTab === "overlays"} onclick={() => (activeTab = "overlays")}>
+          {t("nav.overlays")}
+        </button>
+      </div>
+      <div class="tab-group secondary">
+        <button class="tab-btn" class:active={activeTab === "packages"} onclick={() => (activeTab = "packages")}>
+          {t("nav.packages")}
+        </button>
+        <button class="tab-btn" class:active={activeTab === "developer"} onclick={() => (activeTab = "developer")}>
+          {t("nav.developer")}
+        </button>
+        <button class="tab-btn" class:active={activeTab === "settings"} onclick={() => (activeTab = "settings")}>
+          {t("nav.settings")}
+        </button>
+      </div>
+      <div class="language-switch" aria-label={t("language.label")}>
+        {#each localeOptions as option}
+          <button
+            type="button"
+            class:active={locale === option.id}
+            aria-pressed={locale === option.id}
+            onclick={() => setLocale(option.id)}
+          >
+            {option.label}
+          </button>
+        {/each}
+      </div>
     </nav>
   </header>
 
@@ -1286,14 +1340,99 @@
       </div>
     {/if}
 
-    {#if activeTab === "packages"}
+    {#if activeTab === "home"}
+      <div class="home-layout">
+        <section class="panel glass home-metric-bar" aria-label={t("home.overview")}>
+          <button type="button" class="home-metric" onclick={() => (activeTab = "pages")}>
+            <span class="home-metric-value">{pageCount}</span>
+            <span>{t("home.pagesLabel")}</span>
+          </button>
+          <button type="button" class="home-metric" onclick={() => (activeTab = "overlays")}>
+            <span class="home-metric-value">{overlayLayoutCount}</span>
+            <span>{t("home.overlaysLabel")}</span>
+          </button>
+          <button type="button" class="home-metric" onclick={() => (activeTab = "packages")}>
+            <span class="home-metric-value">{enabledPackageCount}/{packages.length}</span>
+            <span>{t("home.activePackagesLabel")}</span>
+            {#if packageErrorCount}
+              <span class="home-metric-note">{packageErrorCount} {t("home.errors")}</span>
+            {/if}
+          </button>
+        </section>
+
+        <section class="home-section">
+          <div class="home-section-header">
+            <div>
+              <h2>{t("home.favoritePages")}</h2>
+              <p class="desc">{t("home.favoritePagesDesc")}</p>
+            </div>
+          </div>
+
+          {#if favoritePages.length}
+            <div class="home-card-grid">
+              {#each favoritePages as page (page.id)}
+                <article class="panel glass home-page-card">
+                  <div class="home-card-copy">
+                    <span class="field-label">{page.settings.open_target === "window" ? t("pages.window") : t("pages.inApp")}</span>
+                    <h3>{page.name}</h3>
+                    <p>{page.layers.length} {t("common.layers")} · {pageItemCount(page)} {t("common.items")}</p>
+                  </div>
+                  <div class="home-card-actions">
+                    <button class="btn-primary small" onclick={() => void openPage(page.id)}>{t("common.open")}</button>
+                    <button class="btn-outline small" onclick={() => openPageEditor(page.id)}>{t("common.edit")}</button>
+                  </div>
+                </article>
+              {/each}
+            </div>
+          {:else}
+            <div class="panel glass home-empty-row">
+              <p>{t("home.noFavoritePages")}</p>
+            </div>
+          {/if}
+        </section>
+
+        <section class="home-section">
+          <div class="home-section-header">
+            <div>
+              <h2>{t("home.mainLayouts")}</h2>
+              <p class="desc">{t("home.mainLayoutsDesc")}</p>
+            </div>
+          </div>
+
+          <div class="home-card-grid main-layouts">
+            {#each homeMainLayouts as entry}
+              <article class="panel glass home-layout-card">
+                <div class="home-card-copy">
+                  <span class="field-label">{entry.label}</span>
+                  <h3>{entry.layout?.name ?? t("home.noLayout")}</h3>
+                  {#if entry.layout}
+                    <p>{tx("home.layoutMeta", { layers: layoutLayerCount(entry.layout), items: layoutItemCount(entry.layout) })}</p>
+                  {:else}
+                    <p>{t("overlays.empty")}</p>
+                  {/if}
+                </div>
+                <div class="home-card-actions">
+                  <button class="btn-primary small" onclick={() => entry.layout && void openLayoutEditor(entry.layout.id)} disabled={!entry.layout}>
+                    {t("common.edit")}
+                  </button>
+                  <button class="btn-outline small" onclick={() => entry.layout && openPreview(layoutUrl(entry.layout.id))} disabled={!entry.layout || !obsBaseUrl}>
+                    {t("common.preview")}
+                  </button>
+                </div>
+              </article>
+            {/each}
+          </div>
+        </section>
+      </div>
+
+    {:else if activeTab === "packages"}
       <div class="split-layout">
         <div class="packages-list">
           <div class="section-header">
-            <h2>Installed Packages</h2>
+            <h2>{t("packages.installedTitle")}</h2>
             <button class="btn-secondary small" onclick={reloadPackages} disabled={busy}>
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/></svg>
-              Reload
+              {t("common.reload")}
             </button>
           </div>
           <section class="package-grid">
@@ -1306,9 +1445,9 @@
                   </div>
                   <div class="pkg-actions">
                     <span class="status-badge {pkg.enabled ? 'enabled' : 'disabled'}">
-                      {pkg.enabled ? "Active" : "Disabled"}
+                      {pkg.enabled ? t("common.active") : t("common.disabled")}
                     </span>
-                    <button class="icon-btn" onclick={() => togglePackage(pkg)} disabled={busy} title={pkg.enabled ? "Disable" : "Enable"}>
+                    <button class="icon-btn" onclick={() => togglePackage(pkg)} disabled={busy} title={pkg.enabled ? t("common.disabled") : t("common.enabled")}>
                       <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         {#if pkg.enabled}
                           <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="9" x2="15" y2="15"></line><line x1="15" y1="9" x2="9" y2="15"></line>
@@ -1317,7 +1456,7 @@
                         {/if}
                       </svg>
                     </button>
-                    <button class="icon-btn danger" onclick={() => removePackage(pkg)} disabled={busy} title="Remove">
+                    <button class="icon-btn danger" onclick={() => removePackage(pkg)} disabled={busy} title={t("common.remove")}>
                       <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
                     </button>
                   </div>
@@ -1325,7 +1464,7 @@
 
                 <div class="pkg-meta">
                   <p class="pkg-id">{pkg.id}</p>
-                  <p class="pkg-author">by {pkg.author ?? "Unknown author"}</p>
+                  <p class="pkg-author">{t("packages.by")} {pkg.author ?? t("packages.unknownAuthor")}</p>
                 </div>
 
                 {#if pkg.error}
@@ -1333,14 +1472,15 @@
                 {/if}
 
                 <div class="pkg-stats">
-                  <div class="stat"><span class="stat-val">{pkg.exports.visuals.length}</span> visuals</div>
-                  <div class="stat"><span class="stat-val">{pkg.exports.components.length}</span> components</div>
-                  <div class="stat"><span class="stat-val">{pkg.exports.services.length}</span> services</div>
-                  <div class="stat"><span class="stat-val">{pkg.exports.pages.length}</span> pages</div>
+                  <div class="stat"><span class="stat-val">{pkg.exports.visuals.length}</span> {t("packages.visuals")}</div>
+                  <div class="stat"><span class="stat-val">{pkg.exports.components.length}</span> {t("packages.components")}</div>
+                  <div class="stat"><span class="stat-val">{pkg.exports.services.length}</span> {t("packages.services")}</div>
+                  <div class="stat"><span class="stat-val">{pkg.exports.pages.length}</span> {t("packages.pages")}</div>
+                  <div class="stat"><span class="stat-val">{pkg.exports.layouts.length}</span> {t("packages.layouts")}</div>
                 </div>
 
                 <details class="pkg-details">
-                  <summary>View details & permissions</summary>
+                  <summary>{t("packages.details")}</summary>
                   <div class="details-content">
                     <div class="exports-list">
                       {#if pkg.exports.visuals.length}
@@ -1355,15 +1495,23 @@
                         <h4>Services</h4>
                         <ul>
                           {#each pkg.exports.services as service}
-                            <li>{service.name} <span>({service.methods.length} methods)</span></li>
+                            <li>{service.name} <span>({service.methods.length} {t("packages.methods")})</span></li>
                           {/each}
                         </ul>
                       {/if}
                       {#if pkg.exports.pages.length}
-                        <h4>Page Templates</h4>
+                        <h4>{t("packages.pageTemplates")}</h4>
                         <ul>
                           {#each pkg.exports.pages as page}
                             <li>{page.title ?? page.name} <span>({page.path})</span></li>
+                          {/each}
+                        </ul>
+                      {/if}
+                      {#if pkg.exports.layouts.length}
+                        <h4>{t("packages.layoutTemplates")}</h4>
+                        <ul>
+                          {#each pkg.exports.layouts as layoutTemplate}
+                            <li>{layoutTemplate.title ?? layoutTemplate.name} <span>({layoutTemplate.path})</span></li>
                           {/each}
                         </ul>
                       {/if}
@@ -1371,7 +1519,7 @@
                     <div class="permissions-view">
                       <div class="permission-summary">
                         <span class="permission-count">{permissionTotal(pkg.effective_permissions)}</span>
-                        <span>Effective permissions</span>
+                        <span>{t("packages.effectivePermissions")}</span>
                       </div>
                       {#if permissionTotal(pkg.effective_permissions) > 0}
                         <div class="permission-grid">
@@ -1396,7 +1544,7 @@
                           {/each}
                         </div>
                       {:else}
-                        <p class="permission-none">No extra permissions requested.</p>
+                        <p class="permission-none">{t("packages.noExtraPermissions")}</p>
                       {/if}
                     </div>
                   </div>
@@ -1405,7 +1553,7 @@
             {/each}
             {#if packages.length === 0}
               <div class="empty-state">
-                <p>No packages installed yet.</p>
+                <p>{t("packages.noneInstalled")}</p>
               </div>
             {/if}
           </section>
@@ -1413,32 +1561,32 @@
 
         <div class="sidebar">
           <section class="panel glass">
-            <h2>Install New Package</h2>
-            <p class="desc">Install plugins from a local .brlp file, URL, or Git repository.</p>
+            <h2>{t("packages.installTitle")}</h2>
+            <p class="desc">{t("packages.installDesc")}</p>
 
             <div class="install-form">
               <div class="input-group">
-                <label for="bundlePath">Local File</label>
+                <label for="bundlePath">{t("packages.localFile")}</label>
                 <div class="row">
                   <input id="bundlePath" bind:value={bundlePath} placeholder="/path/to/plugin.brlp" disabled={busy} />
-                  <button class="btn-primary" onclick={inspectInstallFile} disabled={busy || !bundlePath.trim()}>Inspect</button>
+                  <button class="btn-primary" onclick={inspectInstallFile} disabled={busy || !bundlePath.trim()}>{t("common.inspect")}</button>
                 </div>
               </div>
 
               <div class="input-group">
-                <label for="bundleUrl">Direct URL</label>
+                <label for="bundleUrl">{t("packages.directUrl")}</label>
                 <div class="row">
                   <input id="bundleUrl" bind:value={bundleUrl} placeholder="https://example.com/plugin.brlp" disabled={busy} />
-                  <button class="btn-primary" onclick={installFromUrl} disabled={busy || !bundleUrl.trim()}>Inspect</button>
+                  <button class="btn-primary" onclick={installFromUrl} disabled={busy || !bundleUrl.trim()}>{t("common.inspect")}</button>
                 </div>
               </div>
 
               <div class="input-group">
-                <label for="gitRepo">Git Repository</label>
+                <label for="gitRepo">{t("packages.gitRepo")}</label>
                 <div class="row">
                   <input id="gitRepo" bind:value={gitRepo} placeholder="https://github.com/user/repo" disabled={busy} />
-                  <input bind:value={gitRev} placeholder="branch/tag (opt)" disabled={busy} class="input-small" />
-                  <button class="btn-primary" onclick={installFromGit} disabled={busy || !gitRepo.trim()}>Inspect</button>
+                  <input bind:value={gitRev} placeholder={t("packages.gitRevPlaceholder")} disabled={busy} class="input-small" />
+                  <button class="btn-primary" onclick={installFromGit} disabled={busy || !gitRepo.trim()}>{t("common.inspect")}</button>
                 </div>
               </div>
             </div>
@@ -1447,7 +1595,7 @@
           {#if pendingInstall}
             <section class="panel highlight glass" style="margin-top: 24px;">
               <div class="panel-header">
-                <h2>Confirm Installation</h2>
+                <h2>{t("packages.confirmInstall")}</h2>
                 <span class="badge">{pendingInstall.kind}</span>
               </div>
               <div class="install-info">
@@ -1459,15 +1607,15 @@
               <div class="stats-grid">
                 <div class="stat-box">
                   <span class="val">{inspectionExportCount(pendingInstall.inspection)}</span>
-                  <span class="lbl">Exports</span>
+                  <span class="lbl">{t("common.exports")}</span>
                 </div>
                 <div class="stat-box">
                   <span class="val">{pendingInstall.inspection.file_count}</span>
-                  <span class="lbl">Files</span>
+                  <span class="lbl">{t("common.files")}</span>
                 </div>
                 <div class="stat-box">
                   <span class="val">{Math.round(pendingInstall.inspection.uncompressed_size / 1024)} KB</span>
-                  <span class="lbl">Size</span>
+                  <span class="lbl">{t("common.size")}</span>
                 </div>
               </div>
 
@@ -1483,12 +1631,12 @@
               </div>
 
               <details class="pkg-details mt-10">
-                <summary>View Security Details</summary>
+                <summary>{t("packages.securityDetails")}</summary>
                 <div class="details-content">
                   <div class="permissions-view">
                     <div class="permission-summary">
                       <span class="permission-count">{permissionTotal(pendingInstall.inspection.manifest.permissions)}</span>
-                      <span>Permissions required</span>
+                      <span>{t("packages.permissionsRequired")}</span>
                     </div>
                     {#if permissionTotal(pendingInstall.inspection.manifest.permissions) > 0}
                       <div class="permission-grid">
@@ -1513,21 +1661,21 @@
                         {/each}
                       </div>
                     {:else}
-                      <p class="permission-none">This package does not request extra permissions.</p>
+                      <p class="permission-none">{t("packages.noInstallPermissions")}</p>
                     {/if}
                   </div>
-                  <h4>Bundle SHA-256</h4>
+                  <h4>{t("packages.bundleSha")}</h4>
                   <pre class="break-all">{pendingInstall.inspection.sha256}</pre>
                   {#if pendingInstall.inspection.signature_public_key}
-                    <h4>Signature Public Key</h4>
+                    <h4>{t("packages.signaturePublicKey")}</h4>
                     <pre class="break-all">{pendingInstall.inspection.signature_public_key}</pre>
                   {/if}
                 </div>
               </details>
 
               <div class="actions bottom-actions">
-                <button class="btn-primary full-width" onclick={confirmPendingInstall} disabled={busy}>Install Package</button>
-                <button class="btn-secondary full-width" onclick={cancelPendingInstall} disabled={busy}>Cancel</button>
+                <button class="btn-primary full-width" onclick={confirmPendingInstall} disabled={busy}>{t("packages.installPackage")}</button>
+                <button class="btn-secondary full-width" onclick={cancelPendingInstall} disabled={busy}>{t("common.cancel")}</button>
               </div>
             </section>
           {/if}
@@ -1539,18 +1687,15 @@
         <section class="panel glass obs-help-panel">
           <div class="obs-help-content">
             <div class="obs-help-copy">
-              <h2>OBS Browser Source</h2>
-              <p class="desc">
-                Add a Browser Source in OBS, paste the general URL below, and set the source size to your canvas resolution.
-                This URL always follows the layout marked Stream.
-              </p>
+              <h2>{t("overlays.obsTitle")}</h2>
+              <p class="desc">{t("overlays.obsDesc")}</p>
             </div>
             <div class="obs-url-box">
-              <span class="field-label">General overlay URL</span>
+              <span class="field-label">{t("overlays.generalUrl")}</span>
               <code>{streamUrl()}</code>
-              <button class="btn-primary" onclick={() => copyText(streamUrl(), "General overlay URL")} disabled={!obsBaseUrl}>
+              <button class="btn-primary" onclick={() => copyText(streamUrl(), t("overlays.generalUrl"))} disabled={!obsBaseUrl}>
                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                Copy General URL
+                {t("overlays.copyGeneralUrl")}
               </button>
             </div>
           </div>
@@ -1559,67 +1704,102 @@
         <section class="panel glass overlay-create-panel">
           <div class="section-header">
             <div>
-              <h2>Layouts</h2>
-              <p class="desc">Create, route, and edit the overlays used by the in-game window and OBS.</p>
+              <h2>{t("overlays.layoutsTitle")}</h2>
+              <p class="desc">{t("overlays.layoutsDesc")}</p>
             </div>
             <div class="control-group">
-              <label for="newOverlayName">Create New Layout</label>
+              <label for="newLayoutName">{t("overlays.createLayout")}</label>
               <div class="row">
-                <input id="newOverlayName" bind:value={newOverlayName} placeholder="New layout name" />
-                <button class="btn-primary" onclick={createOverlay} disabled={busy}>Create</button>
+                <input id="newLayoutName" bind:value={newLayoutName} placeholder={t("overlays.newLayoutPlaceholder")} />
+                <button class="btn-primary" onclick={createOverlayLayout} disabled={busy}>{t("common.create")}</button>
               </div>
             </div>
           </div>
         </section>
 
-        {#if overlays?.layouts.length}
-          <section class="overlay-layout-list" aria-label="Overlay layouts">
-            {#each overlays.layouts as layout (layout.id)}
+        {#if layoutTemplates.length}
+          <section class="panel glass page-template-panel">
+            <div class="section-header">
+              <div>
+                <h2>{t("overlays.templateTitle")}</h2>
+                <p class="desc">{t("overlays.templateDesc")}</p>
+              </div>
+            </div>
+            <div class="template-grid">
+              {#each layoutTemplates as entry}
+                <article class="template-card">
+                  <div>
+                    <h3>{entry.layoutTemplate.title ?? entry.layoutTemplate.name}</h3>
+                    <p>{entry.layoutTemplate.description ?? entry.package.name}</p>
+                    <span>{entry.package.id}/{entry.layoutTemplate.name}</span>
+                  </div>
+                  <button class="btn-primary small" onclick={() => importPackageLayout(entry.package.id, entry.layoutTemplate.name)} disabled={busy}>
+                    {t("common.import")}
+                  </button>
+                </article>
+              {/each}
+            </div>
+          </section>
+        {/if}
+
+        {#if overlayLayouts?.layouts.length}
+          <section class="overlay-layout-list" aria-label={t("overlays.layoutsTitle")}>
+            {#each overlayLayouts.layouts as layout (layout.id)}
               <article class="overlay-layout-card" class:expanded={expandedLayoutId === layout.id}>
                 <div class="overlay-layout-top">
-                  <button
-                    type="button"
-                    class="overlay-summary"
-                    aria-expanded={expandedLayoutId === layout.id}
-                    onclick={() => toggleLayoutDetails(layout.id)}
-                  >
-                    <span class="overlay-summary-title">
+                  <div class="overlay-summary">
+                    <button
+                      type="button"
+                      class="overlay-expand-btn"
+                      aria-label={layout.name}
+                      aria-expanded={expandedLayoutId === layout.id}
+                      onclick={() => toggleLayoutDetails(layout.id)}
+                    >
                       <svg class:rotated={expandedLayoutId === layout.id} xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
-                      <span class="overlay-name">{layout.name}</span>
-                    </span>
+                    </button>
+                    <input
+                      class="overlay-name-input"
+                      aria-label={t("overlays.layoutName")}
+                      value={layout.name}
+                      onblur={(event) => handleLayoutNameBlur(layout, event)}
+                      onkeydown={handleLayoutNameKeydown}
+                    />
                     <span class="layout-badges">
                       {#if isInGameLayout(layout)}
-                        <span class="badge route">In-game</span>
+                        <span class="badge route">{t("overlays.ingame")}</span>
                       {/if}
                       {#if isStreamLayout(layout)}
-                        <span class="badge route stream">Stream</span>
+                        <span class="badge route stream">{t("overlays.stream")}</span>
                       {/if}
                       {#if !isInGameLayout(layout) && !isStreamLayout(layout)}
-                        <span class="badge muted">Unassigned</span>
+                        <span class="badge muted">{t("common.unassigned")}</span>
+                      {/if}
+                      {#if layout.template_source}
+                        <span class="badge muted">{t("common.imported")}</span>
                       {/if}
                     </span>
                     <span class="overlay-card-stats">
-                      {layoutLayerCount(layout)} layers · {layoutItemCount(layout)} plugins
+                      {layoutLayerCount(layout)} {t("common.layers")} · {layoutItemCount(layout)} {t("common.plugins")}
                     </span>
-                  </button>
+                  </div>
 
                   <div class="layout-actions">
-                    <button class="btn-secondary small" onclick={() => activateOverlay(layout.id)} disabled={busy || isInGameLayout(layout)}>
-                      Set In-game
+                    <button class="btn-secondary small" onclick={() => routeOverlayLayout(layout.id)} disabled={busy || isInGameLayout(layout)}>
+                      {t("overlays.setIngame")}
                     </button>
-                    <button class="btn-secondary small" onclick={() => activateOverlay(layout.id, true)} disabled={busy || isStreamLayout(layout)}>
-                      Set Stream
+                    <button class="btn-secondary small" onclick={() => routeOverlayLayout(layout.id, true)} disabled={busy || isStreamLayout(layout)}>
+                      {t("overlays.setStream")}
                     </button>
-                    <button class="btn-outline small" onclick={() => copyText(layoutUrl(layout.id), "Layout URL")} disabled={!obsBaseUrl}>
-                      Copy URL
+                    <button class="btn-outline small" onclick={() => copyText(layoutUrl(layout.id), t("common.copyUrl"))} disabled={!obsBaseUrl}>
+                      {t("common.copyUrl")}
                     </button>
                     <button class="btn-outline small" onclick={() => openPreview(layoutUrl(layout.id))} disabled={!obsBaseUrl}>
-                      Preview
+                      {t("common.preview")}
                     </button>
                     <button class="btn-primary small" onclick={() => void openLayoutEditor(layout.id)}>
-                      Edit
+                      {t("common.edit")}
                     </button>
-                    <button class="icon-btn danger" onclick={() => deleteLayout(layout)} disabled={busy || (overlays?.layouts.length ?? 0) <= 1} title="Delete layout">
+                    <button class="icon-btn danger" onclick={() => deleteLayout(layout)} disabled={busy || (overlayLayouts?.layouts.length ?? 0) <= 1} title={t("confirm.deleteLayoutTitle")}>
                       <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
                     </button>
                   </div>
@@ -1627,33 +1807,22 @@
 
                 {#if expandedLayoutId === layout.id}
                   <div class="overlay-layout-details">
-                    <div class="overlay-detail-controls">
-                      <div class="input-group compact">
-                        <label for={`layoutName-${layout.id}`}>Layout Name</label>
-                        <input
-                          id={`layoutName-${layout.id}`}
-                          value={layout.name}
-                          onblur={(event) => handleLayoutNameBlur(layout, event)}
-                          onkeydown={handleLayoutNameKeydown}
-                        />
-                      </div>
-                      <div class="input-group compact">
-                        <label for={`visualAdd-${layout.id}`}>Add Plugin Visual</label>
-                        <div class="row">
-                          <div class="select-wrapper">
-                            <select id={`visualAdd-${layout.id}`} bind:value={selectedVisualRef}>
-                              <option value="">Select a visual...</option>
-                              {#each visualExports as entry}
-                                <option value={entry.ref}>{entry.package.name} / {entry.visual.name}</option>
-                              {/each}
-                            </select>
-                          </div>
-                          <button class="btn-primary" onclick={() => addVisualToLayout(layout)} disabled={!selectedVisualRef || busy}>
-                            Add
-                          </button>
+                    {#if layout.template_source}
+                      <div class="page-meta-grid">
+                        <div>
+                          <span class="field-label">{t("common.source")}</span>
+                          <strong>{layout.template_source}</strong>
+                        </div>
+                        <div>
+                          <span class="field-label">{t("common.canvas")}</span>
+                          <strong>{layout.width}x{layout.height}</strong>
+                        </div>
+                        <div>
+                          <span class="field-label">{t("common.items")}</span>
+                          <strong>{layoutItemCount(layout)}</strong>
                         </div>
                       </div>
-                    </div>
+                    {/if}
 
                     <div class="layers-grid compact">
                       {#each sortedLayers(layout) as layer}
@@ -1661,12 +1830,12 @@
                           <div class="layer-header">
                             <h3>{layer.name}</h3>
                             {#if layer.kind === "event"}
-                              <span class="badge event">Event Layer</span>
+                              <span class="badge event">{t("overlays.eventLayer")}</span>
                             {/if}
                           </div>
 
                           {#if layer.items.length === 0}
-                            <p class="empty-state small">No items in this layer.</p>
+                            <p class="empty-state small">{t("common.noItems")}</p>
                           {:else}
                             <div class="items-list">
                               {#each layer.items as item}
@@ -1675,7 +1844,7 @@
                                     <span class="item-name">{item.name || `${item.package_id}/${item.export_name}`}</span>
                                     <span class="item-coords">Pos: {Math.round(item.x)},{Math.round(item.y)} · Size: {Math.round(item.width)}x{Math.round(item.height)}</span>
                                   </div>
-                                  <button class="icon-btn danger" onclick={() => removeItem(layout, item.id)} disabled={busy || item.locked || layer.locked} title="Remove Item">
+                                  <button class="icon-btn danger" onclick={() => removeItem(layout, item.id)} disabled={busy || item.locked || layer.locked} title={t("confirm.removeItemTitle")}>
                                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
                                   </button>
                                 </div>
@@ -1693,7 +1862,7 @@
         {:else}
           <div class="empty-state large">
             <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom: 1rem; opacity: 0.5;"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><rect x="7" y="7" width="3" height="9"></rect><rect x="14" y="7" width="3" height="5"></rect></svg>
-            <p>Create a layout to get started.</p>
+            <p>{t("overlays.empty")}</p>
           </div>
         {/if}
       </div>
@@ -1703,14 +1872,14 @@
         <section class="panel glass overlay-create-panel">
           <div class="section-header">
             <div>
-              <h2>My Pages</h2>
-              <p class="desc">Create in-app dashboards from plugin visuals, text, images, shapes, and page templates.</p>
+              <h2>{t("pages.title")}</h2>
+              <p class="desc">{t("pages.desc")}</p>
             </div>
             <div class="control-group">
-              <label for="newPageName">Create New Page</label>
+              <label for="newPageName">{t("pages.createPage")}</label>
               <div class="row">
-                <input id="newPageName" bind:value={newPageName} placeholder="New page name" />
-                <button class="btn-primary" onclick={createPage} disabled={busy}>Create</button>
+                <input id="newPageName" bind:value={newPageName} placeholder={t("pages.newPagePlaceholder")} />
+                <button class="btn-primary" onclick={createPage} disabled={busy}>{t("common.create")}</button>
               </div>
             </div>
           </div>
@@ -1720,8 +1889,8 @@
           <section class="panel glass page-template-panel">
             <div class="section-header">
               <div>
-                <h2>Plugin Page Templates</h2>
-                <p class="desc">Import a template, then edit it like any other page.</p>
+                <h2>{t("pages.templatesTitle")}</h2>
+                <p class="desc">{t("pages.templatesDesc")}</p>
               </div>
             </div>
             <div class="template-grid">
@@ -1733,7 +1902,7 @@
                     <span>{entry.package.id}/{entry.page.name}</span>
                   </div>
                   <button class="btn-primary small" onclick={() => importPackagePage(entry.package.id, entry.page.name)} disabled={busy}>
-                    Import
+                    {t("common.import")}
                   </button>
                 </article>
               {/each}
@@ -1742,7 +1911,7 @@
         {/if}
 
         {#if pages?.pages.length}
-          <section class="overlay-layout-list page-list" aria-label="Pages">
+          <section class="overlay-layout-list page-list" aria-label={t("pages.title")}>
             {#each pages.pages as page (page.id)}
               <article class="overlay-layout-card page-card" class:expanded={expandedPageId === page.id}>
                 <div class="overlay-layout-top">
@@ -1757,27 +1926,39 @@
                       <span class="overlay-name">{page.name}</span>
                     </span>
                     <span class="layout-badges">
-                      <span class="badge route">{page.settings.open_target === "window" ? "Window" : "In app"}</span>
+                      <span class="badge route">{page.settings.open_target === "window" ? t("pages.window") : t("pages.inApp")}</span>
+                      {#if page.favorite}
+                        <span class="badge route stream">{t("pages.favoriteBadge")}</span>
+                      {/if}
                       {#if page.template_source}
-                        <span class="badge muted">Imported</span>
+                        <span class="badge muted">{t("common.imported")}</span>
                       {/if}
                     </span>
                     <span class="overlay-card-stats">
-                      {page.width}x{page.height} · {page.layers.length} layers · {pageItemCount(page)} items
+                      {page.width}x{page.height} · {page.layers.length} {t("common.layers")} · {pageItemCount(page)} {t("common.items")}
                     </span>
                   </button>
 
                   <div class="layout-actions">
+                    <button
+                      class="icon-btn favorite"
+                      class:active={page.favorite}
+                      onclick={() => void togglePageFavorite(page)}
+                      disabled={busy}
+                      title={page.favorite ? t("pages.unfavorite") : t("pages.favorite")}
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill={page.favorite ? "currentColor" : "none"} stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+                    </button>
                     <button class="btn-primary small" onclick={() => void openPage(page.id)} disabled={busy}>
-                      Open
+                      {t("common.open")}
                     </button>
                     <button class="btn-outline small" onclick={() => openPageEditor(page.id)}>
-                      Edit
+                      {t("common.edit")}
                     </button>
                     <button class="btn-outline small" onclick={() => void duplicatePage(page.id)} disabled={busy}>
-                      Duplicate
+                      {t("common.duplicate")}
                     </button>
-                    <button class="icon-btn danger" onclick={() => deletePage(page)} disabled={busy} title="Delete page">
+                    <button class="icon-btn danger" onclick={() => deletePage(page)} disabled={busy} title={t("confirm.deletePageTitle")}>
                       <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
                     </button>
                   </div>
@@ -1787,7 +1968,7 @@
                   <div class="overlay-layout-details">
                     <div class="overlay-detail-controls">
                       <div class="input-group compact">
-                        <label for={`pageName-${page.id}`}>Page Name</label>
+                        <label for={`pageName-${page.id}`}>{t("pages.title")}</label>
                         <input
                           id={`pageName-${page.id}`}
                           value={page.name}
@@ -1796,34 +1977,34 @@
                         />
                       </div>
                       <div class="input-group compact">
-                        <label for={`pageOpenTarget-${page.id}`}>Open Target</label>
+                        <label for={`pageOpenTarget-${page.id}`}>{t("pages.openTarget")}</label>
                         <select
                           id={`pageOpenTarget-${page.id}`}
                           value={page.settings.open_target}
                           onchange={(event) => void updatePageOpenTarget(page, event.currentTarget.value as "app" | "window")}
                         >
-                          <option value="app">In app</option>
-                          <option value="window">New app window</option>
+                          <option value="app">{t("pages.inApp")}</option>
+                          <option value="window">{t("pages.newWindow")}</option>
                         </select>
                       </div>
                     </div>
 
                     <div class="page-meta-grid">
                       <div>
-                        <span class="field-label">Canvas</span>
+                          <span class="field-label">{t("common.canvas")}</span>
                         <strong>{page.width}x{page.height}</strong>
                       </div>
                       <div>
-                        <span class="field-label">Plugin visuals</span>
+                          <span class="field-label">{t("pages.pluginVisuals")}</span>
                         <strong>{pagePluginCount(page)}</strong>
                       </div>
                       <div>
-                        <span class="field-label">Background</span>
+                          <span class="field-label">{t("pages.background")}</span>
                         <strong>{page.background.kind}</strong>
                       </div>
                       <div>
-                        <span class="field-label">Source</span>
-                        <strong>{page.template_source ?? "Custom"}</strong>
+                          <span class="field-label">{t("common.source")}</span>
+                          <strong>{page.template_source ?? t("common.custom")}</strong>
                       </div>
                     </div>
 
@@ -1834,7 +2015,7 @@
                             <h3>{layer.name}</h3>
                           </div>
                           {#if layer.items.length === 0}
-                            <p class="empty-state small">No items in this layer.</p>
+                            <p class="empty-state small">{t("common.noItems")}</p>
                           {:else}
                             <div class="items-list">
                               {#each layer.items as item}
@@ -1857,7 +2038,7 @@
           </section>
         {:else}
           <div class="empty-state large">
-            <p>Create a page or import a plugin template to get started.</p>
+            <p>{t("pages.empty")}</p>
           </div>
         {/if}
       </div>
@@ -1868,18 +2049,18 @@
           <section class="panel glass developer-panel">
             <div class="developer-panel-header">
               <div>
-                <h2>Telemetry Data</h2>
-                <p class="desc">Latest frames received from Rocket League or emitted by the app.</p>
+                <h2>{t("developer.telemetryTitle")}</h2>
+                <p class="desc">{t("developer.telemetryDesc")}</p>
               </div>
               <div class="developer-header-actions">
-                <div class="sort-toggle" aria-label="Telemetry data sort order">
+                <div class="sort-toggle" aria-label={t("developer.sortLabel")}>
                   <button
                     type="button"
                     class:active={developerTelemetrySort === "recent"}
                     aria-pressed={developerTelemetrySort === "recent"}
                     onclick={() => (developerTelemetrySort = "recent")}
                   >
-                    Recent
+                    {t("developer.recent")}
                   </button>
                   <button
                     type="button"
@@ -1910,7 +2091,7 @@
                       <span class="developer-event-main">
                         <span class="developer-event-title">
                           <span class="developer-event-name">{group.eventName}</span>
-                          <span class="developer-event-count">{group.count} frame{group.count === 1 ? "" : "s"}</span>
+                          <span class="developer-event-count">{group.count} {group.count === 1 ? t("developer.frame") : t("developer.frames")}</span>
                         </span>
                         <span class="developer-event-time">{group.latest.receivedAt}</span>
                       </span>
@@ -1921,7 +2102,7 @@
               </div>
             {:else}
               <div class="empty-state">
-                <p>No telemetry frame received yet.</p>
+                <p>{t("developer.emptyTelemetry")}</p>
               </div>
             {/if}
           </section>
@@ -1929,11 +2110,11 @@
           <section class="panel glass developer-panel">
             <div class="developer-panel-header">
               <div>
-                <h2>Registry</h2>
-                <p class="desc">Current shared registry values exposed to packages.</p>
+                <h2>{t("developer.registryTitle")}</h2>
+                <p class="desc">{t("developer.registryDesc")}</p>
               </div>
               <button class="btn-secondary small" onclick={refreshRegistryEntries} disabled={busy}>
-                Refresh
+                {t("common.refresh")}
               </button>
             </div>
 
@@ -1950,18 +2131,18 @@
               </div>
             {:else}
               <div class="empty-state">
-                <p>No registry value is currently stored.</p>
+                <p>{t("developer.emptyRegistry")}</p>
               </div>
             {/if}
           </section>
         </div>
 
         <aside class="panel glass developer-panel frame-composer">
-          <h2>Send Frame</h2>
-          <p class="desc">Compose a typed telemetry frame and publish it on the in-app telemetry bus.</p>
+          <h2>{t("developer.sendFrameTitle")}</h2>
+          <p class="desc">{t("developer.sendFrameDesc")}</p>
 
           <div class="input-group">
-            <label for="developerFrameTemplate">Template</label>
+            <label for="developerFrameTemplate">{t("developer.template")}</label>
             <select id="developerFrameTemplate" bind:value={developerFrameTemplate} onchange={loadDeveloperFrameTemplate}>
               {#each RL_TELEMETRY_EVENT_NAMES as template}
                 <option value={template}>{template}</option>
@@ -1969,8 +2150,8 @@
             </select>
           </div>
 
-          <div class="input-group">
-            <label for="developerFrameJson">Frame JSON</label>
+          <div class="input-group frame-editor-group">
+            <label for="developerFrameJson">{t("developer.frameJson")}</label>
             <textarea
               id="developerFrameJson"
               class="developer-frame-editor"
@@ -1980,15 +2161,15 @@
           </div>
 
           <div class="actions bottom-actions horizontal">
-            <button class="btn-secondary" onclick={loadDeveloperFrameTemplate} disabled={busy}>Reset</button>
-            <button class="btn-primary" onclick={sendDeveloperFrame} disabled={busy}>Send Frame</button>
+            <button class="btn-secondary" onclick={loadDeveloperFrameTemplate} disabled={busy}>{t("common.reset")}</button>
+            <button class="btn-primary" onclick={sendDeveloperFrame} disabled={busy}>{t("developer.sendFrame")}</button>
           </div>
         </aside>
       </div>
 
     {:else if activeTab === "settings" && appSettings}
       <div class="settings-layout">
-        <aside class="settings-sidebar panel glass" aria-label="Settings sections">
+        <aside class="settings-sidebar panel glass" aria-label={t("nav.settings")}>
           <button
             type="button"
             class="settings-nav-item"
@@ -1996,8 +2177,8 @@
             aria-pressed={settingsSection === "appearance"}
             onclick={() => (settingsSection = "appearance")}
           >
-            <span class="nav-title">Appearance</span>
-            <span class="nav-subtitle">Theme and interface style</span>
+            <span class="nav-title">{t("settings.appearance")}</span>
+            <span class="nav-subtitle">{t("settings.appearanceDesc")}</span>
           </button>
           <button
             type="button"
@@ -2006,8 +2187,8 @@
             aria-pressed={settingsSection === "telemetry"}
             onclick={() => (settingsSection = "telemetry")}
           >
-            <span class="nav-title">Telemetry</span>
-            <span class="nav-subtitle">Rocket League connection</span>
+            <span class="nav-title">{t("settings.telemetry")}</span>
+            <span class="nav-subtitle">{t("settings.telemetryDesc")}</span>
           </button>
           <button
             type="button"
@@ -2016,15 +2197,26 @@
             aria-pressed={settingsSection === "overlay"}
             onclick={() => (settingsSection = "overlay")}
           >
-            <span class="nav-title">Overlay</span>
-            <span class="nav-subtitle">Monitor and runtime behavior</span>
+            <span class="nav-title">{t("settings.overlay")}</span>
+            <span class="nav-subtitle">{t("settings.overlayDesc")}</span>
           </button>
         </aside>
 
         <section class="panel glass settings-panel">
           {#if settingsSection === "appearance"}
             <div class="settings-heading">
-              <h2>Appearance</h2>
+              <h2>{t("settings.appearance")}</h2>
+            </div>
+            <div class="input-group compact language-setting">
+              <label for="localeSelect">{t("settings.interfaceLanguage")}</label>
+              <select
+                id="localeSelect"
+                value={locale}
+                onchange={(event) => setLocale(event.currentTarget.value as Locale)}
+              >
+                <option value="fr">Français</option>
+                <option value="en">English</option>
+              </select>
             </div>
             <div class="theme-grid">
               {#each THEMES as theme}
@@ -2053,10 +2245,10 @@
             </div>
           {:else if settingsSection === "telemetry"}
             <div class="settings-heading">
-              <h2>Telemetry</h2>
+              <h2>{t("settings.telemetry")}</h2>
               <div class="settings-heading-actions">
                 <button type="button" class="btn-secondary small" onclick={() => openTelemetryHelp()}>
-                  Setup Help
+                  {t("settings.setupHelp")}
                 </button>
                 <span
                   class="telemetry-status"
@@ -2071,31 +2263,31 @@
             </div>
             <div class="form-grid">
               <div class="input-group">
-                <label for="telemetryHost">Host</label>
+                <label for="telemetryHost">{t("settings.host")}</label>
                 <input id="telemetryHost" bind:value={appSettings.telemetry.rocket_league_host} />
               </div>
               <div class="input-group">
-                <label for="telemetryPort">Port</label>
+                <label for="telemetryPort">{t("settings.port")}</label>
                 <input id="telemetryPort" type="number" bind:value={appSettings.telemetry.rocket_league_port} />
               </div>
             </div>
             <div class="actions bottom-actions">
-              <button class="btn-primary" onclick={saveAppSettings} disabled={busy}>Save Settings</button>
+              <button class="btn-primary" onclick={saveAppSettings} disabled={busy}>{t("common.saveSettings")}</button>
             </div>
           {:else}
             <div class="settings-heading">
-              <h2>Overlay</h2>
+              <h2>{t("settings.overlay")}</h2>
             </div>
             <div class="form-grid">
               <div class="input-group">
-                <label for="overlayFps">Update Rate (FPS)</label>
+                <label for="overlayFps">{t("settings.updateRate")}</label>
                 <input id="overlayFps" type="number" min="1" max="120" bind:value={appSettings.overlay.update_rate_fps} />
               </div>
               {#if appSettings.overlay.use_monitor_size}
                 <div class="input-group">
-                  <label for="overlayMonitor">Overlay Monitor</label>
+                  <label for="overlayMonitor">{t("settings.overlayMonitor")}</label>
                   <select id="overlayMonitor" bind:value={appSettings.overlay.monitor_id}>
-                    <option value="">Current / Primary</option>
+                    <option value="">{t("settings.currentPrimary")}</option>
                     {#each overlayMonitors as monitor}
                       <option value={monitor.id}>
                         {monitor.name} · {monitor.width}x{monitor.height}{monitor.primary ? " · primary" : ""}{monitor.current ? " · current" : ""}
@@ -2105,7 +2297,7 @@
                 </div>
               {:else}
                 <div class="input-group">
-                  <span class="field-label">Overlay Size</span>
+                  <span class="field-label">{t("settings.overlaySize")}</span>
                   <div class="row">
                     <input type="number" min="1" bind:value={appSettings.overlay.screen_width} aria-label="Overlay width" />
                     <input type="number" min="1" bind:value={appSettings.overlay.screen_height} aria-label="Overlay height" />
@@ -2116,15 +2308,15 @@
             <label class="checkbox-label mt-10">
               <input type="checkbox" bind:checked={appSettings.overlay.use_monitor_size} />
               <span class="checkmark"></span>
-              Use full monitor size
+              {t("settings.useFullMonitor")}
             </label>
             <label class="checkbox-label mt-10">
               <input type="checkbox" bind:checked={appSettings.overlay.hide_when_game_unfocused} />
               <span class="checkmark"></span>
-              Hide overlay when Rocket League is unfocused
+              {t("settings.hideUnfocused")}
             </label>
             <div class="actions bottom-actions">
-              <button class="btn-primary" onclick={saveAppSettings} disabled={busy}>Save Settings</button>
+              <button class="btn-primary" onclick={saveAppSettings} disabled={busy}>{t("common.saveSettings")}</button>
             </div>
           {/if}
         </section>
@@ -2191,10 +2383,24 @@
 
   .tabs {
     display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .tab-group,
+  .language-switch {
+    display: flex;
+    align-items: center;
+    gap: 2px;
     background: rgba(255, 255, 255, 0.03);
     padding: 4px;
     border-radius: var(--radius-md);
     border: 1px solid var(--border-color);
+  }
+
+  .tab-group.secondary {
+    border-left-color: rgba(255, 255, 255, 0.18);
   }
 
   .tab-btn {
@@ -2207,6 +2413,7 @@
     font-weight: 500;
     cursor: pointer;
     transition: var(--transition);
+    white-space: nowrap;
   }
 
   .tab-btn:hover {
@@ -2217,6 +2424,25 @@
     background: rgba(255, 255, 255, 0.1);
     color: var(--text-primary);
     box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+  }
+
+  .language-switch {
+    gap: 0;
+  }
+
+  .language-switch button {
+    min-width: 34px;
+    padding: 7px 9px;
+    border: 0;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .language-switch button.active {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text-primary);
   }
 
   /* Main Layout */
@@ -2239,6 +2465,132 @@
     grid-template-columns: 1fr 340px;
     gap: 32px;
     align-items: start;
+  }
+
+  .home-layout {
+    max-width: 1120px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+
+  .home-metric-bar {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0;
+    padding: 0;
+    overflow: hidden;
+  }
+
+  .home-metric {
+    min-height: 96px;
+    padding: 18px 22px;
+    border: 0;
+    border-right: 1px solid var(--border-color);
+    background: transparent;
+    color: var(--text-primary);
+    text-align: left;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 5px;
+    cursor: pointer;
+  }
+
+  .home-metric:last-child {
+    border-right: 0;
+  }
+
+  .home-metric:hover {
+    background: rgba(255, 255, 255, 0.045);
+  }
+
+  .home-metric-value {
+    font-size: 28px;
+    line-height: 1;
+    font-weight: 750;
+  }
+
+  .home-metric span:not(.home-metric-value):not(.home-metric-note) {
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-weight: 700;
+  }
+
+  .home-metric-note {
+    color: var(--danger);
+    font-size: 12px;
+  }
+
+  .home-section {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .home-section-header {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 16px;
+  }
+
+  .home-section-header h2 {
+    margin-bottom: 4px;
+  }
+
+  .home-section-header .desc {
+    margin-bottom: 0;
+  }
+
+  .home-card-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .home-layout-card,
+  .home-page-card,
+  .home-empty-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    min-width: 0;
+    padding: 16px;
+  }
+
+  .home-card-copy {
+    min-width: 0;
+  }
+
+  .home-card-copy h3 {
+    margin-top: 4px;
+    margin-bottom: 5px;
+    font-size: 18px;
+  }
+
+  .home-card-copy p {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 12px;
+  }
+
+  .home-card-actions {
+    display: flex;
+    flex: none;
+    gap: 8px;
+  }
+
+  .home-empty-row {
+    min-height: 88px;
+  }
+
+  .home-empty-row p {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 13px;
   }
 
   /* Typography & Utilities */
@@ -2477,22 +2829,6 @@
 
   .input-small { width: 80px; flex: none; }
 
-  .select-wrapper {
-    position: relative;
-    flex: 1;
-  }
-
-  .select-wrapper::after {
-    content: "▼";
-    font-size: 10px;
-    position: absolute;
-    right: 12px;
-    top: 50%;
-    transform: translateY(-50%);
-    pointer-events: none;
-    color: var(--text-secondary);
-  }
-
   select {
     appearance: none;
     width: 100%;
@@ -2585,6 +2921,13 @@
   .icon-btn.danger:hover:not(:disabled) {
     background: rgba(239, 68, 68, 0.1);
     color: var(--danger);
+  }
+
+  .icon-btn.favorite.active,
+  .icon-btn.favorite:hover:not(:disabled) {
+    background: rgba(250, 204, 21, 0.12);
+    border-color: rgba(250, 204, 21, 0.24);
+    color: #facc15;
   }
 
   .full-width { width: 100%; }
@@ -2964,7 +3307,7 @@
 
   .overlay-summary {
     display: grid;
-    grid-template-columns: minmax(180px, 1fr) auto auto;
+    grid-template-columns: auto minmax(180px, 1fr) auto auto;
     gap: 12px;
     align-items: center;
     min-width: 0;
@@ -2975,35 +3318,45 @@
     text-align: left;
   }
 
-  .overlay-summary:hover {
+  .overlay-expand-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--text-muted);
+  }
+
+  .overlay-expand-btn:hover {
     color: var(--text-primary);
   }
 
-  .overlay-summary-title {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    min-width: 0;
-  }
-
-  .overlay-summary-title svg {
-    flex: none;
-    color: var(--text-muted);
+  .overlay-expand-btn svg {
     transition: transform 0.18s ease;
   }
 
-  .overlay-summary-title svg.rotated {
+  .overlay-expand-btn svg.rotated {
     transform: rotate(90deg);
   }
 
-  .overlay-name {
+  .overlay-name-input {
     min-width: 0;
-    overflow: hidden;
+    width: 100%;
+    padding: 6px 8px;
+    border-color: transparent;
+    background: transparent;
     color: var(--text-primary);
     font-size: 15px;
     font-weight: 700;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  }
+
+  .overlay-name-input:hover,
+  .overlay-name-input:focus {
+    border-color: var(--border-color);
+    background: rgba(0, 0, 0, 0.18);
   }
 
   .layout-badges {
@@ -3182,20 +3535,36 @@
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
     gap: 24px;
-    align-items: start;
+    align-items: stretch;
     max-width: 1180px;
+    height: calc(100vh - 176px);
+    min-height: 0;
     margin: 0 auto;
   }
 
   .developer-column {
     display: flex;
     min-width: 0;
+    min-height: 0;
     flex-direction: column;
-    gap: 24px;
+    gap: 16px;
   }
 
   .developer-panel {
+    display: flex;
+    flex-direction: column;
     min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .developer-column .developer-panel:first-child {
+    flex: 1 1 0;
+  }
+
+  .developer-column .developer-panel:last-child {
+    flex: 0 1 34%;
+    min-height: 168px;
   }
 
   .developer-panel-header {
@@ -3249,7 +3618,9 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
-    max-height: min(70vh, 680px);
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none;
     overflow: auto;
     padding-right: 4px;
   }
@@ -3340,10 +3711,17 @@
   .frame-composer {
     position: sticky;
     top: 0;
+    max-height: 100%;
+  }
+
+  .frame-editor-group {
+    flex: 1 1 auto;
+    min-height: 0;
   }
 
   .developer-frame-editor {
-    min-height: 440px;
+    flex: 1 1 auto;
+    min-height: 0;
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 12px;
     white-space: pre;
@@ -3557,6 +3935,57 @@
   }
 
   @media (max-width: 820px) {
+    header {
+      align-items: stretch;
+      flex-direction: column;
+    }
+
+    .tabs {
+      align-items: stretch;
+      flex-direction: column;
+    }
+
+    .tab-group,
+    .language-switch {
+      width: 100%;
+      justify-content: stretch;
+    }
+
+    .tab-btn,
+    .language-switch button {
+      flex: 1;
+    }
+
+    .home-metric-bar,
+    .home-card-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .home-layout-card,
+    .home-page-card,
+    .home-empty-row,
+    .home-section-header {
+      align-items: flex-start;
+      flex-direction: column;
+    }
+
+    .home-metric {
+      border-right: 0;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .home-metric:last-child {
+      border-bottom: 0;
+    }
+
+    .home-card-actions {
+      width: 100%;
+    }
+
+    .home-card-actions button {
+      flex: 1;
+    }
+
     .settings-layout {
       grid-template-columns: 1fr;
     }
@@ -3572,6 +4001,12 @@
     }
   }
 
+  @media (min-width: 821px) and (max-width: 980px) {
+    .home-card-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
   @media (max-width: 980px) {
     .obs-help-content,
     .overlay-layout-top,
@@ -3580,8 +4015,13 @@
     }
 
     .overlay-summary {
-      grid-template-columns: 1fr;
+      grid-template-columns: auto minmax(0, 1fr);
       gap: 8px;
+    }
+
+    .overlay-summary .layout-badges,
+    .overlay-summary .overlay-card-stats {
+      grid-column: 1 / -1;
     }
 
     .layout-badges,
@@ -3591,10 +4031,17 @@
 
     .developer-layout {
       grid-template-columns: 1fr;
+      height: auto;
+      min-height: 0;
     }
 
     .frame-composer {
       position: static;
+      max-height: none;
+    }
+
+    .developer-frame-editor {
+      min-height: 320px;
     }
   }
 

@@ -3,6 +3,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
   import ConfirmDialog from "$lib/ConfirmDialog.svelte";
+  import InstanceSettingsForm from "$lib/InstanceSettingsForm.svelte";
   import OverlayRenderer from "$lib/OverlayRenderer.svelte";
   import { RL_TELEMETRY_EVENT_NAMES, telemetryFrameTemplate, type RlTelemetryEventName } from "$lib/rlTelemetry";
 
@@ -59,7 +60,7 @@
     items?: OverlayItem[];
   };
 
-  type OverlayLayoutsFile = {
+  type OverlayLayoutCatalog = {
     active_layout_id: string;
     stream_layout_id: string;
     layouts: OverlayLayout[];
@@ -81,7 +82,7 @@
   };
 
   let packages = $state<PackageDescriptor[]>([]);
-  let overlays = $state<OverlayLayoutsFile | null>(null);
+  let overlayLayouts = $state<OverlayLayoutCatalog | null>(null);
   let selectedItemId = $state("");
   let activeLayerId = $state("");
   let panelX = $state(24);
@@ -102,7 +103,7 @@
   let showMocks = $state(false);
   let showSettings = $state(true);
 
-  const layout = $derived(overlays?.layouts.find((entry) => entry.id === data.layoutId) ?? null);
+  const layout = $derived(overlayLayouts?.layouts.find((entry) => entry.id === data.layoutId) ?? null);
   const layers = $derived(layout ? sortedLayers(layout) : []);
   const activeLayer = $derived(
     layers.find((layer) => layer.id === activeLayerId) ??
@@ -136,13 +137,13 @@
 
   async function refresh() {
     packages = await invoke<PackageDescriptor[]>("list_packages");
-    overlays = await invoke<OverlayLayoutsFile>("get_overlay_layouts");
+    overlayLayouts = await invoke<OverlayLayoutCatalog>("get_overlay_layouts");
   }
 
   async function save(layoutToSave = layout) {
     if (!layoutToSave) return;
     reindexLayers(layoutToSave);
-    overlays = await invoke<OverlayLayoutsFile>("save_overlay_layout", { layout: layoutToSave });
+    overlayLayouts = await invoke<OverlayLayoutCatalog>("save_overlay_layout", { layout: layoutToSave });
     message = "Saved.";
     setTimeout(() => (message = ""), 2000);
   }
@@ -350,7 +351,7 @@
 
   function refreshPreview() {
     layoutRevision += 1;
-    overlays = overlays;
+    overlayLayouts = overlayLayouts;
   }
 
   function itemStyle(item: OverlayItem) {
@@ -416,20 +417,6 @@
     if (shouldSave) void save();
   }
 
-  function setItemSettings(raw: string) {
-    if (!selectedEntry) return;
-    try {
-      const parsed = raw.trim() ? JSON.parse(raw) : {};
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        throw new Error("Settings must be a JSON object.");
-      }
-      selectedEntry.item.settings = parsed;
-      void save();
-    } catch (error) {
-      message = error instanceof Error ? error.message : String(error);
-    }
-  }
-
   function fireMock(eventName: RlTelemetryEventName) {
     mockEvent = { id: Date.now(), event: telemetryFrameTemplate(eventName) };
   }
@@ -455,8 +442,8 @@
     void refresh();
     let unlistenOverlays: (() => void) | undefined;
     let unlistenPackages: (() => void) | undefined;
-    void listen<OverlayLayoutsFile>("bakingrl-overlays-changed", (event) => {
-      overlays = event.payload;
+    void listen<OverlayLayoutCatalog>("bakingrl-overlay-layouts-changed", (event) => {
+      overlayLayouts = event.payload;
     }).then((unlisten) => {
       unlistenOverlays = unlisten;
     });
@@ -683,10 +670,12 @@
                     </label>
                   </div>
 
-                  <div class="prop-group">
-                    <label for="selected-item-settings">Instance Settings (JSON)</label>
-                    <textarea id="selected-item-settings" value={JSON.stringify(selectedEntry.item.settings ?? {}, null, 2)} onblur={(event) => setItemSettings(event.currentTarget.value)}></textarea>
-                  </div>
+                  <InstanceSettingsForm
+                    item={selectedEntry.item}
+                    packageId={selectedEntry.item.package_id}
+                    exportName={selectedEntry.item.export_name}
+                    oncommit={() => save()}
+                  />
 
                   <div class="toolbar bottom-actions">
                     <button class="btn-secondary flex-1" onclick={duplicateSelected}>
@@ -1106,7 +1095,7 @@
 
   .prop-group label { font-size: 11px; color: var(--text-secondary); font-weight: 500; text-transform: uppercase; }
 
-  .properties-panel input:not([type="range"]):not([type="checkbox"]), .properties-panel textarea {
+  .properties-panel input:not([type="range"]):not([type="checkbox"]) {
     background: rgba(0,0,0,0.3);
     border: 1px solid var(--border-color);
     color: var(--text-primary);
@@ -1117,10 +1106,9 @@
     box-sizing: border-box;
     font-family: inherit;
   }
-  .properties-panel input:focus, .properties-panel textarea:focus {
+  .properties-panel input:focus {
     outline: none; border-color: var(--accent);
   }
-  .properties-panel textarea { resize: vertical; min-height: 80px; font-family: monospace; font-size: 11px; }
 
   .small-input { width: 60px !important; }
 

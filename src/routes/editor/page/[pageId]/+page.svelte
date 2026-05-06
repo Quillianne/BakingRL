@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
+  import InstanceSettingsForm from "$lib/InstanceSettingsForm.svelte";
   import OverlayRenderer from "$lib/OverlayRenderer.svelte";
 
   const { data } = $props();
@@ -52,6 +53,7 @@
   type PageLayout = {
     id: string;
     name: string;
+    favorite: boolean;
     width: number;
     height: number;
     background: {
@@ -531,9 +533,18 @@
               <label class="toggle"><input type="checkbox" bind:checked={selectedEntry.item.visible} onchange={() => save()} /> Visible</label>
               <label class="toggle"><input type="checkbox" bind:checked={selectedEntry.item.locked} onchange={() => save()} /> Locked</label>
             </div>
-            <label>Settings JSON
-              <textarea value={JSON.stringify(selectedEntry.item.settings ?? {}, null, 2)} onblur={(event) => setItemSettings(event.currentTarget.value)}></textarea>
-            </label>
+            {#if selectedEntry.item.kind === "visual" && selectedEntry.item.package_id && selectedEntry.item.export_name}
+              <InstanceSettingsForm
+                item={selectedEntry.item}
+                packageId={selectedEntry.item.package_id}
+                exportName={selectedEntry.item.export_name}
+                oncommit={() => save()}
+              />
+            {:else}
+              <label>Settings JSON
+                <textarea value={JSON.stringify(selectedEntry.item.settings ?? {}, null, 2)} onblur={(event) => setItemSettings(event.currentTarget.value)}></textarea>
+              </label>
+            {/if}
             <div class="actions">
               <button class="btn-secondary" onclick={duplicateSelected}>Duplicate</button>
               <button class="btn-danger" onclick={deleteSelected}>Delete</button>

@@ -55,6 +55,7 @@ pub struct PackageExportsDescriptor {
     pub assets: Vec<NamedExportDescriptor>,
     pub schemas: Vec<NamedExportDescriptor>,
     pub pages: Vec<PageExportDescriptor>,
+    pub layouts: Vec<LayoutTemplateExportDescriptor>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -79,6 +80,14 @@ pub struct ServiceExportDescriptor {
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PageExportDescriptor {
+    pub name: String,
+    pub path: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LayoutTemplateExportDescriptor {
     pub name: String,
     pub path: String,
     pub title: Option<String>,
@@ -119,7 +128,7 @@ pub struct PluginHost {
     registry: Arc<Registry>,
     packages_dir: PathBuf,
     state_path: PathBuf,
-    overlays_path: PathBuf,
+    overlay_layouts_path: PathBuf,
     pages_path: PathBuf,
     app_settings_path: PathBuf,
     package_settings_path: PathBuf,
@@ -151,7 +160,7 @@ impl PluginHost {
             registry,
             packages_dir,
             state_path: app_data.join("package_state.json"),
-            overlays_path: app_data.join("overlay_layouts.json"),
+            overlay_layouts_path: app_data.join("overlay_layouts.json"),
             pages_path: app_data.join("pages.json"),
             app_settings_path: app_data.join("app_settings.json"),
             package_settings_path: app_data.join("package_settings.json"),
@@ -485,6 +494,30 @@ impl PluginHost {
             .map_err(|e| format!("Unable to read visual export source: {e}"))
     }
 
+    pub fn get_visual_settings_schema(
+        &self,
+        package_id: &str,
+        export_name: &str,
+    ) -> Result<Option<serde_json::Value>, String> {
+        let records = self.records.lock().unwrap();
+        let record = records
+            .get(package_id)
+            .ok_or_else(|| format!("Package '{package_id}' is not installed."))?;
+        if !record.descriptor.enabled {
+            return Err(format!("Package '{package_id}' is disabled."));
+        }
+        let export = record
+            .manifest
+            .exports
+            .visuals
+            .get(export_name)
+            .ok_or_else(|| format!("Visual export '{package_id}/{export_name}' does not exist."))?;
+        let Some(settings_path) = export.settings.as_deref() else {
+            return Ok(None);
+        };
+        read_json_package_file(Path::new(&record.descriptor.path), settings_path).map(Some)
+    }
+
     pub fn read_package_file(
         &self,
         package_id: &str,
@@ -731,7 +764,7 @@ impl PluginHost {
         normalize_overlay_layouts(&mut file);
         ensure_active_layout_ids(&mut file);
         self.save_overlay_layouts(&file)?;
-        self.emit_overlays_changed(&file);
+        self.emit_overlay_layouts_changed(&file);
         Ok(file)
     }
 
@@ -741,7 +774,7 @@ impl PluginHost {
         file.layouts.push(OverlayLayout {
             id: id.clone(),
             name: if name.trim().is_empty() {
-                "Untitled Overlay".to_string()
+                "Untitled Layout".to_string()
             } else {
                 name
             },
@@ -749,11 +782,12 @@ impl PluginHost {
             height: 1080.0,
             layers: default_layers(),
             items: Vec::new(),
+            template_source: None,
         });
         file.active_layout_id = id;
         ensure_active_layout_ids(&mut file);
         self.save_overlay_layouts(&file)?;
-        self.emit_overlays_changed(&file);
+        self.emit_overlay_layouts_changed(&file);
         Ok(file)
     }
 
@@ -767,23 +801,19 @@ impl PluginHost {
             .iter()
             .find(|layout| layout.id == layout_id)
             .cloned()
-            .ok_or_else(|| format!("Overlay layout '{layout_id}' does not exist."))?;
+            .ok_or_else(|| format!("Layout '{layout_id}' does not exist."))?;
         let new_id = unique_id("overlay");
         let mut duplicated = source;
         duplicated.id = new_id.clone();
         duplicated.name = format!("{} Copy", duplicated.name);
-        for layer in &mut duplicated.layers {
-            layer.id = unique_id("layer");
-            for item in &mut layer.items {
-                item.id = unique_id("item");
-            }
-        }
+        duplicated.template_source = None;
+        rekey_overlay_layout_contents(&mut duplicated);
         duplicated.items.clear();
         file.layouts.push(duplicated);
         file.active_layout_id = new_id;
         ensure_active_layout_ids(&mut file);
         self.save_overlay_layouts(&file)?;
-        self.emit_overlays_changed(&file);
+        self.emit_overlay_layouts_changed(&file);
         Ok(file)
     }
 
@@ -793,11 +823,11 @@ impl PluginHost {
     ) -> Result<OverlayLayoutsFile, String> {
         let mut file = self.load_overlay_layouts();
         if !file.layouts.iter().any(|layout| layout.id == layout_id) {
-            return Err(format!("Overlay layout '{layout_id}' does not exist."));
+            return Err(format!("Layout '{layout_id}' does not exist."));
         }
         file.active_layout_id = layout_id;
         self.save_overlay_layouts(&file)?;
-        self.emit_overlays_changed(&file);
+        self.emit_overlay_layouts_changed(&file);
         Ok(file)
     }
 
@@ -807,23 +837,66 @@ impl PluginHost {
     ) -> Result<OverlayLayoutsFile, String> {
         let mut file = self.load_overlay_layouts();
         if !file.layouts.iter().any(|layout| layout.id == layout_id) {
-            return Err(format!("Overlay layout '{layout_id}' does not exist."));
+            return Err(format!("Layout '{layout_id}' does not exist."));
         }
         file.stream_layout_id = layout_id;
         self.save_overlay_layouts(&file)?;
-        self.emit_overlays_changed(&file);
+        self.emit_overlay_layouts_changed(&file);
         Ok(file)
     }
 
     pub fn delete_overlay_layout(&self, layout_id: String) -> Result<OverlayLayoutsFile, String> {
         let mut file = self.load_overlay_layouts();
         if file.layouts.len() <= 1 {
-            return Err("At least one overlay layout is required.".to_string());
+            return Err("At least one layout is required.".to_string());
         }
         file.layouts.retain(|layout| layout.id != layout_id);
         ensure_active_layout_ids(&mut file);
         self.save_overlay_layouts(&file)?;
-        self.emit_overlays_changed(&file);
+        self.emit_overlay_layouts_changed(&file);
+        Ok(file)
+    }
+
+    pub fn import_package_layout(
+        &self,
+        package_id: String,
+        export_name: String,
+    ) -> Result<OverlayLayoutsFile, String> {
+        let mut file = self.load_overlay_layouts();
+        let mut layout = {
+            let records = self.records.lock().unwrap();
+            let record = self.require_enabled_record(&records, &package_id)?;
+            let export = record
+                .manifest
+                .exports
+                .layouts
+                .get(&export_name)
+                .ok_or_else(|| {
+                    format!("Layout template '{package_id}/{export_name}' does not exist.")
+                })?;
+            let package_root = Path::new(&record.descriptor.path);
+            let raw = read_json_package_file(package_root, &export.path)?;
+            let mut layout: OverlayLayout = serde_json::from_value(raw).map_err(|e| {
+                format!("Layout template '{package_id}/{export_name}' is invalid: {e}")
+            })?;
+            if layout.name.trim().is_empty() {
+                layout.name = export
+                    .title
+                    .clone()
+                    .unwrap_or_else(|| export_name.replace('-', " "));
+            }
+            layout.template_source = Some(format!("{package_id}/{export_name}"));
+            layout
+        };
+        let layout_id = unique_id("overlay");
+        layout.id = layout_id.clone();
+        normalize_overlay_layout(&mut layout);
+        rekey_overlay_layout_contents(&mut layout);
+        file.layouts.push(layout);
+        file.active_layout_id = layout_id;
+        ensure_active_layout_ids(&mut file);
+        self.save_overlay_layouts(&file)?;
+        self.emit_overlay_layouts_changed(&file);
         Ok(file)
     }
 
@@ -855,6 +928,7 @@ impl PluginHost {
             } else {
                 name
             },
+            favorite: false,
             width: 1440.0,
             height: 900.0,
             background: PageBackground::default(),
@@ -883,6 +957,7 @@ impl PluginHost {
         let mut duplicated = source;
         duplicated.id = unique_id("page");
         duplicated.name = format!("{} Copy", duplicated.name);
+        duplicated.favorite = false;
         duplicated.created_at_ms = now;
         duplicated.updated_at_ms = now;
         duplicated.template_source = None;
@@ -940,6 +1015,7 @@ impl PluginHost {
         };
         let now = now_ms();
         page.id = unique_id("page");
+        page.favorite = false;
         page.created_at_ms = now;
         page.updated_at_ms = now;
         normalize_page(&mut page, false);
@@ -1050,7 +1126,7 @@ impl PluginHost {
     }
 
     fn ensure_overlay_layouts(&self) {
-        if !self.overlays_path.exists() {
+        if !self.overlay_layouts_path.exists() {
             let _ = self.save_overlay_layouts(&default_overlay_layouts());
         } else {
             let mut file = self.load_overlay_layouts();
@@ -1060,7 +1136,7 @@ impl PluginHost {
     }
 
     fn load_overlay_layouts(&self) -> OverlayLayoutsFile {
-        let mut file = fs::read_to_string(&self.overlays_path)
+        let mut file = fs::read_to_string(&self.overlay_layouts_path)
             .ok()
             .and_then(|raw| serde_json::from_str(&raw).ok())
             .unwrap_or_else(default_overlay_layouts);
@@ -1069,7 +1145,7 @@ impl PluginHost {
     }
 
     fn save_overlay_layouts(&self, file: &OverlayLayoutsFile) -> Result<(), String> {
-        write_json(&self.overlays_path, file)
+        write_json(&self.overlay_layouts_path, file)
     }
 
     fn ensure_pages(&self) {
@@ -1105,8 +1181,10 @@ impl PluginHost {
             .emit("bakingrl-package-settings-changed", package_id);
     }
 
-    fn emit_overlays_changed(&self, file: &OverlayLayoutsFile) {
-        let _ = self.app_handle.emit("bakingrl-overlays-changed", file);
+    fn emit_overlay_layouts_changed(&self, file: &OverlayLayoutsFile) {
+        let _ = self
+            .app_handle
+            .emit("bakingrl-overlay-layouts-changed", file);
     }
 
     fn emit_pages_changed(&self, file: &PagesFile) {
@@ -1201,6 +1279,17 @@ fn descriptor_for_manifest(
                 .pages
                 .iter()
                 .map(|(name, export)| PageExportDescriptor {
+                    name: name.clone(),
+                    path: export.path.clone(),
+                    title: export.title.clone(),
+                    description: export.description.clone(),
+                })
+                .collect(),
+            layouts: manifest
+                .exports
+                .layouts
+                .iter()
+                .map(|(name, export)| LayoutTemplateExportDescriptor {
                     name: name.clone(),
                     path: export.path.clone(),
                     title: export.title.clone(),
@@ -1500,6 +1589,18 @@ fn normalize_overlay_layouts(file: &mut OverlayLayoutsFile) {
 }
 
 fn normalize_overlay_layout(layout: &mut OverlayLayout) {
+    if layout.id.trim().is_empty() {
+        layout.id = unique_id("overlay");
+    }
+    if layout.name.trim().is_empty() {
+        layout.name = "Untitled Layout".to_string();
+    }
+    if layout.width <= 0.0 {
+        layout.width = 1920.0;
+    }
+    if layout.height <= 0.0 {
+        layout.height = 1080.0;
+    }
     if layout.layers.is_empty() {
         let mut layers = default_layers();
         if !layout.items.is_empty() {
@@ -1582,6 +1683,19 @@ fn normalize_overlay_item(item: &mut OverlayItem) {
         item.opacity = 0.0;
     } else if item.opacity > 1.0 {
         item.opacity = 1.0;
+    }
+}
+
+fn rekey_overlay_layout_contents(layout: &mut OverlayLayout) {
+    let stamp = now_ms();
+    for (layer_index, layer) in layout.layers.iter_mut().enumerate() {
+        layer.id = format!("layer-{stamp}-{layer_index}");
+        for (item_index, item) in layer.items.iter_mut().enumerate() {
+            item.id = format!("item-{stamp}-{layer_index}-{item_index}");
+        }
+    }
+    for (item_index, item) in layout.items.iter_mut().enumerate() {
+        item.id = format!("item-{stamp}-legacy-{item_index}");
     }
 }
 
@@ -1811,6 +1925,7 @@ fn default_overlay_layouts() -> OverlayLayoutsFile {
             height: 1080.0,
             layers: default_layers(),
             items: Vec::<OverlayItem>::new(),
+            template_source: None,
         }],
     }
 }
@@ -1976,6 +2091,15 @@ pub fn get_package_settings(
 }
 
 #[tauri::command]
+pub fn get_visual_settings_schema(
+    host: State<'_, Arc<PluginHost>>,
+    package_id: String,
+    export_name: String,
+) -> Result<Option<serde_json::Value>, String> {
+    host.get_visual_settings_schema(&package_id, &export_name)
+}
+
+#[tauri::command]
 pub fn save_package_settings(
     host: State<'_, Arc<PluginHost>>,
     package_id: String,
@@ -2035,6 +2159,15 @@ pub fn delete_overlay_layout(
     layout_id: String,
 ) -> Result<OverlayLayoutsFile, String> {
     host.delete_overlay_layout(layout_id)
+}
+
+#[tauri::command]
+pub fn import_package_layout(
+    host: State<'_, Arc<PluginHost>>,
+    package_id: String,
+    export_name: String,
+) -> Result<OverlayLayoutsFile, String> {
+    host.import_package_layout(package_id, export_name)
 }
 
 #[tauri::command]
