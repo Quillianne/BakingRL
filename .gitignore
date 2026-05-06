@@ -13,8 +13,6 @@ vite.config.ts.timestamp-*
 .venv
 utils
 .vscode
-package-lock.json
-Cargo.lock
 todo*.txt
 plugins/*/dist
 plugins/*/dist-bundles
