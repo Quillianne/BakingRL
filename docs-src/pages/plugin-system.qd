@@ -99,6 +99,14 @@ Pages are reusable layouts or templates that users can import into BakingRL.
 They are not free-form app routes. The host owns page creation, page editing,
 and page rendering.
 
+Users can create blank pages or import package page templates. Imported pages
+become normal host-owned page layouts: the host assigns fresh IDs, timestamps,
+and template provenance, then users can edit size, background, layers, visual
+items, text, images, and shapes.
+
+Pages can open inside the main app window or in a separate Tauri window. This
+open target is user-owned page state, not a package routing privilege.
+
 ## Overlay Layouts
 
 Overlay layout templates are reusable layout definitions that users can import
@@ -106,6 +114,11 @@ into BakingRL. They are not overlay runtimes themselves. After import, they
 become normal host-owned layouts, so routing to the in-game overlay or OBS
 stream output, editing, OBS URLs, and runtime rendering stay controlled by the
 host.
+
+Users can also create blank overlay layouts with an explicit canvas size. The
+host tracks separate active layout IDs for the in-game overlay and the OBS
+stream output. Importing or duplicating a layout creates host-owned state with
+fresh IDs and timestamps.
 
 ## Host APIs
 
@@ -123,6 +136,17 @@ Plugins interact with BakingRL through explicit APIs:
 If a plugin needs a capability that is not available through one of these
 surfaces, the host or SDK should be extended deliberately instead of adding a
 local workaround.
+
+## Runtime Diagnostics
+
+Backend plugin exports run in revocable host-managed runtimes. Service and
+connector failures are surfaced to the frontend as `bakingrl-runtime-error`
+events with a kind, source, message, and timestamp. The dashboard records those
+events in Developer Tools and shows an error toast during the current session.
+
+Runtime diagnostics are observability for users and contributors; they are not
+a plugin API contract. Plugins should still expose their own narrow diagnostic
+methods or logs when they need stable external behavior.
 
 ## What Plugins Must Not Assume
 

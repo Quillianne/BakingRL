@@ -56,6 +56,25 @@ npm run tauri dev
 Reload packages from the BakingRL UI after installing or updating a local
 package.
 
+## Runtime Diagnostics
+
+Use the Developer page while testing host/runtime behavior. It exposes:
+
+- registry entries currently visible through the host;
+- runtime and app errors captured during the current session;
+- recent telemetry frames grouped by event name;
+- a typed telemetry frame composer for publishing test frames on the in-app
+  telemetry bus.
+
+Service and connector runtime failures are emitted by the host as
+`bakingrl-runtime-error` events and also recorded in the Developer page error
+panel. This is the first place to check when an enabled package does not start
+or when a backend export fails after reload.
+
+The dashboard rail also shows live status for the Rocket League telemetry
+connection and the OBS gateway. The OBS gateway status is a local health probe
+against the configured host and port; it does not validate OBS itself.
+
 ## Change Boundaries
 
 - Host behavior belongs in `BakingRL`.

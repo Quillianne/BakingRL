@@ -61,6 +61,30 @@ host-owned overlay layout list. It is not an overlay runtime, an OBS source, or
 an app route. After import, users can route the resulting layout to the
 in-game overlay, the OBS stream output, or edit it like any other layout.
 
+## Page Templates
+
+`exports.pages` contains importable page templates. A page template is a JSON
+page layout definition that BakingRL imports into its host-owned page list. It
+is not an arbitrary SvelteKit route or a plugin-owned window.
+
+After import, users can edit the page like any other page. The host assigns a
+new page ID, clears favorite state, records template provenance, and normalizes
+timestamps and layer/item IDs.
+
+## Imported Template State
+
+Page and layout templates should describe reusable structure, not persistent
+host identity. BakingRL normalizes imported templates and may replace:
+
+- `id`;
+- layer and item IDs;
+- `created_at_ms`;
+- `updated_at_ms`;
+- `template_source`.
+
+Authors should rely on package/export references and item settings for
+portable behavior, not on template IDs remaining unchanged after import.
+
 ## Bundle Layout
 
 Typical package contents:
@@ -100,9 +124,10 @@ edit.
 
 For visual exports, `settings` points to a JSON Schema object used by BakingRL
 to build a typed instance-settings form in the layout and page editors. The
-host currently supports simple object properties: `string`, `number`,
-`integer`, `boolean`, primitive `enum`/`oneOf`, array fields with primitive
-options, and `format: "color"`.
+schema should use an object with `properties`. The host currently supports
+simple object properties: `string`, `number`, `integer`, `boolean`, primitive
+`enum`/`oneOf`/`anyOf`, array fields with primitive options, numeric and string
+bounds, and `format: "color"`.
 
 ```json
 {
@@ -120,8 +145,11 @@ options, and `format: "color"`.
     },
     "density": {
       "type": "string",
-      "enum": ["compact", "comfortable"],
-      "default": "comfortable"
+      "default": "comfortable",
+      "oneOf": [
+        { "const": "compact", "title": "Compact" },
+        { "const": "comfortable", "title": "Comfortable" }
+      ]
     }
   }
 }

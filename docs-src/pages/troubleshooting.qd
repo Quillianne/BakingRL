@@ -36,6 +36,30 @@ library crate.
 This warning means the runtime cannot reach the local telemetry source yet. It
 is expected if Rocket League or the telemetry bridge is not running.
 
+## OBS Gateway Stopped
+
+The dashboard rail reports the OBS gateway as stopped when the configured
+gateway address is not accepting local TCP connections. Check:
+
+- the host application is still running;
+- the configured OBS gateway host and port are correct;
+- another process is not already using that port;
+- firewall or loopback restrictions are not blocking local connections.
+
+When the gateway is configured with `0.0.0.0` or `::`, the dashboard health
+probe checks `127.0.0.1` for local reachability. The OBS Browser Source should
+still use the URL shown by BakingRL.
+
+## Runtime Error Toasts
+
+Service and connector runtime failures appear as dashboard toasts and in the
+Developer page error panel. These errors usually mean an enabled package export
+failed to start, threw during mount, called an unknown service method, or lost
+its runtime channel during reload.
+
+If the package was just edited locally, rebuild it, run the plugin repository
+validation command, reinstall it locally, then reload packages in BakingRL.
+
 ## Deep-Link Registration Warning
 
 Deep-link registration may fail in development builds depending on desktop
