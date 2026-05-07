@@ -4,11 +4,12 @@ use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use deno_core::{op2, FsModuleLoader, JsRuntime, OpState, RuntimeOptions};
 use deno_error::JsErrorBox;
 use futures_util::{SinkExt, StreamExt};
+use tauri::{AppHandle, Emitter};
 use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::tungstenite::Message as TungsteniteMessage;
 use tracing::{error, info, warn};
@@ -74,6 +75,7 @@ impl ConnectorRuntimeManager {
         bus: Arc<EventBus>,
         registry: Arc<Registry>,
         service_router: ServiceCallRouter,
+        app_handle: AppHandle,
     ) {
         let mut handles = self.handles.lock().unwrap();
         let desired: HashSet<String> = specs
@@ -102,11 +104,15 @@ impl ConnectorRuntimeManager {
                 bus.clone(),
                 registry.clone(),
                 service_router.clone(),
+                app_handle.clone(),
             ) {
                 Ok(handle) => {
                     handles.insert(connector_ref, handle);
                 }
-                Err(err) => warn!("Unable to start connector runtime: {}", err),
+                Err(err) => {
+                    warn!("Unable to start connector runtime: {}", err);
+                    emit_runtime_error(&app_handle, "connector", &connector_ref, &err);
+                }
             }
         }
     }
@@ -146,9 +152,11 @@ fn spawn_connector_runtime(
     bus: Arc<EventBus>,
     registry: Arc<Registry>,
     service_router: ServiceCallRouter,
+    app_handle: AppHandle,
 ) -> Result<ConnectorRuntimeHandle, String> {
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
     let connector_ref = spec.connector_ref();
+    let error_connector_ref = connector_ref.clone();
     let thread = std::thread::Builder::new()
         .name(format!("bakingrl-connector-{connector_ref}"))
         .spawn(move || {
@@ -162,6 +170,7 @@ fn spawn_connector_runtime(
                     run_connector_runtime(spec, bus, registry, service_router, shutdown_rx).await
                 {
                     error!("Connector runtime failed: {}", err);
+                    emit_runtime_error(&app_handle, "connector", &error_connector_ref, &err);
                 }
             });
         })
@@ -171,6 +180,20 @@ fn spawn_connector_runtime(
         shutdown: Some(shutdown_tx),
         thread: Some(thread),
     })
+}
+
+fn emit_runtime_error(app_handle: &AppHandle, kind: &str, source: &str, message: &str) {
+    let timestamp_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or_default();
+    let payload = serde_json::json!({
+        "kind": kind,
+        "source": source,
+        "message": message,
+        "timestamp_ms": timestamp_ms
+    });
+    let _ = app_handle.emit("bakingrl-runtime-error", payload);
 }
 
 async fn run_connector_runtime(
@@ -360,7 +383,13 @@ const context = {{
 await connector.mount?.(context);
 async function dispatchEvents() {{
   while (true) {{
-    const event = await globalThis.Deno.core.ops.op_connector_next_event();
+    let event;
+    try {{
+      event = await globalThis.Deno.core.ops.op_connector_next_event();
+    }} catch (error) {{
+      if (String(error).includes("Connector event channel closed")) return;
+      throw error;
+    }}
     const eventName = event.Event ?? event.event;
     for (const [pattern, callbacks] of listeners) {{
       if (pattern === "*" || pattern === eventName || (pattern.endsWith(".*") && eventName.startsWith(pattern.slice(0, -1)))) {{

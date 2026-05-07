@@ -3,10 +3,11 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use deno_core::{op2, FsModuleLoader, JsRuntime, OpState, RuntimeOptions};
 use deno_error::JsErrorBox;
+use tauri::{AppHandle, Emitter};
 use tokio::sync::{mpsc, oneshot};
 use tracing::{error, info, warn};
 
@@ -81,6 +82,7 @@ impl ServiceRuntimeManager {
         specs: Vec<ServiceRuntimeSpec>,
         bus: Arc<EventBus>,
         registry: Arc<Registry>,
+        app_handle: AppHandle,
     ) {
         let mut handles = self.handles.lock().unwrap();
         let desired: HashSet<String> = specs.iter().map(ServiceRuntimeSpec::service_ref).collect();
@@ -102,13 +104,22 @@ impl ServiceRuntimeManager {
             if handles.contains_key(&service_ref) {
                 continue;
             }
-            match spawn_service_runtime(spec, bus.clone(), registry.clone(), self.router.clone()) {
+            match spawn_service_runtime(
+                spec,
+                bus.clone(),
+                registry.clone(),
+                self.router.clone(),
+                app_handle.clone(),
+            ) {
                 Ok(handle) => {
                     self.router
                         .insert(service_ref.clone(), handle.client.clone());
                     handles.insert(service_ref, handle);
                 }
-                Err(err) => warn!("Unable to start service runtime: {}", err),
+                Err(err) => {
+                    warn!("Unable to start service runtime: {}", err);
+                    emit_runtime_error(&app_handle, "service", &service_ref, &err);
+                }
             }
         }
     }
@@ -229,6 +240,7 @@ fn spawn_service_runtime(
     bus: Arc<EventBus>,
     registry: Arc<Registry>,
     router: ServiceCallRouter,
+    app_handle: AppHandle,
 ) -> Result<ServiceRuntimeHandle, String> {
     let (command_tx, command_rx) = mpsc::unbounded_channel::<ServiceRuntimeCommand>();
     let service_ref = spec.service_ref();
@@ -237,6 +249,7 @@ fn spawn_service_runtime(
         tx: command_tx,
     };
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let error_service_ref = service_ref.clone();
 
     let thread = std::thread::Builder::new()
         .name(format!("bakingrl-service-{service_ref}"))
@@ -251,6 +264,7 @@ fn spawn_service_runtime(
                     run_service_runtime(spec, bus, registry, router, command_rx, shutdown_rx).await
                 {
                     error!("Service runtime failed: {}", err);
+                    emit_runtime_error(&app_handle, "service", &error_service_ref, &err);
                 }
             });
         })
@@ -261,6 +275,20 @@ fn spawn_service_runtime(
         shutdown: Some(shutdown_tx),
         thread: Some(thread),
     })
+}
+
+fn emit_runtime_error(app_handle: &AppHandle, kind: &str, source: &str, message: &str) {
+    let timestamp_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or_default();
+    let payload = serde_json::json!({
+        "kind": kind,
+        "source": source,
+        "message": message,
+        "timestamp_ms": timestamp_ms
+    });
+    let _ = app_handle.emit("bakingrl-runtime-error", payload);
 }
 
 async fn run_service_runtime(
@@ -472,7 +500,13 @@ const context = {{
 await service.mount?.(context);
 async function dispatchEvents() {{
   while (true) {{
-    const event = await globalThis.Deno.core.ops.op_service_next_event();
+    let event;
+    try {{
+      event = await globalThis.Deno.core.ops.op_service_next_event();
+    }} catch (error) {{
+      if (String(error).includes("Service event channel closed")) return;
+      throw error;
+    }}
     const eventName = event.Event ?? event.event;
     for (const [pattern, callbacks] of listeners) {{
       if (pattern === "*" || pattern === eventName || (pattern.endsWith(".*") && eventName.startsWith(pattern.slice(0, -1)))) {{
@@ -483,7 +517,13 @@ async function dispatchEvents() {{
 }}
 async function dispatchCalls() {{
   while (true) {{
-    const call = await globalThis.Deno.core.ops.op_service_next_call();
+    let call;
+    try {{
+      call = await globalThis.Deno.core.ops.op_service_next_call();
+    }} catch (error) {{
+      if (String(error).includes("Service call channel closed")) return;
+      throw error;
+    }}
     try {{
       const method = service.methods?.[call.method];
       if (typeof method !== "function") throw new Error(`Unknown service method '${{call.method}}'.`);

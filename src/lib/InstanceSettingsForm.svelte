@@ -1,5 +1,6 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
+  import ColorField from "$lib/ColorField.svelte";
 
   type SettingsItem = {
     settings: Record<string, unknown>;
@@ -232,7 +233,7 @@
   {:else if fields.length}
     <div class="typed-settings">
       {#each fields as field}
-        <label class="typed-field">
+        <div class="typed-field">
           <span class="field-label">
             {field.label}
             {#if field.required}<em>required</em>{/if}
@@ -275,10 +276,7 @@
               onblur={(event) => updateField(field, event.currentTarget.value)}
             />
           {:else if field.format === "color"}
-            <span class="color-row">
-              <input type="color" value={String(fieldValue(field) || "#ffffff")} onchange={(event) => updateField(field, event.currentTarget.value)} />
-              <input value={String(fieldValue(field))} onblur={(event) => updateField(field, event.currentTarget.value)} />
-            </span>
+            <ColorField value={String(fieldValue(field) || "#ffffff")} oncommit={(nextValue) => updateField(field, nextValue)} />
           {:else}
             <input
               value={String(fieldValue(field))}
@@ -287,7 +285,7 @@
               onblur={(event) => updateField(field, event.currentTarget.value)}
             />
           {/if}
-        </label>
+        </div>
       {/each}
     </div>
   {:else}
@@ -353,7 +351,6 @@
   }
 
   .toggle-row,
-  .color-row,
   .checkbox-list label {
     display: flex;
     align-items: center;
@@ -370,7 +367,7 @@
     padding: 6px 8px;
     border: 1px solid var(--border-color);
     border-radius: var(--radius-sm);
-    background: rgba(255, 255, 255, 0.035);
+    background: color-mix(in srgb, var(--bg-panel-hover) 70%, transparent);
     color: var(--text-secondary);
     font-size: 12px;
   }
@@ -383,7 +380,7 @@
     box-sizing: border-box;
     border: 1px solid var(--border-color);
     border-radius: var(--radius-sm);
-    background: rgba(0, 0, 0, 0.22);
+    background: color-mix(in srgb, var(--bg-dark) 35%, transparent);
     color: var(--text-primary);
     font: inherit;
     font-size: 13px;
@@ -395,7 +392,7 @@
   textarea:focus {
     outline: none;
     border-color: var(--accent);
-    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.18);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
   }
 
   .toggle-row input[type="checkbox"],
@@ -403,13 +400,6 @@
     flex: none;
     width: auto;
     min-width: 0;
-  }
-
-  .color-row input[type="color"] {
-    flex: none;
-    width: 40px;
-    min-width: 40px;
-    padding: 2px;
   }
 
   textarea {
@@ -420,9 +410,9 @@
   .settings-error {
     margin: 0;
     padding: 8px 10px;
-    border: 1px solid rgba(239, 68, 68, 0.28);
+    border: 1px solid color-mix(in srgb, var(--danger) 28%, transparent);
     border-radius: var(--radius-sm);
-    background: rgba(239, 68, 68, 0.08);
+    background: color-mix(in srgb, var(--danger) 8%, transparent);
     color: var(--danger);
     font-size: 12px;
   }

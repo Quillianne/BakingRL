@@ -9,7 +9,7 @@ pub mod window_watcher;
 
 use crate::bus::{BusEvent, EventBus};
 use crate::ingestor::{start_tcp_ingestor, TelemetryStatusState};
-use crate::models::{GameEvent, TelemetryConnectionStatus};
+use crate::models::{GameEvent, ObsGatewayStatus, TelemetryConnectionStatus};
 use crate::plugin_host::{
     call_service_export, create_overlay_layout, create_page, delete_overlay_layout, delete_page,
     discard_prepared_package, duplicate_overlay_layout, duplicate_page, get_app_settings,
@@ -24,6 +24,7 @@ use crate::plugin_host::{
 };
 use crate::registry::{registry_entries, registry_get, Registry};
 use crate::window_watcher::start_window_visibility_watcher;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -191,6 +192,33 @@ fn get_telemetry_status(
 }
 
 #[tauri::command]
+fn get_obs_gateway_status(plugin_host: tauri::State<'_, Arc<PluginHost>>) -> ObsGatewayStatus {
+    let obs_settings = plugin_host.get_app_settings().obs;
+    let address = format!("{}:{}", obs_settings.host, obs_settings.port);
+    let connect_host = match obs_settings.host.as_str() {
+        "0.0.0.0" | "::" => "127.0.0.1",
+        host => host,
+    };
+    let connect_address = format!("{}:{}", connect_host, obs_settings.port);
+    let running = connect_address
+        .to_socket_addrs()
+        .ok()
+        .into_iter()
+        .flatten()
+        .any(|addr| TcpStream::connect_timeout(&addr, Duration::from_millis(120)).is_ok());
+
+    ObsGatewayStatus {
+        running,
+        address,
+        message: if running {
+            None
+        } else {
+            Some("OBS gateway is not accepting connections.".to_string())
+        },
+    }
+}
+
+#[tauri::command]
 fn list_overlay_monitors(app: tauri::AppHandle) -> Result<Vec<OverlayMonitorDescriptor>, String> {
     let reference_window = app
         .get_webview_window(INGAME_OVERLAY_LABEL)
@@ -284,6 +312,7 @@ pub fn run() {
 
     builder
         .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|_app| {
             info!("Démarrage du moteur Core de BakingRL...");
 
@@ -451,6 +480,7 @@ pub fn run() {
             open_overlay_layout_editor,
             close_overlay_editor,
             get_telemetry_status,
+            get_obs_gateway_status,
             list_overlay_monitors,
             emit_developer_telemetry,
         ])

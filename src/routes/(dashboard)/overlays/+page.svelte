@@ -1,9 +1,19 @@
 <script lang="ts">
   import { getDashboardContext } from "$lib/dashboard/context";
+  import LayoutCard from "$lib/dashboard/LayoutCard.svelte";
   import type { OverlayLayout } from "$lib/dashboard/types";
   import OverlayRenderer from "$lib/OverlayRenderer.svelte";
 
-  const state = getDashboardContext();
+  const dashboard = getDashboardContext();
+  let createDialogOpen = $state(false);
+  let createLayoutName = $state("");
+  let createLayoutWidth = $state(1920);
+  let createLayoutHeight = $state(1080);
+
+  type CardBadge = {
+    label: string;
+    tone?: "route" | "stream" | "muted" | "warn";
+  };
 
   function handleNameBlur(layout: OverlayLayout, event: FocusEvent) {
     const input = event.currentTarget as HTMLInputElement;
@@ -11,71 +21,93 @@
       input.value = layout.name;
       return;
     }
-    void state.renameLayout(layout, input.value);
+    void dashboard.renameLayout(layout, input.value);
+  }
+
+  function resetCreateDialog() {
+    createLayoutName = "";
+    createLayoutWidth = 1920;
+    createLayoutHeight = 1080;
+  }
+
+  function closeCreateDialog() {
+    createDialogOpen = false;
+    resetCreateDialog();
+  }
+
+  async function submitCreateLayout() {
+    const created = await dashboard.createOverlayLayout({
+      name: createLayoutName,
+      width: createLayoutWidth,
+      height: createLayoutHeight
+    });
+    if (created) closeCreateDialog();
+  }
+
+  function layoutBadges(layout: OverlayLayout): CardBadge[] {
+    const badges: CardBadge[] = [];
+    if (dashboard.isInGameLayout(layout)) badges.push({ label: dashboard.t("overlays.ingame"), tone: "route" });
+    if (dashboard.isStreamLayout(layout)) badges.push({ label: dashboard.t("overlays.stream"), tone: "stream" });
+    if (!dashboard.isInGameLayout(layout) && !dashboard.isStreamLayout(layout)) {
+      badges.push({ label: dashboard.t("common.unassigned"), tone: "muted" });
+    }
+    if (layout.template_source) badges.push({ label: dashboard.t("common.imported"), tone: "muted" });
+    return badges;
+  }
+
+  function layoutSummary(layout: OverlayLayout) {
+    return `${layout.width}x${layout.height} · ${dashboard.layoutLayerCount(layout)} ${dashboard.t("common.layers")} · ${dashboard.layoutItemCount(layout)} ${dashboard.t("common.items")}`;
   }
 </script>
 
 <div class="page-title">
   <div>
-    <h1>{state.t("overlays.layoutsTitle")}</h1>
-    <p>{state.t("overlays.layoutsDesc")}</p>
+    <h1>{dashboard.t("overlays.layoutsTitle")}</h1>
+    <p>{dashboard.t("overlays.layoutsDesc")}</p>
   </div>
+  <button class="btn-primary" onclick={() => (createDialogOpen = true)} disabled={dashboard.busy}>
+    {dashboard.t("overlays.createLayout")}
+  </button>
 </div>
 
 <div class="section-stack">
   <section class="studio-panel">
     <div class="panel-heading">
       <div>
-        <h2>{state.t("overlays.obsTitle")}</h2>
-        <p>{state.t("overlays.obsDesc")}</p>
+        <h2>{dashboard.t("overlays.obsTitle")}</h2>
+        <p>{dashboard.t("overlays.obsDesc")}</p>
       </div>
-      <button class="btn-primary" onclick={() => void state.copyText(state.streamUrl(), state.t("overlays.generalUrl"))} disabled={!state.obsBaseUrl}>
+    </div>
+    <div class="copy-url-row">
+      <code class="mono">{dashboard.streamUrl()}</code>
+      <button class="btn-outline copy-url-button" onclick={() => void dashboard.copyText(dashboard.streamUrl(), dashboard.t("overlays.generalUrl"))} disabled={!dashboard.obsBaseUrl}>
         <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
           <rect x="9" y="9" width="13" height="13" rx="2"></rect>
           <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
         </svg>
-        {state.t("overlays.copyGeneralUrl")}
-      </button>
-    </div>
-    <code class="mono">{state.streamUrl()}</code>
-  </section>
-
-  <section class="studio-panel">
-    <div class="panel-heading">
-      <div>
-        <h2>{state.t("overlays.createLayout")}</h2>
-        <p>{state.t("overlays.layoutsDesc")}</p>
-      </div>
-    </div>
-    <div class="form-row">
-      <div class="input-group">
-        <label for="newLayoutName">{state.t("overlays.newLayoutPlaceholder")}</label>
-        <input id="newLayoutName" bind:value={state.newLayoutName} />
-      </div>
-      <button class="btn-primary" onclick={() => void state.createOverlayLayout()} disabled={state.busy}>
-        {state.t("common.create")}
+        {dashboard.t("common.copyUrl")}
       </button>
     </div>
   </section>
 
-  {#if state.layoutTemplates.length}
+  {#if dashboard.layoutTemplates.length}
     <section>
       <div class="section-heading">
         <div>
-          <h2>{state.t("overlays.templateTitle")}</h2>
-          <p>{state.t("overlays.templateDesc")}</p>
+          <h2>{dashboard.t("overlays.templateTitle")}</h2>
+          <p>{dashboard.t("overlays.templateDesc")}</p>
         </div>
       </div>
       <div class="card-grid">
-        {#each state.layoutTemplates as entry}
+        {#each dashboard.layoutTemplates as entry}
           <article class="studio-card">
             <div>
               <h3>{entry.layoutTemplate.title ?? entry.layoutTemplate.name}</h3>
               <p>{entry.layoutTemplate.description ?? entry.package.name}</p>
               <span class="package-id">{entry.package.id}/{entry.layoutTemplate.name}</span>
             </div>
-            <button class="btn-primary" onclick={() => void state.importPackageLayout(entry.package.id, entry.layoutTemplate.name)} disabled={state.busy}>
-              {state.t("common.import")}
+            <button class="btn-primary" onclick={() => void dashboard.importPackageLayout(entry.package.id, entry.layoutTemplate.name)} disabled={dashboard.busy}>
+              {dashboard.t("common.import")}
             </button>
           </article>
         {/each}
@@ -83,73 +115,109 @@
     </section>
   {/if}
 
-  {#if state.overlayLayouts?.layouts.length}
-    <section class="card-grid" aria-label={state.t("overlays.layoutsTitle")}>
-      {#each state.overlayLayouts.layouts as layout (layout.id)}
-        <article class="studio-card">
-          <div class="thumb-preview" aria-hidden="true"></div>
-          <div class="card-heading">
-            <div class="package-meta">
-              <input
-                aria-label={state.t("overlays.layoutName")}
-                value={layout.name}
-                onblur={(event) => handleNameBlur(layout, event)}
-                onkeydown={(event) => event.key === "Enter" && (event.currentTarget as HTMLInputElement).blur()}
-              />
-              <span class="package-id">{layout.id}</span>
-            </div>
-          </div>
+  {#if dashboard.overlayLayouts?.layouts.length}
+    <section class="card-grid" aria-label={dashboard.t("overlays.layoutsTitle")}>
+      {#each dashboard.overlayLayouts.layouts as layout (layout.id)}
+        <LayoutCard
+          name={layout.name}
+          ariaLabel={dashboard.t("overlays.layoutName")}
+          summary={layoutSummary(layout)}
+          badges={layoutBadges(layout)}
+          onNameBlur={(event) => handleNameBlur(layout, event)}
+          onDelete={() => dashboard.deleteLayout(layout)}
+          deleteDisabled={dashboard.busy || (dashboard.overlayLayouts?.layouts.length ?? 0) <= 1}
+          deleteTitle={dashboard.t("confirm.deleteLayoutTitle")}
+        >
+          {#snippet preview()}
+            <OverlayRenderer layoutOverride={layout} mode="editor" preview={true} />
+          {/snippet}
 
-          <div class="badge-row">
-            {#if state.isInGameLayout(layout)}
-              <span class="badge route">{state.t("overlays.ingame")}</span>
-            {/if}
-            {#if state.isStreamLayout(layout)}
-              <span class="badge stream">{state.t("overlays.stream")}</span>
-            {/if}
-            {#if !state.isInGameLayout(layout) && !state.isStreamLayout(layout)}
-              <span class="badge muted">{state.t("common.unassigned")}</span>
-            {/if}
-            {#if layout.template_source}
-              <span class="badge muted">{state.t("common.imported")}</span>
-            {/if}
-          </div>
-
-          <p>
-            {layout.width}x{layout.height} · {state.layoutLayerCount(layout)} {state.t("common.layers")} ·
-            {state.layoutItemCount(layout)} {state.t("common.items")}
-          </p>
-
-          <div class="card-actions">
-            <button class="btn-primary" onclick={() => void state.openLayoutEditor(layout.id)}>
-              {state.t("common.edit")}
+          {#snippet actions()}
+            <button class="btn-primary" onclick={() => void dashboard.openLayoutEditor(layout.id)}>
+              {dashboard.t("common.edit")}
             </button>
-            <button class="btn-outline" onclick={() => state.openPreview(state.layoutUrl(layout.id))} disabled={!state.obsBaseUrl}>
-              {state.t("common.preview")}
+            <button class="btn-outline" onclick={() => dashboard.openPreview(dashboard.layoutUrl(layout.id))} disabled={!dashboard.obsBaseUrl}>
+              {dashboard.t("common.preview")}
             </button>
-            <button class="btn-outline" onclick={() => void state.copyText(state.layoutUrl(layout.id), state.t("common.copyUrl"))} disabled={!state.obsBaseUrl}>
-              {state.t("common.copyUrl")}
+            <button class="btn-outline" onclick={() => void dashboard.copyText(dashboard.layoutUrl(layout.id), dashboard.t("common.copyUrl"))} disabled={!dashboard.obsBaseUrl}>
+              {dashboard.t("common.copyUrl")}
             </button>
-            <button class="btn-secondary" onclick={() => void state.routeOverlayLayout(layout.id)} disabled={state.busy || state.isInGameLayout(layout)}>
-              {state.t("overlays.setIngame")}
+            <button class="btn-secondary" onclick={() => void dashboard.routeOverlayLayout(layout.id)} disabled={dashboard.busy || dashboard.isInGameLayout(layout)}>
+              {dashboard.t("overlays.setIngame")}
             </button>
-            <button class="btn-secondary" onclick={() => void state.routeOverlayLayout(layout.id, true)} disabled={state.busy || state.isStreamLayout(layout)}>
-              {state.t("overlays.setStream")}
+            <button class="btn-secondary" onclick={() => void dashboard.routeOverlayLayout(layout.id, true)} disabled={dashboard.busy || dashboard.isStreamLayout(layout)}>
+              {dashboard.t("overlays.setStream")}
             </button>
-            <button class="icon-button" onclick={() => state.deleteLayout(layout)} disabled={state.busy || (state.overlayLayouts?.layouts.length ?? 0) <= 1} title={state.t("confirm.deleteLayoutTitle")}>
-              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M3 6h18"></path>
-                <path d="M8 6V4h8v2"></path>
-                <path d="M19 6v14H5V6"></path>
-              </svg>
-            </button>
-          </div>
-        </article>
+          {/snippet}
+        </LayoutCard>
       {/each}
     </section>
   {:else}
     <div class="empty-state">
-      <p>{state.t("overlays.empty")}</p>
+      <p>{dashboard.t("overlays.empty")}</p>
     </div>
   {/if}
 </div>
+
+{#if createDialogOpen}
+  <div class="modal-layer">
+    <button type="button" class="modal-scrim" aria-label={dashboard.t("common.cancel")} onclick={closeCreateDialog}></button>
+    <div
+      class="studio-modal create-page-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="create-layout-title"
+    >
+      <form
+        class="create-page-form"
+        onsubmit={(event) => {
+          event.preventDefault();
+          void submitCreateLayout();
+        }}
+      >
+        <div class="modal-heading">
+          <div>
+            <h2 id="create-layout-title">{dashboard.t("overlays.createDialogTitle")}</h2>
+            <p>{dashboard.t("overlays.createDialogDesc")}</p>
+          </div>
+          <button type="button" class="icon-button" aria-label={dashboard.t("common.cancel")} onclick={closeCreateDialog}>
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M18 6 6 18"></path>
+              <path d="m6 6 12 12"></path>
+            </svg>
+          </button>
+        </div>
+
+        <div class="section-stack">
+          <div class="input-group">
+            <label for="createLayoutName">{dashboard.t("overlays.layoutName")}</label>
+            <input id="createLayoutName" bind:value={createLayoutName} placeholder={dashboard.t("overlays.newLayoutPlaceholder")} />
+          </div>
+
+          <div class="input-group">
+            <span class="field-label">{dashboard.t("common.size")}</span>
+            <div class="size-grid">
+              <label for="createLayoutWidth">
+                {dashboard.t("common.width")}
+                <input id="createLayoutWidth" type="number" min="320" bind:value={createLayoutWidth} />
+              </label>
+              <label for="createLayoutHeight">
+                {dashboard.t("common.height")}
+                <input id="createLayoutHeight" type="number" min="240" bind:value={createLayoutHeight} />
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-actions">
+          <button type="button" class="btn-secondary" onclick={closeCreateDialog}>
+            {dashboard.t("common.cancel")}
+          </button>
+          <button type="submit" class="btn-primary" disabled={dashboard.busy}>
+            {dashboard.t("common.create")}
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+{/if}

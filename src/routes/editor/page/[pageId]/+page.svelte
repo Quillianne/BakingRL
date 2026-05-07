@@ -1,7 +1,10 @@
 <script lang="ts">
+  import { goto } from "$app/navigation";
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
+  import ColorField from "$lib/ColorField.svelte";
+  import EditorTemplate from "$lib/EditorTemplate.svelte";
   import InstanceSettingsForm from "$lib/InstanceSettingsForm.svelte";
   import OverlayRenderer from "$lib/OverlayRenderer.svelte";
 
@@ -100,6 +103,7 @@
   let selectedVisualRef = $state("");
   let previewMode = $state(false);
   let message = $state("");
+  let stageWrap = $state<HTMLElement>();
   let stage = $state<HTMLElement>();
   let dragState = $state<DragState | null>(null);
   let panState = $state<PanState | null>(null);
@@ -108,6 +112,11 @@
   let zoom = $state(0.58);
   let panX = $state(0);
   let panY = $state(0);
+  let showApp = $state(true);
+  let showAdd = $state(true);
+  let showBackground = $state(false);
+  let showLayers = $state(true);
+  let showProperties = $state(true);
 
   const page = $derived(pages?.pages.find((entry) => entry.id === data.pageId) ?? null);
   const layers = $derived(page ? sortedLayers(page) : []);
@@ -141,6 +150,7 @@
 
   async function save(pageToSave = page) {
     if (!pageToSave) return;
+    normalizePage(pageToSave);
     reindexLayers(pageToSave);
     pages = await invoke<PagesFile>("save_page", { page: pageToSave });
     layoutRevision += 1;
@@ -159,6 +169,27 @@
       layer.kind = "normal";
     });
     page.layers = orderedLayers;
+  }
+
+  function asWholeNumber(value: unknown, fallback = 0) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? Math.round(parsed) : fallback;
+  }
+
+  function normalizePage(page: PageLayout) {
+    page.width = Math.max(320, asWholeNumber(page.width, 1440));
+    page.height = Math.max(240, asWholeNumber(page.height, 900));
+    for (const layer of page.layers) {
+      for (const item of layer.items) normalizeItem(item);
+    }
+  }
+
+  function normalizeItem(item: PageItem) {
+    item.x = asWholeNumber(item.x);
+    item.y = asWholeNumber(item.y);
+    item.width = Math.max(24, asWholeNumber(item.width, 320));
+    item.height = Math.max(18, asWholeNumber(item.height, 120));
+    item.z_index = asWholeNumber(item.z_index);
   }
 
   function findItem(itemId: string) {
@@ -222,9 +253,17 @@
   function addNative(kind: "text" | "image" | "shape") {
     if (!page || !activeLayer) return;
     const defaults = {
-      text: { width: 360, height: 120, settings: { text: "New text", color: "#f8fafc", fontSize: 28 } },
+      text: { width: 360, height: 120, settings: { text: "New text", color: "var(--text-primary)", fontSize: 28 } },
       image: { width: 420, height: 240, settings: { src: "", fit: "cover" } },
-      shape: { width: 320, height: 180, settings: { fill: "rgba(59, 130, 246, 0.18)", borderColor: "rgba(255,255,255,0.24)", borderRadius: 8 } }
+      shape: {
+        width: 320,
+        height: 180,
+        settings: {
+          fill: "color-mix(in srgb, var(--accent) 18%, transparent)",
+          borderColor: "color-mix(in srgb, var(--text-primary) 24%, transparent)",
+          borderRadius: 8
+        }
+      }
     }[kind];
     const item: PageItem = {
       id: `item-${Date.now()}`,
@@ -279,6 +318,7 @@
     item.height = Math.max(18, Math.min(item.height, page.height));
     item.x = Math.max(0, Math.min(item.x, page.width - item.width));
     item.y = Math.max(0, Math.min(item.y, page.height - item.height));
+    normalizeItem(item);
   }
 
   function refreshPreview() {
@@ -295,26 +335,6 @@
       height:${(item.height / page.height) * 100}%;
       z-index:${item.z_index};
     `;
-  }
-
-  function canvasStyle() {
-    if (!page) return "";
-    return `width:${page.width}px;height:${page.height}px;transform:translate(${panX}px, ${panY}px) scale(${zoom});`;
-  }
-
-  function setZoom(nextZoom: number) {
-    zoom = Math.max(0.12, Math.min(1.5, nextZoom));
-  }
-
-  function resetViewport() {
-    zoom = 0.58;
-    panX = 0;
-    panY = 0;
-  }
-
-  function handleWheel(event: WheelEvent) {
-    event.preventDefault();
-    setZoom(zoom + (event.deltaY > 0 ? -0.05 : 0.05));
   }
 
   function startPan(event: PointerEvent) {
@@ -386,6 +406,18 @@
     if (shouldSave) void save();
   }
 
+  function itemSetting(key: string, fallback: string | number | boolean) {
+    if (!selectedEntry) return fallback;
+    const value = selectedEntry.item.settings?.[key];
+    return value === undefined || value === null ? fallback : value;
+  }
+
+  function updateItemSetting(key: string, value: string | number | boolean) {
+    if (!selectedEntry) return;
+    selectedEntry.item.settings = { ...(selectedEntry.item.settings ?? {}), [key]: value };
+    void save();
+  }
+
   function openContextMenu(event: MouseEvent, item: PageItem) {
     event.preventDefault();
     event.stopPropagation();
@@ -426,27 +458,15 @@
     void save();
   }
 
-  function setItemSettings(raw: string) {
-    if (!selectedEntry) return;
-    try {
-      const parsed = raw.trim() ? JSON.parse(raw) : {};
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        throw new Error("Settings must be a JSON object.");
-      }
-      selectedEntry.item.settings = parsed;
-      void save();
-    } catch (error) {
-      message = error instanceof Error ? error.message : String(error);
-    }
-  }
-
   function openPage() {
     if (!page) return;
     window.location.href = `/page/${encodeURIComponent(page.id)}`;
   }
 
-  function backToDashboard() {
-    window.location.href = "/";
+  async function closeEditor() {
+    const returnTo = typeof data.returnTo === "string" && data.returnTo.startsWith("/") ? data.returnTo : "/pages";
+    sessionStorage.setItem("bakingrl.editorReturn", JSON.stringify({ scrollY: data.scrollY ?? 0 }));
+    await goto(returnTo);
   }
 
   onMount(() => {
@@ -472,10 +492,26 @@
   });
 </script>
 
-<main onpointermove={pointerMove} onpointerup={pointerUp} class:dragging={dragState !== null}>
+<main class="page-editor-page">
   {#if page}
-    <section class="stage-wrap" role="application" aria-label="Page editor canvas" onwheel={handleWheel} onpointerdown={startPan}>
-      <div class="stage" bind:this={stage} style={canvasStyle()}>
+    <EditorTemplate
+      title={page.name}
+      {message}
+      canvas={page}
+      centerKey={page.id}
+      canvasAriaLabel="Page editor canvas"
+      dragging={dragState !== null}
+      bind:zoom
+      bind:panX
+      bind:panY
+      bind:stage
+      bind:stageWrap
+      onPointerMove={pointerMove}
+      onPointerUp={pointerUp}
+      onStagePointerDown={startPan}
+      onClose={closeEditor}
+    >
+      {#snippet stageContent()}
         <OverlayRenderer
           source="page"
           layoutId={page.id}
@@ -512,169 +548,206 @@
             {/each}
           </div>
         {/if}
-      </div>
-    </section>
+      {/snippet}
 
-    <aside class="editor-panel">
-      <header>
-        <div>
-          <strong>{page.name}</strong>
-          {#if message}<span>{message}</span>{/if}
-        </div>
-        <div class="editor-header-actions">
-          <button class="icon-btn" onclick={() => setZoom(zoom - 0.08)} title="Zoom out">
-            <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><path d="M8 11h6"></path><path d="m21 21-4.3-4.3"></path></svg>
-          </button>
-          <button class="zoom-readout" onclick={resetViewport}>{Math.round(zoom * 100)}%</button>
-          <button class="icon-btn" onclick={() => setZoom(zoom + 0.08)} title="Zoom in">
-            <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><path d="M8 11h6"></path><path d="M11 8v6"></path><path d="m21 21-4.3-4.3"></path></svg>
-          </button>
-        </div>
-        <button class="icon-btn" onclick={backToDashboard} title="Back to dashboard">
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
-        </button>
-      </header>
-
-      <div class="panel-content">
-        <div class="side-panel left">
-        <section class="panel-section">
-          <div class="section-title">
-            <h2>Page</h2>
-            <label class="toggle">
-              <input type="checkbox" bind:checked={previewMode} />
-              Preview
-            </label>
-          </div>
-          <label>Name<input bind:value={page.name} onblur={() => save()} /></label>
-          <div class="split">
-            <label>Width<input type="number" bind:value={page.width} onblur={() => save()} /></label>
-            <label>Height<input type="number" bind:value={page.height} onblur={() => save()} /></label>
-          </div>
-          <label>Open target
-            <select bind:value={page.settings.open_target} onchange={() => save()}>
-              <option value="app">In app</option>
-              <option value="window">New app window</option>
-            </select>
-          </label>
-          <div class="actions">
-            <button class="btn-primary" onclick={openPage}>Open</button>
-            <button class="btn-secondary" onclick={() => void save()}>Save</button>
-          </div>
-        </section>
-
-        <section class="panel-section">
-          <h2>Background</h2>
-          <label>Type
-            <select bind:value={page.background.kind} onchange={() => save()}>
-              <option value="color">Color</option>
-              <option value="image">Image URL</option>
-            </select>
-          </label>
-          <label>Color<input bind:value={page.background.color} onblur={() => save()} /></label>
-          {#if page.background.kind === "image"}
-            <label>Image URL<input bind:value={page.background.image} onblur={() => save()} /></label>
-            <label>Fit
-              <select bind:value={page.background.fit} onchange={() => save()}>
-                <option value="cover">Cover</option>
-                <option value="contain">Contain</option>
-                <option value="stretch">Stretch</option>
-              </select>
-            </label>
-          {/if}
-        </section>
-
-        <section class="panel-section">
-          <div class="section-title">
-            <h2>Add</h2>
-          </div>
-          <div class="native-buttons">
-            <button class="btn-secondary" onclick={() => addNative("text")}>Text</button>
-            <button class="btn-secondary" onclick={() => addNative("image")}>Image</button>
-            <button class="btn-secondary" onclick={() => addNative("shape")}>Shape</button>
-          </div>
-          <div class="search-box">
-            <input bind:value={visualSearch} placeholder="Search plugin visuals" />
-          </div>
-          <select bind:value={selectedVisualRef}>
-            <option value="">Select a visual...</option>
-            {#each filteredVisualExports as entry}
-              <option value={entry.ref}>{entry.package.name} / {entry.visual.name}</option>
-            {/each}
-          </select>
-          <button class="btn-primary" onclick={addVisual} disabled={!selectedVisualRef}>Add Visual</button>
-        </section>
-        </div>
-
-        <div class="side-panel right">
-        <section class="panel-section">
-          <div class="section-title">
-            <h2>Layers</h2>
-            <button class="icon-btn" onclick={addLayer} title="Add layer">
-              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+      {#snippet leftPanel()}
+          <section class="accordion">
+            <button class="accordion-header" onclick={() => (showApp = !showApp)}>
+              <svg class:rotated={showApp} xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>
+              <h2>App</h2>
             </button>
-          </div>
-          {#each layers as layer}
-            <div class="layer-row" class:active={activeLayerId === layer.id}>
-              <button onclick={() => (activeLayerId = layer.id)}>{layer.name}</button>
-              <input bind:value={layer.name} onblur={() => save()} />
-              <button class="icon-btn" onclick={() => { layer.visible = !layer.visible; void save(); }} title="Toggle visibility">
-                {layer.visible ? "On" : "Off"}
-              </button>
-              <button class="icon-btn danger" onclick={() => deleteLayer(layer)} disabled={page.layers.length <= 1} title="Delete layer">Del</button>
-            </div>
-          {/each}
-        </section>
-
-        <section class="panel-section">
-          <h2>Properties</h2>
-          {#if selectedEntry}
-            <label>Name<input bind:value={selectedEntry.item.name} onblur={() => save()} /></label>
-            <div class="split">
-              <label>X<input type="number" bind:value={selectedEntry.item.x} onblur={() => save()} /></label>
-              <label>Y<input type="number" bind:value={selectedEntry.item.y} onblur={() => save()} /></label>
-            </div>
-            <div class="split">
-              <label>Width<input type="number" bind:value={selectedEntry.item.width} onblur={() => save()} /></label>
-              <label>Height<input type="number" bind:value={selectedEntry.item.height} onblur={() => save()} /></label>
-            </div>
-            <label>Opacity<input type="range" min="0" max="1" step="0.05" bind:value={selectedEntry.item.opacity} onchange={() => save()} /></label>
-            <div class="native-buttons">
-              <label class="toggle"><input type="checkbox" bind:checked={selectedEntry.item.visible} onchange={() => save()} /> Visible</label>
-              <label class="toggle"><input type="checkbox" bind:checked={selectedEntry.item.locked} onchange={() => save()} /> Locked</label>
-            </div>
-            {#if selectedEntry.item.kind === "visual" && selectedEntry.item.package_id && selectedEntry.item.export_name}
-              <InstanceSettingsForm
-                item={selectedEntry.item}
-                packageId={selectedEntry.item.package_id}
-                exportName={selectedEntry.item.export_name}
-                oncommit={() => save()}
-              />
-            {:else}
-              <label>Settings JSON
-                <textarea value={JSON.stringify(selectedEntry.item.settings ?? {}, null, 2)} onblur={(event) => setItemSettings(event.currentTarget.value)}></textarea>
-              </label>
+            {#if showApp}
+              <div class="accordion-body">
+                <label>Name<input bind:value={page.name} onblur={() => save()} /></label>
+                <div class="split">
+                  <label>Width<input type="number" step="1" bind:value={page.width} onblur={() => save()} /></label>
+                  <label>Height<input type="number" step="1" bind:value={page.height} onblur={() => save()} /></label>
+                </div>
+                <label>Open target
+                  <select bind:value={page.settings.open_target} onchange={() => save()}>
+                    <option value="app">In app</option>
+                    <option value="window">New app window</option>
+                  </select>
+                </label>
+                <label class="toggle">
+                  <input type="checkbox" bind:checked={previewMode} />
+                  Preview
+                </label>
+                <div class="actions">
+                  <button class="btn-primary" onclick={openPage}>Open</button>
+                  <button class="btn-secondary" onclick={() => void save()}>Save</button>
+                </div>
+              </div>
             {/if}
-            <div class="actions">
-              <button class="btn-secondary" onclick={duplicateSelected}>Duplicate</button>
-              <button class="btn-danger" onclick={deleteSelected}>Delete</button>
+          </section>
+
+          <section class="accordion">
+            <button class="accordion-header" onclick={() => (showAdd = !showAdd)}>
+              <svg class:rotated={showAdd} xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>
+              <h2>Add</h2>
+            </button>
+            {#if showAdd}
+              <div class="accordion-body">
+                <div class="native-buttons">
+                  <button class="btn-secondary" onclick={() => addNative("text")}>Text</button>
+                  <button class="btn-secondary" onclick={() => addNative("image")}>Image</button>
+                  <button class="btn-secondary" onclick={() => addNative("shape")}>Shape</button>
+                </div>
+                <div class="search-box">
+                  <input bind:value={visualSearch} placeholder="Search plugin visuals" />
+                </div>
+                <select bind:value={selectedVisualRef}>
+                  <option value="">Select a visual...</option>
+                  {#each filteredVisualExports as entry}
+                    <option value={entry.ref}>{entry.package.name} / {entry.visual.name}</option>
+                  {/each}
+                </select>
+                <button class="btn-primary" onclick={addVisual} disabled={!selectedVisualRef}>Add Visual</button>
+              </div>
+            {/if}
+          </section>
+
+          <section class="accordion">
+            <button class="accordion-header" onclick={() => (showBackground = !showBackground)}>
+              <svg class:rotated={showBackground} xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>
+              <h2>Background</h2>
+            </button>
+            {#if showBackground}
+              <div class="accordion-body">
+                <label>Type
+                  <select bind:value={page.background.kind} onchange={() => save()}>
+                    <option value="color">Color</option>
+                    <option value="image">Image URL</option>
+                  </select>
+                </label>
+                <ColorField label="Color" value={page.background.color} oncommit={(value) => { page.background.color = value; void save(); }} />
+                {#if page.background.kind === "image"}
+                  <label>Image URL<input bind:value={page.background.image} onblur={() => save()} /></label>
+                  <label>Fit
+                    <select bind:value={page.background.fit} onchange={() => save()}>
+                      <option value="cover">Cover</option>
+                      <option value="contain">Contain</option>
+                      <option value="stretch">Stretch</option>
+                    </select>
+                  </label>
+                {/if}
+              </div>
+            {/if}
+          </section>
+
+          <section class="accordion">
+            <div class="accordion-header accordion-header-with-actions">
+              <button class="accordion-toggle" onclick={() => (showLayers = !showLayers)} aria-expanded={showLayers}>
+                <svg class:rotated={showLayers} xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                <h2>Layers</h2>
+              </button>
+              <div class="header-actions">
+                <button class="icon-btn add-layer-btn" onclick={addLayer} title="Add layer">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                </button>
+              </div>
             </div>
-          {:else}
-            <p class="empty">Select an item on the page.</p>
-          {/if}
-        </section>
-        </div>
-      </div>
-    </aside>
-    {#if contextMenu && selectedEntry}
-      <div class="context-menu" style={contextMenuStyle()} role="menu">
-        <button role="menuitem" onclick={duplicateSelected}>Duplicate</button>
-        <button role="menuitem" onclick={toggleSelectedLock}>{selectedEntry.item.locked ? "Unlock" : "Lock"}</button>
-        <button role="menuitem" onclick={toggleSelectedVisible}>{selectedEntry.item.visible ? "Hide" : "Show"}</button>
-        <button role="menuitem" onclick={bringSelectedForward}>Bring forward</button>
-        <button role="menuitem" onclick={sendSelectedBackward}>Send backward</button>
-        <button role="menuitem" class="danger" onclick={deleteSelected}>Delete</button>
-      </div>
-    {/if}
+            {#if showLayers}
+              <div class="accordion-body">
+                <div class="list layer-list">
+                  {#each layers as layer}
+                    <div class="layer-row" class:active={activeLayerId === layer.id}>
+                      <button class="layer-select" onclick={() => (activeLayerId = layer.id)} title="Select layer">
+                        <span class="layer-indicator"></span>
+                      </button>
+                      <input
+                        class="layer-name-input"
+                        bind:value={layer.name}
+                        onclick={() => (activeLayerId = layer.id)}
+                        onfocus={() => (activeLayerId = layer.id)}
+                        onblur={() => save()}
+                      />
+                      <button class="icon-btn" onclick={() => { layer.visible = !layer.visible; void save(); }} title="Toggle visibility">
+                        {layer.visible ? "On" : "Off"}
+                      </button>
+                      <button class="icon-btn danger" onclick={() => deleteLayer(layer)} disabled={page.layers.length <= 1} title="Delete layer">Del</button>
+                    </div>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+          </section>
+      {/snippet}
+
+      {#snippet rightPanel()}
+          <section class="accordion">
+            <button class="accordion-header" onclick={() => (showProperties = !showProperties)}>
+              <svg class:rotated={showProperties} xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>
+              <h2>Properties</h2>
+            </button>
+            {#if showProperties}
+              <div class="accordion-body">
+                {#if selectedEntry}
+                  <label>Name<input bind:value={selectedEntry.item.name} onblur={() => save()} /></label>
+                  <div class="split">
+                    <label>X<input type="number" step="1" bind:value={selectedEntry.item.x} onblur={() => save()} /></label>
+                    <label>Y<input type="number" step="1" bind:value={selectedEntry.item.y} onblur={() => save()} /></label>
+                  </div>
+                  <div class="split">
+                    <label>Width<input type="number" step="1" bind:value={selectedEntry.item.width} onblur={() => save()} /></label>
+                    <label>Height<input type="number" step="1" bind:value={selectedEntry.item.height} onblur={() => save()} /></label>
+                  </div>
+                  <label>Opacity<input type="range" min="0" max="1" step="0.05" bind:value={selectedEntry.item.opacity} onchange={() => save()} /></label>
+                  <div class="native-buttons">
+                    <label class="toggle"><input type="checkbox" bind:checked={selectedEntry.item.visible} onchange={() => save()} /> Visible</label>
+                    <label class="toggle"><input type="checkbox" bind:checked={selectedEntry.item.locked} onchange={() => save()} /> Locked</label>
+                  </div>
+                  {#if selectedEntry.item.kind === "visual" && selectedEntry.item.package_id && selectedEntry.item.export_name}
+                    <InstanceSettingsForm
+                      item={selectedEntry.item}
+                      packageId={selectedEntry.item.package_id}
+                      exportName={selectedEntry.item.export_name}
+                      oncommit={() => save()}
+                    />
+                  {:else if selectedEntry.item.kind === "text"}
+                    <label>Text<textarea value={String(itemSetting("text", ""))} onblur={(event) => updateItemSetting("text", event.currentTarget.value)}></textarea></label>
+                    <ColorField label="Color" value={String(itemSetting("color", "var(--text-primary)"))} oncommit={(value) => updateItemSetting("color", value)} />
+                    <label>Font size<input type="number" step="1" value={String(itemSetting("fontSize", 28))} onblur={(event) => updateItemSetting("fontSize", asWholeNumber(event.currentTarget.value, 28))} /></label>
+                  {:else if selectedEntry.item.kind === "image"}
+                    <label>Source URL<input value={String(itemSetting("src", ""))} onblur={(event) => updateItemSetting("src", event.currentTarget.value)} /></label>
+                    <label>Fit
+                      <select value={String(itemSetting("fit", "cover"))} onchange={(event) => updateItemSetting("fit", event.currentTarget.value)}>
+                        <option value="cover">Cover</option>
+                        <option value="contain">Contain</option>
+                        <option value="stretch">Stretch</option>
+                      </select>
+                    </label>
+                  {:else if selectedEntry.item.kind === "shape"}
+                    <ColorField label="Fill" value={String(itemSetting("fill", "color-mix(in srgb, var(--accent) 18%, transparent)"))} oncommit={(value) => updateItemSetting("fill", value)} />
+                    <ColorField label="Border color" value={String(itemSetting("borderColor", "color-mix(in srgb, var(--text-primary) 24%, transparent)"))} oncommit={(value) => updateItemSetting("borderColor", value)} />
+                    <label>Border width<input type="number" step="1" min="0" value={String(itemSetting("borderWidth", 1))} onblur={(event) => updateItemSetting("borderWidth", asWholeNumber(event.currentTarget.value, 1))} /></label>
+                    <label>Border radius<input type="number" step="1" min="0" value={String(itemSetting("borderRadius", 8))} onblur={(event) => updateItemSetting("borderRadius", asWholeNumber(event.currentTarget.value, 8))} /></label>
+                  {/if}
+                  <div class="actions">
+                    <button class="btn-secondary" onclick={duplicateSelected}>Duplicate</button>
+                    <button class="btn-danger" onclick={deleteSelected}>Delete</button>
+                  </div>
+                {:else}
+                  <p class="empty">Select an item on the page.</p>
+                {/if}
+              </div>
+            {/if}
+          </section>
+      {/snippet}
+
+      {#snippet overlays()}
+        {#if contextMenu && selectedEntry}
+          <div class="context-menu" style={contextMenuStyle()} role="menu">
+            <button role="menuitem" onclick={duplicateSelected}>Duplicate</button>
+            <button role="menuitem" onclick={toggleSelectedLock}>{selectedEntry.item.locked ? "Unlock" : "Lock"}</button>
+            <button role="menuitem" onclick={toggleSelectedVisible}>{selectedEntry.item.visible ? "Hide" : "Show"}</button>
+            <button role="menuitem" onclick={bringSelectedForward}>Bring forward</button>
+            <button role="menuitem" onclick={sendSelectedBackward}>Send backward</button>
+            <button role="menuitem" class="danger" onclick={deleteSelected}>Delete</button>
+          </div>
+        {/if}
+      {/snippet}
+    </EditorTemplate>
   {:else}
     <section class="loading">{message || "Loading page..."}</section>
   {/if}
@@ -698,26 +771,6 @@
     font-family: var(--font-family);
   }
 
-  main.dragging {
-    user-select: none;
-    cursor: grabbing;
-  }
-
-  .stage-wrap {
-    position: absolute;
-    inset: 0 360px 0 0;
-    display: grid;
-    place-items: stretch;
-    background: rgba(4, 7, 12, 0.48);
-  }
-
-  .stage {
-    position: relative;
-    width: 100%;
-    height: 100%;
-    overflow: hidden;
-  }
-
   .frames {
     position: absolute;
     inset: 0;
@@ -727,8 +780,8 @@
 
   .frame-box {
     position: absolute;
-    border: 1px solid rgba(59, 130, 246, 0.58);
-    background: rgba(59, 130, 246, 0.08);
+    border: 1px solid color-mix(in srgb, var(--accent) 58%, transparent);
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
     box-sizing: border-box;
     cursor: move;
     pointer-events: auto;
@@ -737,7 +790,7 @@
 
   .frame-box.selected {
     border: 2px solid var(--accent);
-    background: rgba(59, 130, 246, 0.16);
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
   }
 
   .frame-box.hidden {
@@ -760,7 +813,7 @@
     border-radius: 4px 4px 0 0;
     overflow: hidden;
     background: var(--accent);
-    color: white;
+    color: var(--text-primary);
     font-size: 11px;
     white-space: nowrap;
     opacity: 0;
@@ -785,74 +838,8 @@
     padding: 0;
     border: 2px solid var(--accent);
     border-radius: 50%;
-    background: white;
+    background: var(--text-primary);
     cursor: nwse-resize;
-  }
-
-  .editor-panel {
-    position: absolute;
-    inset: 0 0 0 auto;
-    width: 360px;
-    display: flex;
-    flex-direction: column;
-    border-left: 1px solid var(--border-color);
-    background: var(--editor-bg-panel);
-    backdrop-filter: blur(18px);
-  }
-
-  .editor-panel header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    min-height: 54px;
-    padding: 0 14px;
-    border-bottom: 1px solid var(--border-color);
-  }
-
-  .editor-panel header div {
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-  }
-
-  .editor-panel header strong {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: 14px;
-  }
-
-  .editor-panel header span {
-    color: var(--success);
-    font-size: 11px;
-  }
-
-  .panel-content {
-    min-height: 0;
-    flex: 1;
-    overflow-y: auto;
-    padding: 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-
-  .panel-section {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    padding: 12px;
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
-    background: rgba(0, 0, 0, 0.18);
-  }
-
-  .section-title {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
   }
 
   h2 {
@@ -878,7 +865,7 @@
     border: 1px solid var(--border-color);
     border-radius: 5px;
     padding: 7px 8px;
-    background: rgba(0, 0, 0, 0.28);
+    background: color-mix(in srgb, var(--bg-dark) 35%, transparent);
     color: var(--text-primary);
     font: inherit;
     font-size: 13px;
@@ -940,14 +927,14 @@
 
   .btn-secondary,
   .icon-btn {
-    background: rgba(255, 255, 255, 0.04);
+    background: var(--bg-panel-hover);
   }
 
   .btn-danger,
   .danger {
-    background: rgba(239, 68, 68, 0.12);
-    border-color: rgba(239, 68, 68, 0.4);
-    color: #fecaca;
+    background: color-mix(in srgb, var(--danger) 12%, transparent);
+    border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+    color: var(--danger);
   }
 
   .icon-btn {
@@ -960,8 +947,8 @@
 
   .layer-row {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto auto;
-    gap: 6px;
+    grid-template-columns: 28px minmax(0, 1fr) auto auto;
+    gap: 8px;
     align-items: center;
   }
 
@@ -969,17 +956,37 @@
     color: var(--accent);
   }
 
-  .layer-row > button:first-child {
-    max-width: 92px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    padding: 7px;
-    background: rgba(255, 255, 255, 0.04);
+  .layer-select {
+    background: transparent;
+    border-color: transparent;
+  }
+
+  .layer-indicator {
+    width: 9px;
+    height: 9px;
+    border: 2px solid var(--text-muted);
+    border-radius: 999px;
+  }
+
+  .layer-row.active .layer-indicator {
+    border-color: var(--accent);
+    background: var(--accent);
+  }
+
+  .layer-name-input {
+    background: transparent;
+    border-color: transparent;
+    color: var(--text-primary);
+    font-weight: 650;
+  }
+
+  .layer-name-input:focus {
+    border-color: var(--border-color);
+    background: color-mix(in srgb, var(--bg-dark) 35%, transparent);
   }
 
   .search-box input {
-    background: rgba(0, 0, 0, 0.28);
+    background: color-mix(in srgb, var(--bg-dark) 35%, transparent);
   }
 
   .empty,
@@ -993,125 +1000,83 @@
     place-items: center;
   }
 
-  /* Studio page editor */
-  .stage-wrap {
-    position: absolute;
-    inset: 48px 0 0 0;
-    display: grid;
-    place-items: center;
-    overflow: hidden;
-    background:
-      radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--text-muted) 28%, transparent) 1px, transparent 0),
-      var(--editor-bg-dark);
-    background-size: 24px 24px;
-    padding: 24px 348px 24px 292px; /* fallback padding */
-  }
-
-  .stage {
-    width: auto;
-    height: auto;
-    flex: none;
-    overflow: visible;
-    transform-origin: center center;
-    outline: 1px solid var(--border-color-focus);
-    box-shadow: 0 24px 80px color-mix(in srgb, var(--bg-dark) 70%, transparent);
-  }
-
-  .stage::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    z-index: 0;
-    background-image:
-      linear-gradient(color-mix(in srgb, var(--text-muted) 18%, transparent) 1px, transparent 1px),
-      linear-gradient(90deg, color-mix(in srgb, var(--text-muted) 18%, transparent) 1px, transparent 1px);
-    background-size: 40px 40px;
-    pointer-events: none;
-  }
-
-  .editor-panel {
-    inset: 0;
-    width: 100vw;
-    border: 0;
-    background: transparent;
-    backdrop-filter: none;
-    pointer-events: none;
-  }
-
-  .editor-panel header {
-    position: fixed;
-    inset: 0 0 auto 0;
-    z-index: 700;
-    height: 48px;
-    min-height: 48px;
-    border-bottom: 1px solid var(--border-color);
-    background: var(--editor-bg-panel);
-    pointer-events: auto;
-  }
-
-  .editor-header-actions {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-left: auto;
-    margin-right: 8px;
-  }
-
-  .panel-content {
-    position: absolute;
-    inset: 48px 0 0 0;
-    display: flex;
-    justify-content: space-between;
-    padding: 12px;
-    box-sizing: border-box;
-    pointer-events: none;
-    z-index: 600;
-  }
-
-  .side-panel {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    width: 280px;
-    max-height: 100%;
-    pointer-events: none;
-  }
-
-  .side-panel.right {
-    width: 336px;
-  }
-
-  .panel-section {
+  .accordion {
     position: relative;
     display: flex;
     flex-direction: column;
     flex-shrink: 0;
+    min-height: 0;
     max-height: 100%;
     overflow: hidden;
     gap: 10px;
-    padding: 12px;
     border: 1px solid var(--border-color);
     border-radius: var(--radius-sm);
     background: var(--editor-bg-panel);
     pointer-events: auto;
   }
 
-  .side-panel.left .panel-section:nth-child(3),
-  .side-panel.right .panel-section:nth-child(2) {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
+  .accordion-header {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px;
+    border: 0;
+    background: transparent;
+    color: var(--text-primary);
+    text-align: left;
   }
 
-  .zoom-readout {
-    min-width: 54px;
-    height: 30px;
-    padding: 0 8px;
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
-    background: color-mix(in srgb, var(--bg-dark) 35%, transparent);
+  .accordion-header:hover,
+  .accordion-toggle:hover {
+    background: var(--editor-bg-panel-hover);
+  }
+
+  .accordion-header-with-actions {
+    padding: 0;
+    cursor: default;
+  }
+
+  .accordion-toggle {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px;
+    border: 0;
+    background: transparent;
+    color: var(--text-primary);
+    text-align: left;
+  }
+
+  .accordion-header svg,
+  .accordion-toggle svg {
     color: var(--text-secondary);
-    font-size: 12px;
+    transition: transform 0.2s ease;
+  }
+
+  .accordion-header svg.rotated,
+  .accordion-toggle svg.rotated {
+    transform: rotate(90deg);
+  }
+
+  .accordion-header h2,
+  .accordion-toggle h2 {
+    margin: 0;
+    flex: 1;
+    font-size: 13px;
+    font-weight: 700;
+  }
+
+  .accordion-body {
+    display: flex;
+    min-height: 0;
+    flex-direction: column;
+    gap: 12px;
+    padding: 0 12px 12px 12px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
 
   .context-menu {
@@ -1147,28 +1112,4 @@
     color: var(--danger);
   }
 
-  @media (max-width: 980px) {
-    .stage-wrap {
-      inset: 48px 0 42vh 0;
-      padding: 24px;
-    }
-
-    .panel-content {
-      top: auto;
-      bottom: 0;
-      height: 42vh;
-      flex-direction: row;
-      background: var(--editor-bg-panel);
-      pointer-events: auto;
-    }
-
-    .side-panel {
-      width: 50% !important;
-      height: 100%;
-    }
-
-    .panel-section {
-      max-height: 100%;
-    }
-  }
 </style>

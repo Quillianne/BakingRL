@@ -394,6 +394,13 @@ impl TelemetryConnectionStatus {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ObsGatewayStatus {
+    pub running: bool,
+    pub address: String,
+    pub message: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct AppSettings {
     #[serde(default)]
@@ -468,6 +475,10 @@ pub struct OverlayLayout {
     pub layers: Vec<OverlayLayer>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub items: Vec<OverlayItem>,
+    #[serde(default)]
+    pub created_at_ms: u64,
+    #[serde(default)]
+    pub updated_at_ms: u64,
     #[serde(default)]
     pub template_source: Option<String>,
 }

@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
   RL_TELEMETRY_EVENT_NAMES,
   telemetryFrameTemplateJson,
@@ -21,12 +22,14 @@ import type {
   BundleInspection,
   ConfirmRequest,
   DeveloperFrameTemplate,
+  DeveloperErrorEntry,
   DeveloperTelemetryEntry,
   DeveloperTelemetryGroup,
   DeveloperTelemetrySort,
   OverlayLayout,
   OverlayLayoutCatalog,
   OverlayMonitor,
+  ObsGatewayStatus,
   PackageDescriptor,
   PageLayout,
   PagesFile,
@@ -34,13 +37,21 @@ import type {
   PermissionSection,
   PermissionShape,
   PreparedPackageInstall,
+  RecentActivityEntry,
   RegistryEntry,
+  RuntimeErrorEvent,
   TelemetryConnectionStatus,
   ToastMessage,
   ToastTone
 } from "$lib/dashboard/types";
 
 const TELEMETRY_HELP_DISMISSED_KEY = "bakingrl.telemetryHelp.dismissed";
+const PACKAGE_TOGGLE_ROLLBACK_MS = 5000;
+
+type PendingPackageToggle = {
+  enabled: boolean;
+  previousEnabled: boolean;
+};
 
 function isTauriRuntime() {
   return typeof window !== "undefined" && ("__TAURI_INTERNALS__" in window || "__TAURI__" in window);
@@ -60,19 +71,21 @@ export class DashboardState {
   bundleUrl = $state("");
   gitRepo = $state("");
   gitRev = $state("");
-  newLayoutName = $state("");
-  newPageName = $state("");
   busy = $state(false);
+  pendingPackageToggles = $state<Record<string, PendingPackageToggle>>({});
+  packageToggleRollbackTimers = new Map<string, ReturnType<typeof setTimeout>>();
   pendingInstall = $state<PendingInstall | null>(null);
   currentTheme = $state<ThemeId>(DEFAULT_THEME);
   confirmRequest = $state<ConfirmRequest | null>(null);
   telemetryStatus = $state<TelemetryConnectionStatus | null>(null);
+  obsGatewayStatus = $state<ObsGatewayStatus | null>(null);
   telemetryHelpOpen = $state(false);
   telemetryHelpDontShow = $state(false);
   overlayMonitors = $state<OverlayMonitor[]>([]);
   registryEntries = $state<RegistryEntry[]>([]);
   developerTelemetry = $state<DeveloperTelemetryEntry[]>([]);
   developerTelemetryGroups = $state<DeveloperTelemetryGroup[]>([]);
+  developerErrors = $state<DeveloperErrorEntry[]>([]);
   developerTelemetrySort = $state<DeveloperTelemetrySort>("recent");
   developerFrameTemplate = $state<DeveloperFrameTemplate>("UpdateState");
   developerFrameJson = $state(telemetryFrameTemplateJson("UpdateState"));
@@ -91,6 +104,11 @@ export class DashboardState {
     if (this.telemetryStatus.state === "connected") return this.t("common.connected");
     if (this.telemetryStatus.state === "connecting") return this.t("common.connecting");
     return this.t("common.disconnected");
+  }
+
+  get obsGatewayStatusLabel() {
+    if (!this.obsGatewayStatus) return this.t("common.loading");
+    return this.obsGatewayStatus.running ? this.t("common.running") : this.t("common.stopped");
   }
 
   get telemetryAddress() {
@@ -134,12 +152,22 @@ export class DashboardState {
     return this.pages?.pages.filter((page) => page.favorite) ?? [];
   }
 
-  get recentPages() {
-    return [...(this.pages?.pages ?? [])].sort((a, b) => b.updated_at_ms - a.updated_at_ms).slice(0, 8);
-  }
-
-  get recentLayouts() {
-    return [...(this.overlayLayouts?.layouts ?? [])].slice(0, 8);
+  get recentActivity(): RecentActivityEntry[] {
+    const pageEntries: RecentActivityEntry[] = (this.pages?.pages ?? []).map((page) => ({
+      kind: "page",
+      id: `page:${page.id}`,
+      updatedAtMs: page.updated_at_ms || page.created_at_ms || 0,
+      page
+    }));
+    const layoutEntries: RecentActivityEntry[] = (this.overlayLayouts?.layouts ?? []).map((layout) => ({
+      kind: "layout",
+      id: `layout:${layout.id}`,
+      updatedAtMs: layout.updated_at_ms || layout.created_at_ms || 0,
+      layout
+    }));
+    return [...pageEntries, ...layoutEntries]
+      .sort((a, b) => b.updatedAtMs - a.updatedAtMs || a.id.localeCompare(b.id))
+      .slice(0, 3);
   }
 
   get pageTemplates() {
@@ -202,7 +230,13 @@ export class DashboardState {
   }
 
   notifyError(error: unknown) {
-    this.notify(error instanceof Error ? error.message : String(error), "error", 6400);
+    const message = this.errorMessage(error);
+    this.recordDeveloperError({
+      kind: "app",
+      source: "Dashboard",
+      message
+    });
+    this.notify(message, "error", 6400);
   }
 
   dismissToast(id: string) {
@@ -223,12 +257,57 @@ export class DashboardState {
     await request?.run();
   }
 
+  setPackagesFromBackend(packages: PackageDescriptor[]) {
+    this.packages = packages;
+    this.reconcilePackageToggles(packages);
+  }
+
+  reconcilePackageToggles(packages: PackageDescriptor[]) {
+    for (const [packageId, pending] of Object.entries(this.pendingPackageToggles)) {
+      const actual = packages.find((pkg) => pkg.id === packageId);
+      if (!actual || actual.enabled === pending.enabled) {
+        this.clearPackageToggle(packageId);
+      }
+    }
+  }
+
+  clearPackageToggle(packageId: string) {
+    const timer = this.packageToggleRollbackTimers.get(packageId);
+    if (timer) {
+      clearTimeout(timer);
+      this.packageToggleRollbackTimers.delete(packageId);
+    }
+    if (!this.pendingPackageToggles[packageId]) return;
+    const remaining = { ...this.pendingPackageToggles };
+    delete remaining[packageId];
+    this.pendingPackageToggles = remaining;
+  }
+
+  clearPackageToggleTimers() {
+    for (const timer of this.packageToggleRollbackTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.packageToggleRollbackTimers.clear();
+  }
+
+  schedulePackageToggleRollback(packageId: string) {
+    const existing = this.packageToggleRollbackTimers.get(packageId);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(() => {
+      const pending = this.pendingPackageToggles[packageId];
+      if (!pending) return;
+      this.clearPackageToggle(packageId);
+    }, PACKAGE_TOGGLE_ROLLBACK_MS);
+    this.packageToggleRollbackTimers.set(packageId, timer);
+  }
+
   async refresh() {
-    this.packages = await invoke<PackageDescriptor[]>("list_packages");
+    this.setPackagesFromBackend(await invoke<PackageDescriptor[]>("list_packages"));
     this.overlayLayouts = await invoke<OverlayLayoutCatalog>("get_overlay_layouts");
     this.pages = await invoke<PagesFile>("get_pages");
     this.appSettings = await invoke<AppSettings>("get_app_settings");
     this.telemetryStatus = await invoke<TelemetryConnectionStatus>("get_telemetry_status");
+    this.obsGatewayStatus = await invoke<ObsGatewayStatus>("get_obs_gateway_status");
     this.overlayMonitors = await invoke<OverlayMonitor[]>("list_overlay_monitors");
     this.registryEntries = await invoke<RegistryEntry[]>("registry_entries");
   }
@@ -236,7 +315,7 @@ export class DashboardState {
   async reloadPackages() {
     this.busy = true;
     try {
-      this.packages = await invoke<PackageDescriptor[]>("reload_packages");
+      this.setPackagesFromBackend(await invoke<PackageDescriptor[]>("reload_packages"));
       this.notify(this.t("msg.packagesReloaded"), "success");
     } catch (error) {
       this.notifyError(error);
@@ -246,17 +325,38 @@ export class DashboardState {
   }
 
   async togglePackage(pkg: PackageDescriptor) {
-    this.busy = true;
+    const previousEnabled = pkg.enabled;
+    const nextEnabled = !previousEnabled;
+    this.pendingPackageToggles = {
+      ...this.pendingPackageToggles,
+      [pkg.id]: {
+        enabled: nextEnabled,
+        previousEnabled
+      }
+    };
+    this.schedulePackageToggleRollback(pkg.id);
     try {
-      this.packages = await invoke<PackageDescriptor[]>("set_package_enabled", {
-        packageId: pkg.id,
-        enabled: !pkg.enabled
-      });
+      this.setPackagesFromBackend(
+        await invoke<PackageDescriptor[]>("set_package_enabled", {
+          packageId: pkg.id,
+          enabled: nextEnabled
+        })
+      );
     } catch (error) {
       this.notifyError(error);
-    } finally {
-      this.busy = false;
     }
+  }
+
+  isPackageEnabled(pkg: PackageDescriptor) {
+    return pkg.enabled;
+  }
+
+  isPackageToggleButtonEnabled(pkg: PackageDescriptor) {
+    return this.pendingPackageToggles[pkg.id]?.enabled ?? pkg.enabled;
+  }
+
+  isPackageTogglePending(pkg: PackageDescriptor) {
+    return Object.prototype.hasOwnProperty.call(this.pendingPackageToggles, pkg.id);
   }
 
   removePackage(pkg: PackageDescriptor) {
@@ -272,9 +372,11 @@ export class DashboardState {
   async removePackageConfirmed(pkg: PackageDescriptor) {
     this.busy = true;
     try {
-      this.packages = await invoke<PackageDescriptor[]>("remove_package", {
-        packageId: pkg.id
-      });
+      this.setPackagesFromBackend(
+        await invoke<PackageDescriptor[]>("remove_package", {
+          packageId: pkg.id
+        })
+      );
       this.notify(this.t("msg.packageRemoved"), "success");
     } catch (error) {
       this.notifyError(error);
@@ -294,6 +396,26 @@ export class DashboardState {
       this.notifyError(error);
     } finally {
       this.busy = false;
+    }
+  }
+
+  async chooseInstallFile() {
+    try {
+      const selected = await open({
+        multiple: false,
+        directory: false,
+        filters: [
+          {
+            name: "BakingRL Package",
+            extensions: ["brlp"]
+          }
+        ]
+      });
+      if (typeof selected === "string") {
+        this.bundlePath = selected;
+      }
+    } catch (error) {
+      this.notifyError(error);
     }
   }
 
@@ -387,16 +509,19 @@ export class DashboardState {
     }
   }
 
-  async createOverlayLayout() {
+  async createOverlayLayout(options: { name?: string; width?: number; height?: number } = {}) {
     this.busy = true;
     try {
       this.overlayLayouts = await invoke<OverlayLayoutCatalog>("create_overlay_layout", {
-        name: this.newLayoutName.trim() || this.t("overlays.untitled")
+        name: options.name?.trim() || this.t("overlays.untitled"),
+        width: Math.max(320, Math.round(Number(options.width) || 1920)),
+        height: Math.max(240, Math.round(Number(options.height) || 1080))
       });
-      this.newLayoutName = "";
       this.notify(this.t("msg.overlaySaved"), "success");
+      return true;
     } catch (error) {
       this.notifyError(error);
+      return false;
     } finally {
       this.busy = false;
     }
@@ -507,12 +632,19 @@ export class DashboardState {
     window.open(value, "_blank", "noopener,noreferrer");
   }
 
+  editorReturnQuery() {
+    if (typeof window === "undefined") return "";
+    const params = new URLSearchParams();
+    const returnTo = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    const scrollHost = document.querySelector(".studio-main") as HTMLElement | null;
+    const scrollY = scrollHost?.scrollTop ?? window.scrollY;
+    params.set("returnTo", returnTo);
+    params.set("scrollY", String(Math.round(scrollY)));
+    return `?${params.toString()}`;
+  }
+
   async openLayoutEditor(layoutId: string) {
-    try {
-      await invoke("open_overlay_layout_editor", { layoutId });
-    } catch {
-      await this.navigate(`/editor/layout/${encodeURIComponent(layoutId)}`);
-    }
+    await this.navigate(`/editor/layout/${encodeURIComponent(layoutId)}${this.editorReturnQuery()}`);
   }
 
   async importPackageLayout(packageId: string, exportName: string) {
@@ -531,16 +663,20 @@ export class DashboardState {
     }
   }
 
-  async createPage() {
+  async createPage(options: { name?: string; openTarget?: "app" | "window"; width?: number; height?: number } = {}) {
     this.busy = true;
     try {
       this.pages = await invoke<PagesFile>("create_page", {
-        name: this.newPageName.trim() || this.t("pages.untitled")
+        name: options.name?.trim() || this.t("pages.untitled"),
+        openTarget: options.openTarget ?? "app",
+        width: Math.max(320, Math.round(Number(options.width) || 1440)),
+        height: Math.max(240, Math.round(Number(options.height) || 900))
       });
-      this.newPageName = "";
       this.notify(this.t("msg.pageSaved"), "success");
+      return true;
     } catch (error) {
       this.notifyError(error);
+      return false;
     } finally {
       this.busy = false;
     }
@@ -642,7 +778,7 @@ export class DashboardState {
   }
 
   async openPageEditor(pageId: string) {
-    await this.navigate(`/editor/page/${encodeURIComponent(pageId)}`);
+    await this.navigate(`/editor/page/${encodeURIComponent(pageId)}${this.editorReturnQuery()}`);
   }
 
   async saveAppSettings() {
@@ -783,6 +919,44 @@ export class DashboardState {
     );
   }
 
+  errorMessage(error: unknown) {
+    return error instanceof Error ? error.message : String(error);
+  }
+
+  recordDeveloperError(error: {
+    kind?: string;
+    source?: string;
+    message: string;
+    timestampMs?: number;
+  }) {
+    const receivedAtMs = error.timestampMs ?? Date.now();
+    const entry: DeveloperErrorEntry = {
+      id: `${receivedAtMs}-${Math.random().toString(36).slice(2)}`,
+      receivedAt: new Date(receivedAtMs).toLocaleTimeString(),
+      receivedAtMs,
+      kind: error.kind || "runtime",
+      source: error.source || "BakingRL",
+      message: error.message
+    };
+    this.developerErrors = [entry, ...this.developerErrors].slice(0, 120);
+    return entry;
+  }
+
+  recordRuntimeError(error: RuntimeErrorEvent) {
+    const message = error.message || this.t("developer.unknownError");
+    const entry = this.recordDeveloperError({
+      kind: error.kind || "runtime",
+      source: error.source || "Runtime",
+      message,
+      timestampMs: error.timestamp_ms
+    });
+    this.notify(`${entry.source}: ${entry.message}`, "error", 8000);
+  }
+
+  clearDeveloperErrors() {
+    this.developerErrors = [];
+  }
+
   async refreshRegistryEntries() {
     try {
       this.registryEntries = await invoke<RegistryEntry[]>("registry_entries");
@@ -882,6 +1056,7 @@ export class DashboardState {
     let unlistenDeepLinks: (() => void) | undefined;
     let unlistenTelemetryStatus: (() => void) | undefined;
     let unlistenTelemetry: (() => void) | undefined;
+    let unlistenRuntimeErrors: (() => void) | undefined;
 
     if (isTauriRuntime() && getCurrentWindow().label === "main") {
       void getCurrent()
@@ -901,7 +1076,7 @@ export class DashboardState {
     }
 
     void listen<PackageDescriptor[]>("bakingrl-packages-changed", (event) => {
-      this.packages = event.payload;
+      this.setPackagesFromBackend(event.payload);
     }).then((unlisten) => {
       unlistenPackages = unlisten;
     });
@@ -929,6 +1104,11 @@ export class DashboardState {
     }).then((unlisten) => {
       unlistenTelemetry = unlisten;
     });
+    void listen<RuntimeErrorEvent>("bakingrl-runtime-error", (event) => {
+      this.recordRuntimeError(event.payload);
+    }).then((unlisten) => {
+      unlistenRuntimeErrors = unlisten;
+    });
 
     return () => {
       unlistenPackages?.();
@@ -937,6 +1117,8 @@ export class DashboardState {
       unlistenDeepLinks?.();
       unlistenTelemetryStatus?.();
       unlistenTelemetry?.();
+      unlistenRuntimeErrors?.();
+      this.clearPackageToggleTimers();
     };
   }
 }

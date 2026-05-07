@@ -1,6 +1,8 @@
 <script lang="ts">
+  import { goto } from "$app/navigation";
   import { onMount } from "svelte";
   import ConfirmDialog from "$lib/ConfirmDialog.svelte";
+  import EditorTemplate from "$lib/EditorTemplate.svelte";
   import InstanceSettingsForm from "$lib/InstanceSettingsForm.svelte";
   import OverlayRenderer from "$lib/OverlayRenderer.svelte";
   import { adapter } from "$lib/adapter/index";
@@ -102,6 +104,7 @@
   let visualSearch = $state("");
   let message = $state("");
   let mockEvent = $state<{ id: number; event: unknown } | null>(null);
+  let stageWrap = $state<HTMLElement>();
   let stage = $state<HTMLElement>();
   let dragState = $state<DragState | null>(null);
   let panState = $state<PanState | null>(null);
@@ -115,6 +118,7 @@
   let dragLayerId = $state("");
 
   // Accordion state
+  let showOverlay = $state(true);
   let showVisuals = $state(false);
   let showLayers = $state(true);
   let showMocks = $state(false);
@@ -169,6 +173,7 @@
   async function save(layoutToSave = layout) {
     if (!layoutToSave) return;
     reindexLayers(layoutToSave);
+    normalizeLayout(layoutToSave);
     try {
       overlayLayouts = await adapter.invoke<OverlayLayoutCatalog>("save_overlay_layout", { layout: layoutToSave });
       message = "Saved.";
@@ -193,6 +198,17 @@
     });
     layout.layers = orderedLayers;
     layout.items = [];
+  }
+
+  function asWholeNumber(value: unknown, fallback = 0) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? Math.round(parsed) : fallback;
+  }
+
+  function normalizeLayout(layoutToNormalize: OverlayLayout) {
+    layoutToNormalize.width = Math.max(320, asWholeNumber(layoutToNormalize.width, 1920));
+    layoutToNormalize.height = Math.max(240, asWholeNumber(layoutToNormalize.height, 1080));
+    normalizeLayoutItems(layoutToNormalize);
   }
 
   function findItem(itemId: string) {
@@ -349,8 +365,10 @@
       await adapter.invoke("close_overlay_editor");
     } catch (error) {
       message = String(error);
-      window.location.href = "/overlays";
     }
+    const returnTo = typeof data.returnTo === "string" && data.returnTo.startsWith("/") ? data.returnTo : "/overlays";
+    sessionStorage.setItem("bakingrl.editorReturn", JSON.stringify({ scrollY: data.scrollY ?? 0 }));
+    await goto(returnTo);
   }
 
   function pointForEvent(event: PointerEvent) {
@@ -364,10 +382,21 @@
 
   function clampItem(item: OverlayItem) {
     if (!layout) return;
-    item.width = Math.max(24, Math.min(item.width, layout.width));
-    item.height = Math.max(18, Math.min(item.height, layout.height));
-    item.x = Math.max(0, Math.min(item.x, layout.width - item.width));
-    item.y = Math.max(0, Math.min(item.y, layout.height - item.height));
+    item.width = Math.round(Math.max(24, Math.min(item.width, layout.width)));
+    item.height = Math.round(Math.max(18, Math.min(item.height, layout.height)));
+    item.x = Math.round(Math.max(0, Math.min(item.x, layout.width - item.width)));
+    item.y = Math.round(Math.max(0, Math.min(item.y, layout.height - item.height)));
+  }
+
+  function normalizeLayoutItems(layoutToNormalize: OverlayLayout) {
+    for (const layer of layoutToNormalize.layers) {
+      for (const item of layer.items) {
+        item.width = Math.round(Math.max(24, Math.min(item.width, layoutToNormalize.width)));
+        item.height = Math.round(Math.max(18, Math.min(item.height, layoutToNormalize.height)));
+        item.x = Math.round(Math.max(0, Math.min(item.x, layoutToNormalize.width - item.width)));
+        item.y = Math.round(Math.max(0, Math.min(item.y, layoutToNormalize.height - item.height)));
+      }
+    }
   }
 
   function snapValue(value: number, candidates: number[]) {
@@ -420,30 +449,9 @@
     `;
   }
 
-  function canvasStyle() {
-    if (!layout) return "";
-    return `width:${layout.width}px;height:${layout.height}px;transform:translate(${panX}px, ${panY}px) scale(${zoom});`;
-  }
-
   function guideStyle(axis: "x" | "y", value: number | null) {
     if (!layout || value === null) return "";
     return axis === "x" ? `left:${(value / layout.width) * 100}%;` : `top:${(value / layout.height) * 100}%;`;
-  }
-
-  function setZoom(nextZoom: number) {
-    zoom = Math.max(0.12, Math.min(1.5, nextZoom));
-  }
-
-  function resetViewport() {
-    zoom = 0.48;
-    panX = 0;
-    panY = 0;
-  }
-
-  function handleWheel(event: WheelEvent) {
-    event.preventDefault();
-    const direction = event.deltaY > 0 ? -0.05 : 0.05;
-    setZoom(zoom + direction);
   }
 
   function startPan(event: PointerEvent) {
@@ -585,7 +593,7 @@
   });
 </script>
 
-<main onpointermove={pointerMove} onpointerup={pointerUp} class:dragging={dragState !== null}>
+<main class="layout-editor-page">
   <ConfirmDialog
     open={confirmRequest !== null}
     title={confirmRequest?.title}
@@ -597,12 +605,24 @@
   />
 
   {#if layout}
-    <section class="stage-wrap" role="application" aria-label="Layout editor canvas" onwheel={handleWheel} onpointerdown={startPan}>
-      <div
-        class="stage checkerboard"
-        bind:this={stage}
-        style={canvasStyle()}
-      >
+    <EditorTemplate
+      title={layout.name}
+      {message}
+      canvas={layout}
+      centerKey={layout.id}
+      canvasAriaLabel="Layout editor canvas"
+      dragging={dragState !== null}
+      bind:zoom
+      bind:panX
+      bind:panY
+      bind:stage
+      bind:stageWrap
+      onPointerMove={pointerMove}
+      onPointerUp={pointerUp}
+      onStagePointerDown={startPan}
+      onClose={closeEditor}
+    >
+      {#snippet stageContent()}
         <OverlayRenderer layoutId={layout.id} layoutOverride={layout} {layoutRevision} mode="editor" {mockEvent} />
         <div class="frames">
           {#each allItems() as entry}
@@ -637,34 +657,35 @@
         {#if snapGuides.y !== null}
           <div class="snap-guide horizontal" style={guideStyle("y", snapGuides.y)}></div>
         {/if}
-      </div>
-    </section>
+      {/snippet}
 
-    <aside class="editor-panel glass">
-      <header class="drag-header">
-        <div class="header-title">
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
-          <strong>{layout.name}</strong>
-        </div>
-        <div class="header-actions">
-          {#if message}
-            <span class="status-msg">{message}</span>
+      {#snippet leftPanel()}
+        <section class="accordion">
+          <button class="accordion-header" onclick={() => showOverlay = !showOverlay}>
+            <svg class:rotated={showOverlay} xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+            <h2>Overlay</h2>
+          </button>
+          {#if showOverlay}
+            <div class="accordion-body properties-panel">
+              <div class="prop-group">
+                <label for="layout-name">Name</label>
+                <input id="layout-name" bind:value={layout.name} onblur={() => save()} />
+              </div>
+              <div class="prop-row">
+                <div class="prop-group">
+                  <label for="layout-width">Width</label>
+                  <input id="layout-width" type="number" min="320" step="1" bind:value={layout.width} onblur={() => save()} />
+                </div>
+                <div class="prop-group">
+                  <label for="layout-height">Height</label>
+                  <input id="layout-height" type="number" min="240" step="1" bind:value={layout.height} onblur={() => save()} />
+                </div>
+              </div>
+              <button class="btn-secondary" onclick={() => void save()}>Save</button>
+            </div>
           {/if}
-          <button class="icon-btn" onclick={() => setZoom(zoom - 0.08)} title="Zoom out">
-            <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><path d="M8 11h6"></path><path d="m21 21-4.3-4.3"></path></svg>
-          </button>
-          <button class="zoom-readout" onclick={resetViewport}>{Math.round(zoom * 100)}%</button>
-          <button class="icon-btn" onclick={() => setZoom(zoom + 0.08)} title="Zoom in">
-            <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><path d="M8 11h6"></path><path d="M11 8v6"></path><path d="m21 21-4.3-4.3"></path></svg>
-          </button>
-          <button class="icon-btn close-btn" onclick={() => void closeEditor()} title="Close Editor">
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-          </button>
-        </div>
-      </header>
+        </section>
 
-      <div class="panel-content">
-        <div class="side-panel left">
         <!-- Visuals Library -->
         <section class="accordion">
           <button class="accordion-header" onclick={() => showVisuals = !showVisuals}>
@@ -770,9 +791,26 @@
             </div>
           {/if}
         </section>
-        </div>
 
-        <div class="side-panel right">
+        <!-- Mock Events -->
+        <section class="accordion mock-events-panel">
+          <button class="accordion-header" onclick={() => showMocks = !showMocks}>
+            <svg class:rotated={showMocks} xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+            <h2>Mock Events</h2>
+          </button>
+          {#if showMocks}
+            <div class="accordion-body">
+              <div class="mock-grid">
+                {#each RL_TELEMETRY_EVENT_NAMES as eventName}
+                  <button class="btn-outline small" onclick={() => fireMock(eventName)}>{eventName}</button>
+                {/each}
+              </div>
+            </div>
+          {/if}
+        </section>
+      {/snippet}
+
+      {#snippet rightPanel()}
         <!-- Selected Item Properties -->
         <section class="accordion">
           <button class="accordion-header" onclick={() => showSettings = !showSettings}>
@@ -864,37 +902,21 @@
             </div>
           {/if}
         </section>
+      {/snippet}
 
-        <!-- Mock Events -->
-        <section class="accordion">
-          <button class="accordion-header" onclick={() => showMocks = !showMocks}>
-            <svg class:rotated={showMocks} xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
-            <h2>Mock Events</h2>
-          </button>
-          {#if showMocks}
-            <div class="accordion-body">
-              <div class="mock-grid">
-                {#each RL_TELEMETRY_EVENT_NAMES as eventName}
-                  <button class="btn-outline small" onclick={() => fireMock(eventName)}>{eventName}</button>
-                {/each}
-              </div>
-            </div>
-          {/if}
-        </section>
-        </div>
-      </div>
-
-    </aside>
-    {#if contextMenu && selectedEntry}
-      <div class="context-menu" style={contextMenuStyle()} role="menu">
-        <button role="menuitem" onclick={duplicateSelected}>Duplicate</button>
-        <button role="menuitem" onclick={toggleSelectedLock}>{selectedEntry.item.locked ? "Unlock" : "Lock"}</button>
-        <button role="menuitem" onclick={toggleSelectedVisible}>{selectedEntry.item.visible ? "Hide" : "Show"}</button>
-        <button role="menuitem" onclick={bringSelectedForward}>Bring forward</button>
-        <button role="menuitem" onclick={sendSelectedBackward}>Send backward</button>
-        <button role="menuitem" class="danger" onclick={deleteSelected}>Delete</button>
-      </div>
-    {/if}
+      {#snippet overlays()}
+        {#if contextMenu && selectedEntry}
+          <div class="context-menu" style={contextMenuStyle()} role="menu">
+            <button role="menuitem" onclick={duplicateSelected}>Duplicate</button>
+            <button role="menuitem" onclick={toggleSelectedLock}>{selectedEntry.item.locked ? "Unlock" : "Lock"}</button>
+            <button role="menuitem" onclick={toggleSelectedVisible}>{selectedEntry.item.visible ? "Hide" : "Show"}</button>
+            <button role="menuitem" onclick={bringSelectedForward}>Bring forward</button>
+            <button role="menuitem" onclick={sendSelectedBackward}>Send backward</button>
+            <button role="menuitem" class="danger" onclick={deleteSelected}>Delete</button>
+          </div>
+        {/if}
+      {/snippet}
+    </EditorTemplate>
   {:else if loadError}
     <div class="loading-state error-state">
       <p>Unable to load layout.</p>
@@ -918,14 +940,17 @@
 </main>
 
 <style>
-  main {
+  .layout-editor-page {
     width: 100vw;
+    min-width: 0;
     height: 100vh;
+    min-height: 0;
     overflow: hidden;
     position: relative;
+    background: var(--editor-bg-dark);
   }
 
-  main.dragging {
+  .layout-editor-page.dragging {
     user-select: none;
     cursor: grabbing !important;
   }
@@ -937,15 +962,17 @@
     display: grid;
     place-items: center;
     padding: 0;
-    background: rgba(4, 7, 12, 0.42);
+    background: color-mix(in srgb, var(--editor-bg-dark) 82%, transparent);
   }
 
   .stage {
     position: relative;
     width: 100%;
     height: 100%;
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.1), 0 24px 64px rgba(0,0,0,0.6);
-    background-color: rgba(0, 0, 0, 0.08);
+    box-shadow:
+      0 0 0 1px var(--border-color),
+      0 24px 64px color-mix(in srgb, var(--bg-dark) 74%, transparent);
+    background-color: color-mix(in srgb, var(--bg-dark) 12%, transparent);
     overflow: visible;
   }
 
@@ -954,10 +981,10 @@
     position: absolute;
     inset: 0;
     background-image:
-      linear-gradient(45deg, rgba(255,255,255,0.03) 25%, transparent 25%),
-      linear-gradient(-45deg, rgba(255,255,255,0.03) 25%, transparent 25%),
-      linear-gradient(45deg, transparent 75%, rgba(255,255,255,0.03) 75%),
-      linear-gradient(-45deg, transparent 75%, rgba(255,255,255,0.03) 75%);
+      linear-gradient(45deg, color-mix(in srgb, var(--text-muted) 12%, transparent) 25%, transparent 25%),
+      linear-gradient(-45deg, color-mix(in srgb, var(--text-muted) 12%, transparent) 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, color-mix(in srgb, var(--text-muted) 12%, transparent) 75%),
+      linear-gradient(-45deg, transparent 75%, color-mix(in srgb, var(--text-muted) 12%, transparent) 75%);
     background-size: 20px 20px;
     background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
     pointer-events: none;
@@ -975,9 +1002,9 @@
   .frame-box {
     position: absolute;
     padding: 0;
-    border: 1px solid rgba(59, 130, 246, 0.4);
-    background: rgba(59, 130, 246, 0.05);
-    color: #fff;
+    border: 1px solid color-mix(in srgb, var(--accent) 42%, transparent);
+    background: color-mix(in srgb, var(--accent) 7%, transparent);
+    color: var(--text-primary);
     cursor: move;
     pointer-events: auto;
     transition: border-color 0.1s, background-color 0.1s;
@@ -986,13 +1013,13 @@
   }
 
   .frame-box:hover {
-    border-color: rgba(59, 130, 246, 0.8);
-    background: rgba(59, 130, 246, 0.1);
+    border-color: color-mix(in srgb, var(--accent) 78%, transparent);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
   }
 
   .frame-box.selected {
     border: 2px solid var(--accent);
-    background: rgba(59, 130, 246, 0.15);
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
   }
 
   .frame-box.hidden {
@@ -1001,8 +1028,8 @@
   }
 
   .frame-box.locked {
-    border-color: rgba(245, 158, 11, 0.5);
-    background: rgba(245, 158, 11, 0.05);
+    border-color: color-mix(in srgb, var(--warn) 50%, transparent);
+    background: color-mix(in srgb, var(--warn) 6%, transparent);
   }
   .frame-box.locked.selected { border-color: var(--warn); }
 
@@ -1034,7 +1061,7 @@
     width: 14px;
     height: 14px;
     padding: 0;
-    background: #fff;
+    background: var(--text-primary);
     border: 2px solid var(--accent);
     border-radius: 50%;
     cursor: nwse-resize;
@@ -1058,7 +1085,9 @@
     background: var(--editor-bg-panel);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
-    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255,255,255,0.05) inset;
+    box-shadow:
+      0 12px 40px color-mix(in srgb, var(--bg-dark) 68%, transparent),
+      0 0 0 1px color-mix(in srgb, var(--border-color) 72%, transparent) inset;
   }
 
   .drag-header {
@@ -1066,21 +1095,12 @@
     justify-content: space-between;
     align-items: center;
     padding: 14px 16px;
-    background: rgba(255,255,255,0.02);
+    background: var(--editor-bg-panel-hover);
     border-bottom: 1px solid var(--border-color);
     cursor: grab;
     border-radius: var(--radius-md) var(--radius-md) 0 0;
   }
   .drag-header:active { cursor: grabbing; }
-
-  .header-title {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    color: var(--text-primary);
-  }
-  .header-title svg { color: var(--accent); }
-  .header-title strong { font-size: 14px; font-weight: 600; }
 
   .header-actions { display: flex; align-items: center; gap: 8px; }
 
@@ -1105,13 +1125,13 @@
   /* Scrollbar for panel */
   .panel-content::-webkit-scrollbar { width: 6px; }
   .panel-content::-webkit-scrollbar-track { background: transparent; }
-  .panel-content::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 10px; }
-  .panel-content::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+  .panel-content::-webkit-scrollbar-thumb { background: var(--border-color-focus); border-radius: 10px; }
+  .panel-content::-webkit-scrollbar-thumb:hover { background: var(--accent); }
 
   /* Accordions */
   .accordion {
-    background: rgba(0,0,0,0.2);
-    border: 1px solid rgba(255,255,255,0.05);
+    background: var(--editor-bg-panel);
+    border: 1px solid var(--border-color);
     border-radius: var(--radius-sm);
     overflow: hidden;
   }
@@ -1128,7 +1148,7 @@
     cursor: pointer;
     text-align: left;
   }
-  .accordion-header:hover { background: rgba(255,255,255,0.03); }
+  .accordion-header:hover { background: var(--editor-bg-panel-hover); }
 
   .accordion-header-with-actions {
     padding: 0;
@@ -1149,7 +1169,7 @@
     cursor: pointer;
     text-align: left;
   }
-  .accordion-toggle:hover { background: rgba(255,255,255,0.03); }
+  .accordion-toggle:hover { background: var(--editor-bg-panel-hover); }
   .accordion-header-with-actions .header-actions { padding-right: 12px; }
 
   .accordion-header svg, .accordion-toggle svg {
@@ -1177,7 +1197,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    background: rgba(0,0,0,0.3);
+    background: color-mix(in srgb, var(--bg-dark) 35%, transparent);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-sm);
     padding: 6px 10px;
@@ -1202,7 +1222,7 @@
     gap: 10px;
     width: 100%;
     padding: 8px 10px;
-    background: rgba(255,255,255,0.03);
+    background: color-mix(in srgb, var(--bg-panel-hover) 70%, transparent);
     border: 1px solid transparent;
     border-radius: var(--radius-sm);
     color: var(--text-primary);
@@ -1211,8 +1231,8 @@
     text-align: left;
   }
   .visual-list .list-item:hover {
-    background: rgba(255,255,255,0.06);
-    border-color: rgba(255,255,255,0.1);
+    background: var(--editor-bg-panel-hover);
+    border-color: var(--border-color-focus);
   }
   .visual-list .item-icon { color: var(--accent); display: flex; }
   .visual-list .item-text { display: flex; flex-direction: column; flex: 1; overflow: hidden; }
@@ -1227,12 +1247,12 @@
     align-items: center;
     gap: 6px;
     padding: 4px 6px;
-    background: rgba(255,255,255,0.02);
+    background: color-mix(in srgb, var(--bg-panel-hover) 46%, transparent);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-sm);
     transition: border-color 0.2s;
   }
-  .layer-row.active { border-color: var(--accent); background: rgba(59, 130, 246, 0.05); }
+  .layer-row.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
 
   .layer-select {
     background: none; border: none; padding: 4px; cursor: pointer;
@@ -1257,7 +1277,7 @@
     padding: 4px;
     border-radius: 4px;
   }
-  .layer-name-input input:focus { border-color: var(--border-color); background: rgba(0,0,0,0.3); outline: none; }
+  .layer-name-input input:focus { border-color: var(--border-color); background: color-mix(in srgb, var(--bg-dark) 35%, transparent); outline: none; }
   .event-icon { color: var(--warn); }
 
   .layer-actions { display: flex; gap: 2px; }
@@ -1276,7 +1296,7 @@
   .prop-group label { font-size: 11px; color: var(--text-secondary); font-weight: 500; text-transform: uppercase; }
 
   .properties-panel input:not([type="range"]):not([type="checkbox"]) {
-    background: rgba(0,0,0,0.3);
+    background: color-mix(in srgb, var(--bg-dark) 35%, transparent);
     border: 1px solid var(--border-color);
     color: var(--text-primary);
     padding: 6px 8px;
@@ -1306,9 +1326,9 @@
     display: flex; align-items: center; justify-content: center;
     cursor: pointer; transition: var(--transition);
   }
-  .icon-btn:hover:not(:disabled) { background: rgba(255,255,255,0.1); color: var(--text-primary); }
+  .icon-btn:hover:not(:disabled) { background: var(--editor-bg-panel-hover); color: var(--text-primary); }
   .icon-btn:disabled { opacity: 0.3; cursor: not-allowed; }
-  .icon-btn.danger:hover:not(:disabled) { background: rgba(239,68,68,0.15); color: var(--danger); }
+  .icon-btn.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--danger) 15%, transparent); color: var(--danger); }
   .icon-btn.small { width: 20px; height: 20px; }
   .icon-btn.small svg { width: 12px; height: 12px; }
   .icon-btn.add-layer-btn {
@@ -1334,22 +1354,22 @@
     cursor: pointer;
     transition: var(--transition);
   }
-  .btn-outline:hover { background: rgba(255,255,255,0.05); }
+  .btn-outline:hover { background: var(--editor-bg-panel-hover); }
   .btn-outline.small { padding: 4px 8px; font-size: 12px; }
 
   .btn-secondary {
-    background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border-color);
+    background: var(--bg-panel-hover); border: 1px solid var(--border-color);
     color: var(--text-primary); padding: 8px; border-radius: var(--radius-sm);
     font-size: 13px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px;
   }
-  .btn-secondary:hover { background: rgba(255,255,255,0.1); }
+  .btn-secondary:hover { background: var(--editor-bg-panel-hover); }
 
   .btn-danger {
-    background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.2);
+    background: color-mix(in srgb, var(--danger) 10%, transparent); border: 1px solid color-mix(in srgb, var(--danger) 22%, transparent);
     color: var(--danger); padding: 8px; border-radius: var(--radius-sm);
     font-size: 13px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px;
   }
-  .btn-danger:hover { background: rgba(239, 68, 68, 0.2); border-color: rgba(239, 68, 68, 0.4); }
+  .btn-danger:hover { background: color-mix(in srgb, var(--danger) 20%, transparent); border-color: color-mix(in srgb, var(--danger) 40%, transparent); }
 
   .flex-1 { flex: 1; }
 
@@ -1360,7 +1380,7 @@
   }
   .checkbox-label input { position: absolute; opacity: 0; cursor: pointer; height: 0; width: 0; }
   .checkmark {
-    height: 16px; width: 16px; background-color: rgba(0,0,0,0.3);
+    height: 16px; width: 16px; background-color: color-mix(in srgb, var(--bg-dark) 35%, transparent);
     border: 1px solid var(--border-color); border-radius: 4px; position: relative; transition: var(--transition);
   }
   .checkbox-label:hover input ~ .checkmark { border-color: var(--text-secondary); }
@@ -1368,7 +1388,7 @@
   .checkmark:after {
     content: ""; position: absolute; display: none;
     left: 4px; top: 1px; width: 4px; height: 8px;
-    border: solid white; border-width: 0 2px 2px 0; transform: rotate(45deg);
+    border: solid var(--text-primary); border-width: 0 2px 2px 0; transform: rotate(45deg);
   }
   .checkbox-label input:checked ~ .checkmark:after { display: block; }
 
@@ -1383,10 +1403,13 @@
 
   .loading-state {
     display: flex; flex-direction: column; align-items: center; justify-content: center;
-    height: 100vh; gap: 16px; color: var(--text-muted);
+    height: 100%;
+    min-height: 520px;
+    gap: 16px;
+    color: var(--text-muted);
   }
   .spinner {
-    width: 24px; height: 24px; border: 2px solid rgba(255,255,255,0.1);
+    width: 24px; height: 24px; border: 2px solid var(--border-color);
     border-top-color: var(--accent); border-radius: 50%; animation: spin 1s linear infinite;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
@@ -1395,7 +1418,7 @@
   /* Studio editor shell */
   .stage-wrap {
     position: absolute;
-    inset: 48px 0 0 0 !important;
+    inset: 48px 0 0 0;
     display: grid;
     place-items: center;
     overflow: hidden;
@@ -1426,10 +1449,10 @@
   }
 
   .editor-panel {
-    inset: 0 !important;
-    left: 0 !important;
-    top: 0 !important;
-    width: 100vw !important;
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
     max-height: none;
     border: 0;
     border-radius: 0;
@@ -1440,7 +1463,7 @@
   }
 
   .drag-header {
-    position: fixed;
+    position: absolute;
     inset: 0 0 auto 0;
     z-index: 700;
     height: 48px;
@@ -1454,10 +1477,10 @@
   .panel-content {
     position: absolute;
     inset: 48px 0 0 0;
-    display: flex;
-    justify-content: space-between;
+    display: block;
     padding: 12px;
     box-sizing: border-box;
+    overflow: hidden;
     pointer-events: none;
     z-index: 600;
   }
@@ -1467,12 +1490,33 @@
     flex-direction: column;
     gap: 12px;
     width: 280px;
-    max-height: 100%;
+    height: auto;
+    min-height: 0;
+    max-height: calc(100% - 24px);
+    overflow: hidden;
     pointer-events: none;
+  }
+
+  .side-panel.left {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    pointer-events: auto;
   }
 
   .side-panel.right {
     width: 336px;
+  }
+
+  .side-panel.properties-side {
+    position: absolute;
+    right: 12px;
+    bottom: 12px;
+    max-height: calc(100% - 24px);
+    overflow: visible;
+    pointer-events: none;
   }
 
   .accordion {
@@ -1480,6 +1524,7 @@
     display: flex;
     flex-direction: column;
     flex-shrink: 0;
+    min-height: 0;
     max-height: 100%;
     overflow: hidden;
     border-color: var(--border-color);
@@ -1487,15 +1532,10 @@
     pointer-events: auto;
   }
 
-  /* Make layers and properties take remaining height if needed */
-  .side-panel.left .accordion:nth-child(2),
-  .side-panel.right .accordion:nth-child(1) {
-    flex: 1;
-    min-height: 0;
-  }
-
   .accordion-body {
+    min-height: 0;
     overflow-y: auto;
+    overscroll-behavior: contain;
   }
 
   .layer-row.event {
@@ -1577,22 +1617,34 @@
 
   @media (max-width: 980px) {
     .stage-wrap {
-      inset: 48px 0 42vh 0 !important;
+      inset: 48px 0 0 0;
       padding: 24px;
     }
 
     .panel-content {
-      top: auto;
-      bottom: 0;
-      height: 42vh;
-      flex-direction: row;
-      background: var(--editor-bg-panel);
-      pointer-events: auto;
+      inset: 48px 0 0 0;
+      height: auto;
+      padding: 10px;
+      background: transparent;
+      pointer-events: none;
     }
 
     .side-panel {
-      width: 50% !important;
-      height: 100%;
+      width: min(280px, calc(50vw - 16px)) !important;
+      flex-basis: auto !important;
+      height: auto;
+      max-height: calc(100% - 20px);
+    }
+
+    .side-panel.left {
+      top: 10px;
+      left: 10px;
+    }
+
+    .side-panel.properties-side {
+      right: 10px;
+      bottom: 10px;
+      width: min(336px, calc(50vw - 16px)) !important;
     }
 
     .accordion {

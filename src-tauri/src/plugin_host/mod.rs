@@ -240,14 +240,19 @@ impl PluginHost {
 
         apply_graph_diagnostics(&mut records);
         let service_specs = service_specs_for_records(&records);
-        self.service_runtimes
-            .reload(service_specs, self.bus.clone(), self.registry.clone());
+        self.service_runtimes.reload(
+            service_specs,
+            self.bus.clone(),
+            self.registry.clone(),
+            self.app_handle.clone(),
+        );
         let connector_specs = connector_specs_for_records(&records);
         self.connector_runtimes.reload(
             connector_specs,
             self.bus.clone(),
             self.registry.clone(),
             self.service_runtimes.router(),
+            self.app_handle.clone(),
         );
         *self.records.lock().unwrap() = records;
         let packages = self.list_packages();
@@ -455,9 +460,17 @@ impl PluginHost {
         }
 
         let mut state = self.load_state();
-        state.enabled.insert(package_id, enabled);
+        state.enabled.insert(package_id.clone(), enabled);
         self.save_state(&state)?;
-        Ok(self.reload_packages())
+        {
+            let mut records = self.records.lock().unwrap();
+            if let Some(record) = records.get_mut(&package_id) {
+                record.descriptor.enabled = enabled;
+            }
+        }
+        let packages = self.list_packages();
+        self.emit_packages_changed(&packages);
+        Ok(packages)
     }
 
     pub fn remove_package(&self, package_id: String) -> Result<Vec<PackageDescriptor>, String> {
@@ -756,7 +769,7 @@ impl PluginHost {
     pub fn save_overlay_layout(&self, layout: OverlayLayout) -> Result<OverlayLayoutsFile, String> {
         let mut file = self.load_overlay_layouts();
         let mut layout = layout;
-        normalize_overlay_layout(&mut layout);
+        normalize_overlay_layout(&mut layout, true);
         match file.layouts.iter_mut().find(|entry| entry.id == layout.id) {
             Some(existing) => *existing = layout,
             None => file.layouts.push(layout),
@@ -768,9 +781,15 @@ impl PluginHost {
         Ok(file)
     }
 
-    pub fn create_overlay_layout(&self, name: String) -> Result<OverlayLayoutsFile, String> {
+    pub fn create_overlay_layout(
+        &self,
+        name: String,
+        width: Option<f64>,
+        height: Option<f64>,
+    ) -> Result<OverlayLayoutsFile, String> {
         let mut file = self.load_overlay_layouts();
         let id = unique_id("overlay");
+        let now = now_ms();
         file.layouts.push(OverlayLayout {
             id: id.clone(),
             name: if name.trim().is_empty() {
@@ -778,10 +797,12 @@ impl PluginHost {
             } else {
                 name
             },
-            width: 1920.0,
-            height: 1080.0,
+            width: width.unwrap_or(1920.0).max(320.0),
+            height: height.unwrap_or(1080.0).max(240.0),
             layers: default_layers(),
             items: Vec::new(),
+            created_at_ms: now,
+            updated_at_ms: now,
             template_source: None,
         });
         file.active_layout_id = id;
@@ -807,6 +828,9 @@ impl PluginHost {
         duplicated.id = new_id.clone();
         duplicated.name = format!("{} Copy", duplicated.name);
         duplicated.template_source = None;
+        let now = now_ms();
+        duplicated.created_at_ms = now;
+        duplicated.updated_at_ms = now;
         rekey_overlay_layout_contents(&mut duplicated);
         duplicated.items.clear();
         file.layouts.push(duplicated);
@@ -889,8 +913,11 @@ impl PluginHost {
             layout
         };
         let layout_id = unique_id("overlay");
+        let now = now_ms();
         layout.id = layout_id.clone();
-        normalize_overlay_layout(&mut layout);
+        layout.created_at_ms = now;
+        layout.updated_at_ms = now;
+        normalize_overlay_layout(&mut layout, false);
         rekey_overlay_layout_contents(&mut layout);
         file.layouts.push(layout);
         file.active_layout_id = layout_id;
@@ -918,7 +945,13 @@ impl PluginHost {
         Ok(file)
     }
 
-    pub fn create_page(&self, name: String) -> Result<PagesFile, String> {
+    pub fn create_page(
+        &self,
+        name: String,
+        open_target: Option<String>,
+        width: Option<f64>,
+        height: Option<f64>,
+    ) -> Result<PagesFile, String> {
         let mut file = self.load_pages();
         let now = now_ms();
         let mut page = PageLayout {
@@ -929,10 +962,12 @@ impl PluginHost {
                 name
             },
             favorite: false,
-            width: 1440.0,
-            height: 900.0,
+            width: width.unwrap_or(1440.0).max(320.0),
+            height: height.unwrap_or(900.0).max(240.0),
             background: PageBackground::default(),
-            settings: PageSettings::default(),
+            settings: PageSettings {
+                open_target: open_target.unwrap_or_else(|| "app".to_string()),
+            },
             layers: default_page_layers(),
             created_at_ms: now,
             updated_at_ms: now,
@@ -1052,7 +1087,7 @@ impl PluginHost {
                 WebviewUrl::App(PathBuf::from(path)),
             )
             .title(format!("BakingRL - {}", page.name))
-            .inner_size(page.width.max(480.0), page.height.max(320.0))
+            .inner_size(page.width.max(480.0), (page.height + 48.0).max(368.0))
             .min_inner_size(480.0, 320.0)
             .resizable(true)
             .visible(true)
@@ -1584,11 +1619,12 @@ fn ensure_active_layout_ids(file: &mut OverlayLayoutsFile) {
 
 fn normalize_overlay_layouts(file: &mut OverlayLayoutsFile) {
     for layout in &mut file.layouts {
-        normalize_overlay_layout(layout);
+        normalize_overlay_layout(layout, false);
     }
 }
 
-fn normalize_overlay_layout(layout: &mut OverlayLayout) {
+fn normalize_overlay_layout(layout: &mut OverlayLayout, touch_updated: bool) {
+    let now = now_ms();
     if layout.id.trim().is_empty() {
         layout.id = unique_id("overlay");
     }
@@ -1600,6 +1636,12 @@ fn normalize_overlay_layout(layout: &mut OverlayLayout) {
     }
     if layout.height <= 0.0 {
         layout.height = 1080.0;
+    }
+    if layout.created_at_ms == 0 {
+        layout.created_at_ms = now;
+    }
+    if layout.updated_at_ms == 0 || touch_updated {
+        layout.updated_at_ms = now;
     }
     if layout.layers.is_empty() {
         let mut layers = default_layers();
@@ -1915,6 +1957,7 @@ fn format_command_error(command: &str, stderr: &[u8]) -> String {
 }
 
 fn default_overlay_layouts() -> OverlayLayoutsFile {
+    let now = now_ms();
     OverlayLayoutsFile {
         active_layout_id: "default".to_string(),
         stream_layout_id: "default".to_string(),
@@ -1925,6 +1968,8 @@ fn default_overlay_layouts() -> OverlayLayoutsFile {
             height: 1080.0,
             layers: default_layers(),
             items: Vec::<OverlayItem>::new(),
+            created_at_ms: now,
+            updated_at_ms: now,
             template_source: None,
         }],
     }
@@ -2017,7 +2062,12 @@ pub fn set_package_enabled(
     package_id: String,
     enabled: bool,
 ) -> Result<Vec<PackageDescriptor>, String> {
-    host.set_package_enabled(package_id, enabled)
+    let packages = host.set_package_enabled(package_id, enabled)?;
+    let host = host.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        host.reload_packages();
+    });
+    Ok(packages)
 }
 
 #[tauri::command]
@@ -2125,8 +2175,10 @@ pub fn save_overlay_layout(
 pub fn create_overlay_layout(
     host: State<'_, Arc<PluginHost>>,
     name: String,
+    width: Option<f64>,
+    height: Option<f64>,
 ) -> Result<OverlayLayoutsFile, String> {
-    host.create_overlay_layout(name)
+    host.create_overlay_layout(name, width, height)
 }
 
 #[tauri::command]
@@ -2181,8 +2233,14 @@ pub fn save_page(host: State<'_, Arc<PluginHost>>, page: PageLayout) -> Result<P
 }
 
 #[tauri::command]
-pub fn create_page(host: State<'_, Arc<PluginHost>>, name: String) -> Result<PagesFile, String> {
-    host.create_page(name)
+pub fn create_page(
+    host: State<'_, Arc<PluginHost>>,
+    name: String,
+    open_target: Option<String>,
+    width: Option<f64>,
+    height: Option<f64>,
+) -> Result<PagesFile, String> {
+    host.create_page(name, open_target, width, height)
 }
 
 #[tauri::command]

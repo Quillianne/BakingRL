@@ -169,6 +169,8 @@ export type OverlayLayout = {
   height: number;
   layers: OverlayLayer[];
   items?: OverlayItem[];
+  created_at_ms: number;
+  updated_at_ms: number;
   template_source?: string | null;
 };
 
@@ -177,6 +179,20 @@ export type OverlayLayoutCatalog = {
   stream_layout_id: string;
   layouts: OverlayLayout[];
 };
+
+export type RecentActivityEntry =
+  | {
+      kind: "page";
+      id: string;
+      updatedAtMs: number;
+      page: PageLayout;
+    }
+  | {
+      kind: "layout";
+      id: string;
+      updatedAtMs: number;
+      layout: OverlayLayout;
+    };
 
 export type PageItem = {
   id: string;
@@ -262,6 +278,12 @@ export type TelemetryConnectionStatus = {
   updated_at_ms: number;
 };
 
+export type ObsGatewayStatus = {
+  running: boolean;
+  address: string;
+  message: string | null;
+};
+
 export type OverlayMonitor = {
   id: string;
   name: string;
@@ -296,6 +318,22 @@ export type DeveloperTelemetryGroup = {
 
 export type DeveloperTelemetrySort = "recent" | "alpha";
 export type DeveloperFrameTemplate = RlTelemetryEventName;
+
+export type RuntimeErrorEvent = {
+  kind?: string;
+  source?: string;
+  message?: string;
+  timestamp_ms?: number;
+};
+
+export type DeveloperErrorEntry = {
+  id: string;
+  receivedAt: string;
+  receivedAtMs: number;
+  kind: string;
+  source: string;
+  message: string;
+};
 
 export type ToastTone = "info" | "success" | "warning" | "error";
 

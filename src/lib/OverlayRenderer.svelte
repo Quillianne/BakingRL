@@ -224,12 +224,12 @@
     if (mode !== "page") return style;
 
     const background = activeLayout?.background;
-    if (!background) return style + "background:#0f172a;";
+    if (!background) return style + "background:var(--editor-bg-dark);";
     if (background.kind === "image" && background.image) {
       const size = background.fit === "stretch" ? "100% 100%" : background.fit;
-      return style + `background-color:${background.color || "#0f172a"};background-image:url("${cssUrl(background.image)}");background-size:${size};background-position:center;background-repeat:no-repeat;`;
+      return style + `background-color:${background.color || "var(--editor-bg-dark)"};background-image:url("${cssUrl(background.image)}");background-size:${size};background-position:center;background-repeat:no-repeat;`;
     }
-    return style + `background:${background.color || "#0f172a"};`;
+    return style + `background:${background.color || "var(--editor-bg-dark)"};`;
   });
 
   $effect(() => {
@@ -239,8 +239,9 @@
       const observer = new ResizeObserver((entries) => {
         for (const entry of entries) {
           const width = entry.contentRect.width || entry.target.clientWidth;
-          if (width > 0 && activeLayout.width > 0) {
-            previewScale = width / activeLayout.width;
+          const height = entry.contentRect.height || entry.target.clientHeight;
+          if (width > 0 && height > 0 && activeLayout.width > 0 && activeLayout.height > 0) {
+            previewScale = Math.min(width / activeLayout.width, height / activeLayout.height);
           }
         }
       });
@@ -441,7 +442,7 @@
       text.style.display = "flex";
       text.style.alignItems = String(settings.verticalAlign ?? "center");
       text.style.justifyContent = String(settings.align ?? "center");
-      text.style.color = String(settings.color ?? "#f8fafc");
+      text.style.color = String(settings.color ?? "var(--text-primary)");
       text.style.fontSize = `${Number(settings.fontSize ?? 24)}px`;
       text.style.fontWeight = String(settings.fontWeight ?? 700);
       text.style.textAlign = String(settings.textAlign ?? "center") as CanvasTextAlign;
@@ -470,8 +471,8 @@
     shape.className = "native-page-shape";
     shape.style.width = "100%";
     shape.style.height = "100%";
-    shape.style.background = String(settings.fill ?? "rgba(59, 130, 246, 0.18)");
-    shape.style.border = `${Number(settings.borderWidth ?? 1)}px solid ${String(settings.borderColor ?? "rgba(255, 255, 255, 0.2)")}`;
+    shape.style.background = String(settings.fill ?? "color-mix(in srgb, var(--accent) 18%, transparent)");
+    shape.style.border = `${Number(settings.borderWidth ?? 1)}px solid ${String(settings.borderColor ?? "color-mix(in srgb, var(--text-primary) 22%, transparent)")}`;
     shape.style.borderRadius = `${Number(settings.borderRadius ?? 8)}px`;
     root.appendChild(shape);
   }

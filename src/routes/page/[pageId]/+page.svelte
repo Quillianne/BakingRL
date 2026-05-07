@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
-  import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { getCurrentWindow, LogicalSize, PhysicalSize } from "@tauri-apps/api/window";
   import OverlayRenderer from "$lib/OverlayRenderer.svelte";
 
   const { data } = $props();
@@ -21,8 +21,13 @@
 
   let pages = $state<PagesFile | null>(null);
   let message = $state("");
+  let resizedPageId = $state("");
 
   const page = $derived(pages?.pages.find((entry) => entry.id === data.pageId) ?? null);
+  const MAIN_WINDOW_SIZE_KEY = "bakingrl.mainWindowBeforeInAppPage";
+  const PAGE_TOOLBAR_HEIGHT = 48;
+  const MAIN_MIN_WIDTH = 1024;
+  const MAIN_MIN_HEIGHT = 700;
 
   async function refresh() {
     pages = await invoke<PagesFile>("get_pages");
@@ -35,15 +40,60 @@
         await current.close();
         return;
       }
+      await restoreMainWindowSize();
     } catch {
       // Browser/dev fallback navigates back to the dashboard.
     }
     window.location.href = "/";
   }
 
-  function editPage() {
+  async function editPage() {
+    await restoreMainWindowSize();
     window.location.href = `/editor/page/${encodeURIComponent(data.pageId)}`;
   }
+
+  async function fitMainWindowToPage(entry: PageLayout) {
+    try {
+      const current = getCurrentWindow();
+      if (current.label !== "main") return;
+
+      if (!sessionStorage.getItem(MAIN_WINDOW_SIZE_KEY)) {
+        const size = await current.innerSize();
+        sessionStorage.setItem(MAIN_WINDOW_SIZE_KEY, JSON.stringify({ width: size.width, height: size.height }));
+      }
+
+      const width = Math.max(320, Math.round(entry.width));
+      const height = Math.max(240, Math.round(entry.height)) + PAGE_TOOLBAR_HEIGHT;
+      await current.setMinSize(new LogicalSize(320, 260));
+      await current.setSize(new LogicalSize(width, height));
+      resizedPageId = entry.id;
+    } catch {
+      // Browser/dev fallback keeps the current window size.
+    }
+  }
+
+  async function restoreMainWindowSize() {
+    try {
+      const current = getCurrentWindow();
+      if (current.label !== "main") return;
+      const raw = sessionStorage.getItem(MAIN_WINDOW_SIZE_KEY);
+      if (!raw) return;
+      const size = JSON.parse(raw) as { width?: number; height?: number };
+      await current.setMinSize(new LogicalSize(MAIN_MIN_WIDTH, MAIN_MIN_HEIGHT));
+      if (typeof size.width === "number" && typeof size.height === "number") {
+        await current.setSize(new PhysicalSize(size.width, size.height));
+      }
+      sessionStorage.removeItem(MAIN_WINDOW_SIZE_KEY);
+    } catch {
+      // Browser/dev fallback has no native window to restore.
+    }
+  }
+
+  $effect(() => {
+    if (page && page.id !== resizedPageId) {
+      void fitMainWindowToPage(page);
+    }
+  });
 
   onMount(() => {
     void refresh().catch((error) => {
@@ -59,6 +109,10 @@
       unlistenPages?.();
     };
   });
+
+  onDestroy(() => {
+    void restoreMainWindowSize();
+  });
 </script>
 
 <main>
@@ -69,7 +123,7 @@
       </button>
       <strong>{page?.name ?? "Page"}</strong>
     </div>
-    <button type="button" class="btn-primary" onclick={editPage}>Edit</button>
+    <button type="button" class="btn-primary" onclick={() => void editPage()}>Edit</button>
   </header>
 
   {#if page}
@@ -90,8 +144,8 @@
     width: 100%;
     height: 100%;
     overflow: hidden;
-    background: #070b12;
-    font-family: Inter, Arial, sans-serif;
+    background: var(--editor-bg-dark);
+    font-family: var(--font-family);
   }
 
   main {
@@ -99,8 +153,8 @@
     height: 100vh;
     display: grid;
     grid-template-rows: 48px minmax(0, 1fr);
-    color: #f8fafc;
-    background: #070b12;
+    color: var(--text-primary);
+    background: var(--editor-bg-dark);
   }
 
   .page-toolbar {
@@ -108,8 +162,8 @@
     align-items: center;
     justify-content: space-between;
     padding: 0 14px;
-    border-bottom: 1px solid rgba(148, 163, 184, 0.18);
-    background: rgba(8, 13, 22, 0.94);
+    border-bottom: 1px solid var(--border-color);
+    background: var(--editor-bg-panel);
   }
 
   .page-title {
@@ -134,8 +188,8 @@
 
   .icon-btn,
   .btn-primary {
-    border: 1px solid rgba(148, 163, 184, 0.24);
-    color: #f8fafc;
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
     cursor: pointer;
   }
 
@@ -146,19 +200,19 @@
     place-items: center;
     padding: 0;
     border-radius: 6px;
-    background: rgba(255, 255, 255, 0.04);
+    background: var(--bg-panel-hover);
   }
 
   .btn-primary {
     padding: 8px 12px;
     border-radius: 6px;
-    background: #2563eb;
+    background: var(--accent);
     font-weight: 700;
   }
 
   .empty-state {
     display: grid;
     place-items: center;
-    color: rgba(248, 250, 252, 0.7);
+    color: var(--text-secondary);
   }
 </style>

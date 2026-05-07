@@ -18,47 +18,6 @@
 </div>
 
 <div class="section-stack">
-  <section class="hero-preview">
-    <div class="preview-frame" aria-label="Active stream layout preview" style={state.homeStreamLayout ? `--layout-width: ${state.homeStreamLayout.width};` : ""}>
-      {#if state.homeStreamLayout}
-        <OverlayRenderer layoutId={state.homeStreamLayout.id} layoutOverride={state.homeStreamLayout} mode="editor" preview={true} />
-      {:else}
-        <div class="empty-state">
-          <p>{state.t("home.noLayout")}</p>
-        </div>
-      {/if}
-    </div>
-
-    <div class="hero-copy">
-      <div>
-        <span class="field-label">{state.t("home.streamLayout")}</span>
-        <h2>{state.homeStreamLayout?.name ?? state.t("home.noLayout")}</h2>
-        <p>
-          {#if state.homeStreamLayout}
-            {state.tx("home.layoutMeta", {
-              layers: state.layoutLayerCount(state.homeStreamLayout),
-              items: state.layoutItemCount(state.homeStreamLayout)
-            })}
-          {:else}
-            {state.t("overlays.empty")}
-          {/if}
-        </p>
-      </div>
-
-      <div class="card-actions">
-        <button
-          class="btn-primary"
-          onclick={() => state.homeStreamLayout && void state.openLayoutEditor(state.homeStreamLayout.id)}
-          disabled={!state.homeStreamLayout}
-        >
-          {state.t("common.edit")}
-        </button>
-        <a class="btn-secondary" href="/pages">{state.t("pages.createPage")}</a>
-        <a class="btn-outline" href="/plugins">{state.t("packages.installTitle")}</a>
-      </div>
-    </div>
-  </section>
-
   <section class="metric-grid" aria-label={state.t("home.overview")}>
     <a class="metric-cell" href="/pages">
       <strong>{state.pageCount}</strong>
@@ -81,58 +40,58 @@
     <div class="section-heading">
       <div>
         <h2>{state.t("home.recentActivity")}</h2>
-        <p>{state.t("home.recentActivityDesc")}</p>
       </div>
     </div>
 
-    {#if state.recentPages.length || state.recentLayouts.length}
+    {#if state.recentActivity.length}
       <div class="card-grid">
-        {#each state.recentPages as page (page.id)}
+        {#each state.recentActivity as entry (entry.id)}
+          {#if entry.kind === "page"}
           <article class="thumb-card">
-            <div class="thumb-preview" aria-hidden="true" style={`--layout-width: ${page.width};`}>
-              <OverlayRenderer layoutOverride={page} mode="page" preview={true} />
+            <div class="thumb-preview" aria-hidden="true" style={`--layout-width: ${entry.page.width};`}>
+              <OverlayRenderer layoutOverride={entry.page} mode="page" preview={true} />
             </div>
             <div class="thumb-copy">
-              <span class="thumb-title">{page.name}</span>
+              <span class="thumb-title">{entry.page.name}</span>
               <div class="badge-row">
                 <span class="badge route">{state.t("nav.pages")}</span>
-                {#if page.template_source}
+                {#if entry.page.template_source}
                   <span class="badge muted">{state.t("common.imported")}</span>
                 {/if}
               </div>
-              <p>{page.width}x{page.height} · {state.pageItemCount(page)} {state.t("common.items")}</p>
+              <p>{entry.page.width}x{entry.page.height} · {state.pageItemCount(entry.page)} {state.t("common.items")}</p>
               <div class="card-actions">
-                <button class="btn-outline" onclick={() => void state.openPageEditor(page.id)}>
+                <button class="btn-outline" onclick={() => void state.openPageEditor(entry.page.id)}>
                   {state.t("common.edit")}
                 </button>
               </div>
             </div>
           </article>
-        {/each}
-        {#each state.recentLayouts as layout (layout.id)}
+          {:else}
           <article class="thumb-card">
-            <div class="thumb-preview" aria-hidden="true" style={`--layout-width: ${layout.width};`}>
-              <OverlayRenderer layoutOverride={layout} mode="editor" preview={true} />
+            <div class="thumb-preview" aria-hidden="true" style={`--layout-width: ${entry.layout.width};`}>
+              <OverlayRenderer layoutOverride={entry.layout} mode="editor" preview={true} />
             </div>
             <div class="thumb-copy">
-              <span class="thumb-title">{layout.name}</span>
+              <span class="thumb-title">{entry.layout.name}</span>
               <div class="badge-row">
                 <span class="badge route">{state.t("nav.overlays")}</span>
-                {#if state.isStreamLayout(layout)}
+                {#if state.isStreamLayout(entry.layout)}
                   <span class="badge stream">{state.t("overlays.stream")}</span>
                 {/if}
-                {#if state.isInGameLayout(layout)}
+                {#if state.isInGameLayout(entry.layout)}
                   <span class="badge route">{state.t("overlays.ingame")}</span>
                 {/if}
               </div>
-              <p>{state.layoutLayerCount(layout)} {state.t("common.layers")} · {state.layoutItemCount(layout)} {state.t("common.items")}</p>
+              <p>{state.layoutLayerCount(entry.layout)} {state.t("common.layers")} · {state.layoutItemCount(entry.layout)} {state.t("common.items")}</p>
               <div class="card-actions">
-                <button class="btn-outline" onclick={() => void state.openLayoutEditor(layout.id)}>
+                <button class="btn-outline" onclick={() => void state.openLayoutEditor(entry.layout.id)}>
                   {state.t("common.edit")}
                 </button>
               </div>
             </div>
           </article>
+          {/if}
         {/each}
       </div>
     {:else}
@@ -146,7 +105,6 @@
     <div class="section-heading">
       <div>
         <h2>{state.t("home.favoritePages")}</h2>
-        <p>{state.t("home.favoritePagesDesc")}</p>
       </div>
     </div>
 
@@ -185,7 +143,6 @@
     <div class="section-heading">
       <div>
         <h2>{state.t("home.mainLayouts")}</h2>
-        <p>{state.t("home.mainLayoutsDesc")}</p>
       </div>
     </div>
 

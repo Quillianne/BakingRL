@@ -62,7 +62,7 @@
     display: grid;
     place-items: center;
     padding: 24px;
-    background: rgba(0, 0, 0, 0.56);
+    background: color-mix(in srgb, var(--bg-dark) 72%, transparent);
     backdrop-filter: blur(6px);
   }
 
@@ -72,7 +72,7 @@
     background: var(--editor-bg-panel, var(--bg-panel));
     border: 1px solid var(--border-color);
     border-radius: var(--radius-md);
-    box-shadow: 0 24px 72px rgba(0, 0, 0, 0.5);
+    box-shadow: 0 24px 72px color-mix(in srgb, var(--bg-dark) 72%, transparent);
   }
 
   .confirm-copy {
@@ -115,17 +115,17 @@
   }
 
   .cancel-btn {
-    background: rgba(255, 255, 255, 0.05);
+    background: var(--bg-panel-hover);
   }
 
   .cancel-btn:hover {
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--editor-bg-panel-hover, var(--bg-panel-hover));
   }
 
   .confirm-btn {
     background: var(--accent);
     border-color: var(--accent);
-    color: #fff;
+    color: var(--text-primary);
   }
 
   .confirm-btn:hover {

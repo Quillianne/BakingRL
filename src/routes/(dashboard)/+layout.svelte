@@ -21,8 +21,35 @@
         ? "connecting"
         : "disconnected"
   );
+  const obsGatewayStateClass = $derived(
+    state.obsGatewayStatus === null
+      ? "connecting"
+      : state.obsGatewayStatus.running
+        ? "connected"
+        : "disconnected"
+  );
 
-  onMount(() => state.start());
+  function restoreEditorScroll() {
+    const raw = sessionStorage.getItem("bakingrl.editorReturn");
+    if (!raw) return;
+    sessionStorage.removeItem("bakingrl.editorReturn");
+    try {
+      const parsed = JSON.parse(raw) as { scrollY?: number };
+      const scrollY = Math.max(0, Math.round(Number(parsed.scrollY) || 0));
+      requestAnimationFrame(() => {
+        const scrollHost = document.querySelector(".studio-main") as HTMLElement | null;
+        if (scrollHost) scrollHost.scrollTop = scrollY;
+      });
+    } catch {
+      // Ignore invalid stale state.
+    }
+  }
+
+  onMount(() => {
+    const cleanup = state.start();
+    restoreEditorScroll();
+    return cleanup;
+  });
 </script>
 
 <div class="studio-shell">
@@ -92,26 +119,16 @@
             {state.telemetryStatusLabel}
           </span>
         </span>
-        <span class="vital-value">{state.telemetryAddress}</span>
       </button>
 
       <div class="vital-card">
         <span class="vital-top">
           <span class="vital-label">{state.t("shell.obsGateway")}</span>
-          <button
-            class="icon-button"
-            type="button"
-            aria-label={state.t("common.copyUrl")}
-            onclick={() => void state.copyText(state.streamUrl(), state.t("shell.obsGateway"))}
-            disabled={!state.obsBaseUrl}
-          >
-            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="9" y="9" width="13" height="13" rx="2"></rect>
-              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-            </svg>
-          </button>
+          <span class="status-pill {obsGatewayStateClass}" title={state.obsGatewayStatus?.message ?? state.obsGatewayStatus?.address ?? ""}>
+            <span class="status-dot"></span>
+            {state.obsGatewayStatusLabel}
+          </span>
         </span>
-        <span class="vital-value">{state.obsBaseUrl || state.t("common.loading")}</span>
       </div>
 
       <a class="settings-link" class:active={$page.url.pathname.startsWith("/settings")} href="/settings">
