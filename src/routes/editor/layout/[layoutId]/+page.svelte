@@ -6,6 +6,9 @@
   import InstanceSettingsForm from "$lib/InstanceSettingsForm.svelte";
   import OverlayRenderer from "$lib/OverlayRenderer.svelte";
   import { adapter } from "$lib/adapter/index";
+  import { emptySnapGuides, snapGuideStyle, snapItemPosition, type SnapGuides } from "$lib/editor/snapping";
+  import VisualLibrary from "$lib/editor/VisualLibrary.svelte";
+  import { routeReturnFromParams, storeRouteScrollRestore } from "$lib/returnState";
   import { RL_TELEMETRY_EVENT_NAMES, telemetryFrameTemplate, type RlTelemetryEventName } from "$lib/rlTelemetry";
 
   const { data } = $props();
@@ -109,7 +112,7 @@
   let dragState = $state<DragState | null>(null);
   let panState = $state<PanState | null>(null);
   let contextMenu = $state<ContextMenuState | null>(null);
-  let snapGuides = $state<{ x: number | null; y: number | null }>({ x: null, y: null });
+  let snapGuides = $state<SnapGuides>(emptySnapGuides());
   let confirmRequest = $state<ConfirmRequest | null>(null);
   let layoutRevision = $state(0);
   let zoom = $state(0.48);
@@ -141,13 +144,6 @@
         ref: `${pkg.id}/${visual.name}`
       }))
     )
-  );
-  const filteredVisualExports = $derived(
-    visualExports.filter((entry) => {
-      const search = visualSearch.trim().toLowerCase();
-      if (!search) return true;
-      return `${entry.package.name} ${entry.package.id} ${entry.visual.name}`.toLowerCase().includes(search);
-    })
   );
 
   $effect(() => {
@@ -366,9 +362,9 @@
     } catch (error) {
       message = String(error);
     }
-    const returnTo = typeof data.returnTo === "string" && data.returnTo.startsWith("/") ? data.returnTo : "/overlays";
-    sessionStorage.setItem("bakingrl.editorReturn", JSON.stringify({ scrollY: data.scrollY ?? 0 }));
-    await goto(returnTo);
+    const returnState = routeReturnFromParams(data.returnTo, data.scrollY, "/overlays");
+    storeRouteScrollRestore(returnState);
+    await goto(returnState.returnTo);
   }
 
   function pointForEvent(event: PointerEvent) {
@@ -399,33 +395,12 @@
     }
   }
 
-  function snapValue(value: number, candidates: number[]) {
-    if (!snapEnabled) return value;
-    let result = Math.round(value / gridSize) * gridSize;
-    for (const candidate of candidates) {
-      if (Math.abs(value - candidate) <= 8) {
-        result = candidate;
-        break;
-      }
-    }
-    return result;
-  }
-
   function snapItem(item: OverlayItem) {
-    if (!layout || !snapEnabled) return;
-    const xCandidates = [0, layout.width / 2 - item.width / 2, layout.width - item.width];
-    const yCandidates = [0, layout.height / 2 - item.height / 2, layout.height - item.height];
-    for (const { item: other } of allItems()) {
-      if (other.id === item.id) continue;
-      xCandidates.push(other.x, other.x + other.width, other.x + other.width / 2 - item.width / 2);
-      yCandidates.push(other.y, other.y + other.height, other.y + other.height / 2 - item.height / 2);
-    }
-    item.x = snapValue(item.x, xCandidates);
-    item.y = snapValue(item.y, yCandidates);
-    snapGuides = {
-      x: Math.abs(item.x - (layout.width / 2 - item.width / 2)) <= 0.1 ? layout.width / 2 : null,
-      y: Math.abs(item.y - (layout.height / 2 - item.height / 2)) <= 0.1 ? layout.height / 2 : null
-    };
+    if (!layout) return;
+    snapGuides = snapItemPosition(item, layout, allItems().map((entry) => entry.item), {
+      enabled: snapEnabled,
+      gridSize
+    });
   }
 
   function allItems() {
@@ -450,8 +425,7 @@
   }
 
   function guideStyle(axis: "x" | "y", value: number | null) {
-    if (!layout || value === null) return "";
-    return axis === "x" ? `left:${(value / layout.width) * 100}%;` : `top:${(value / layout.height) * 100}%;`;
+    return snapGuideStyle(axis, value, layout);
   }
 
   function startPan(event: PointerEvent) {
@@ -523,7 +497,7 @@
     if (!dragState) return;
     const shouldSave = dragState.changed;
     dragState = null;
-    snapGuides = { x: null, y: null };
+    snapGuides = emptySnapGuides();
     if (shouldSave) void save();
   }
 
@@ -694,24 +668,7 @@
           </button>
           {#if showVisuals}
             <div class="accordion-body">
-              <div class="search-box">
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-                <input bind:value={visualSearch} placeholder="Search visuals..." />
-              </div>
-              <div class="list visual-list">
-                {#each filteredVisualExports as entry}
-                  <button class="list-item" onclick={() => addVisual(entry.ref)}>
-                    <div class="item-icon">
-                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect></svg>
-                    </div>
-                    <div class="item-text">
-                      <span class="title">{entry.visual.name}</span>
-                      <span class="sub">{entry.package.name}</span>
-                    </div>
-                    <svg class="add-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-                  </button>
-                {/each}
-              </div>
+              <VisualLibrary entries={visualExports} bind:search={visualSearch} onadd={addVisual} />
             </div>
           {/if}
         </section>
@@ -1193,53 +1150,7 @@
   }
 
   /* Shared Form UI */
-  .search-box {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    background: color-mix(in srgb, var(--bg-dark) 35%, transparent);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
-    padding: 6px 10px;
-  }
-  .search-box svg { color: var(--text-secondary); }
-  .search-box input {
-    background: transparent;
-    border: none;
-    color: var(--text-primary);
-    font-size: 13px;
-    outline: none;
-    width: 100%;
-    padding: 0;
-  }
-
   .list { display: flex; flex-direction: column; gap: 4px; }
-
-  /* Visual List */
-  .visual-list .list-item {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    width: 100%;
-    padding: 8px 10px;
-    background: color-mix(in srgb, var(--bg-panel-hover) 70%, transparent);
-    border: 1px solid transparent;
-    border-radius: var(--radius-sm);
-    color: var(--text-primary);
-    cursor: pointer;
-    transition: var(--transition);
-    text-align: left;
-  }
-  .visual-list .list-item:hover {
-    background: var(--editor-bg-panel-hover);
-    border-color: var(--border-color-focus);
-  }
-  .visual-list .item-icon { color: var(--accent); display: flex; }
-  .visual-list .item-text { display: flex; flex-direction: column; flex: 1; overflow: hidden; }
-  .visual-list .title { font-size: 13px; font-weight: 500; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
-  .visual-list .sub { font-size: 11px; color: var(--text-muted); }
-  .visual-list .add-icon { opacity: 0; transition: opacity 0.2s; color: var(--text-secondary); }
-  .visual-list .list-item:hover .add-icon { opacity: 1; }
 
   /* Layer List */
   .layer-row {
@@ -1560,26 +1471,6 @@
     background: color-mix(in srgb, var(--bg-dark) 35%, transparent);
     color: var(--text-secondary);
     font-size: 12px;
-  }
-
-  .snap-guide {
-    position: absolute;
-    z-index: 130;
-    background: var(--accent);
-    pointer-events: none;
-    box-shadow: 0 0 12px var(--accent);
-  }
-
-  .snap-guide.vertical {
-    top: 0;
-    bottom: 0;
-    width: 1px;
-  }
-
-  .snap-guide.horizontal {
-    right: 0;
-    left: 0;
-    height: 1px;
   }
 
   .context-menu {

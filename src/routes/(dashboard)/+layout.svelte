@@ -8,6 +8,7 @@
   import ToastViewport from "$lib/dashboard/ToastViewport.svelte";
   import { setDashboardContext } from "$lib/dashboard/context";
   import { createDashboardState } from "$lib/dashboard/state.svelte";
+  import { consumeRouteScrollRestore } from "$lib/returnState";
 
   let { children } = $props();
 
@@ -30,19 +31,13 @@
   );
 
   function restoreEditorScroll() {
-    const raw = sessionStorage.getItem("bakingrl.editorReturn");
-    if (!raw) return;
-    sessionStorage.removeItem("bakingrl.editorReturn");
-    try {
-      const parsed = JSON.parse(raw) as { scrollY?: number };
-      const scrollY = Math.max(0, Math.round(Number(parsed.scrollY) || 0));
-      requestAnimationFrame(() => {
-        const scrollHost = document.querySelector(".studio-main") as HTMLElement | null;
-        if (scrollHost) scrollHost.scrollTop = scrollY;
-      });
-    } catch {
-      // Ignore invalid stale state.
-    }
+    const restoreState = consumeRouteScrollRestore();
+    if (!restoreState) return;
+    const scrollY = Math.max(0, Math.round(Number(restoreState.scrollY) || 0));
+    requestAnimationFrame(() => {
+      const scrollHost = document.querySelector(".studio-main") as HTMLElement | null;
+      if (scrollHost) scrollHost.scrollTop = scrollY;
+    });
   }
 
   onMount(() => {

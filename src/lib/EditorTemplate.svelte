@@ -403,6 +403,26 @@
     pointer-events: auto;
   }
 
+  .stage :global(.snap-guide) {
+    position: absolute;
+    z-index: 130;
+    background: var(--accent);
+    box-shadow: 0 0 12px var(--accent);
+    pointer-events: none;
+  }
+
+  .stage :global(.snap-guide.vertical) {
+    top: 0;
+    bottom: 0;
+    width: 1px;
+  }
+
+  .stage :global(.snap-guide.horizontal) {
+    right: 0;
+    left: 0;
+    height: 1px;
+  }
+
   @media (max-width: 980px) {
     .stage-wrap {
       padding: 24px;

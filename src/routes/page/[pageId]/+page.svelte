@@ -1,9 +1,17 @@
 <script lang="ts">
+  import { goto } from "$app/navigation";
   import { onDestroy, onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
   import { getCurrentWindow, LogicalSize, PhysicalSize } from "@tauri-apps/api/window";
   import OverlayRenderer from "$lib/OverlayRenderer.svelte";
+  import {
+    consumePendingRouteReturn,
+    returnStateQuery,
+    routeReturnFromParams,
+    storeRouteScrollRestore,
+    type RouteReturnState
+  } from "$lib/returnState";
 
   const { data } = $props();
 
@@ -22,8 +30,11 @@
   let pages = $state<PagesFile | null>(null);
   let message = $state("");
   let resizedPageId = $state("");
+  let pageReturnState = $state<RouteReturnState>({ returnTo: "/", scrollY: 0 });
+  let pageReturnInitialized = $state(false);
 
   const page = $derived(pages?.pages.find((entry) => entry.id === data.pageId) ?? null);
+  const routePageReturnState = $derived(routeReturnFromParams(data.returnTo, data.scrollY, "/"));
   const MAIN_WINDOW_SIZE_KEY = "bakingrl.mainWindowBeforeInAppPage";
   const PAGE_TOOLBAR_HEIGHT = 48;
   const MAIN_MIN_WIDTH = 1024;
@@ -44,12 +55,22 @@
     } catch {
       // Browser/dev fallback navigates back to the dashboard.
     }
-    window.location.href = "/";
+    storeRouteScrollRestore(pageReturnState);
+    await navigateTo(pageReturnState.returnTo);
   }
 
   async function editPage() {
     await restoreMainWindowSize();
-    window.location.href = `/editor/page/${encodeURIComponent(data.pageId)}`;
+    const pageUrl = `/page/${encodeURIComponent(data.pageId)}${returnStateQuery(pageReturnState)}`;
+    await navigateTo(`/editor/page/${encodeURIComponent(data.pageId)}${returnStateQuery({ returnTo: pageUrl, scrollY: 0 })}`);
+  }
+
+  async function navigateTo(path: string) {
+    try {
+      await goto(path);
+    } catch {
+      window.location.href = path;
+    }
   }
 
   async function fitMainWindowToPage(entry: PageLayout) {
@@ -95,7 +116,17 @@
     }
   });
 
+  $effect(() => {
+    if (pageReturnInitialized) return;
+    pageReturnState = routePageReturnState;
+    pageReturnInitialized = true;
+  });
+
   onMount(() => {
+    const pendingReturn = consumePendingRouteReturn();
+    if (!data.returnTo && pendingReturn) {
+      pageReturnState = routeReturnFromParams(pendingReturn.returnTo, pendingReturn.scrollY, "/");
+    }
     void refresh().catch((error) => {
       message = String(error);
     });

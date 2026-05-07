@@ -7,6 +7,15 @@
   import EditorTemplate from "$lib/EditorTemplate.svelte";
   import InstanceSettingsForm from "$lib/InstanceSettingsForm.svelte";
   import OverlayRenderer from "$lib/OverlayRenderer.svelte";
+  import { emptySnapGuides, snapGuideStyle, snapItemPosition, type SnapGuides } from "$lib/editor/snapping";
+  import VisualLibrary from "$lib/editor/VisualLibrary.svelte";
+  import {
+    captureRouteReturnState,
+    returnStateQuery,
+    routeReturnFromParams,
+    storePendingRouteReturn,
+    storeRouteScrollRestore
+  } from "$lib/returnState";
 
   const { data } = $props();
 
@@ -100,7 +109,6 @@
   let selectedItemId = $state("");
   let activeLayerId = $state("");
   let visualSearch = $state("");
-  let selectedVisualRef = $state("");
   let previewMode = $state(false);
   let message = $state("");
   let stageWrap = $state<HTMLElement>();
@@ -108,6 +116,9 @@
   let dragState = $state<DragState | null>(null);
   let panState = $state<PanState | null>(null);
   let contextMenu = $state<ContextMenuState | null>(null);
+  let snapEnabled = $state(true);
+  let gridSize = $state(20);
+  let snapGuides = $state<SnapGuides>(emptySnapGuides());
   let layoutRevision = $state(0);
   let zoom = $state(0.58);
   let panX = $state(0);
@@ -130,13 +141,6 @@
         ref: `${pkg.id}/${visual.name}`
       }))
     )
-  );
-  const filteredVisualExports = $derived(
-    visualExports.filter((entry) => {
-      const search = visualSearch.trim().toLowerCase();
-      if (!search) return true;
-      return `${entry.package.name} ${entry.package.id} ${entry.visual.name}`.toLowerCase().includes(search);
-    })
   );
 
   $effect(() => {
@@ -225,9 +229,9 @@
     void save();
   }
 
-  function addVisual() {
-    if (!page || !activeLayer || !selectedVisualRef) return;
-    const selected = visualExports.find((entry) => entry.ref === selectedVisualRef);
+  function addVisual(ref: string) {
+    if (!page || !activeLayer || !ref) return;
+    const selected = visualExports.find((entry) => entry.ref === ref);
     if (!selected) return;
     const item: PageItem = {
       id: `item-${Date.now()}`,
@@ -326,6 +330,11 @@
     pages = pages;
   }
 
+  function allItems() {
+    if (!page) return [];
+    return page.layers.flatMap((layer) => layer.items.map((item) => ({ layer, item })));
+  }
+
   function itemStyle(item: PageItem) {
     if (!page) return "";
     return `
@@ -335,6 +344,10 @@
       height:${(item.height / page.height) * 100}%;
       z-index:${item.z_index};
     `;
+  }
+
+  function guideStyle(axis: "x" | "y", value: number | null) {
+    return snapGuideStyle(axis, value, page);
   }
 
   function startPan(event: PointerEvent) {
@@ -387,6 +400,10 @@
     if (dragState.mode === "move") {
       entry.item.x = dragState.startItem.x + dx;
       entry.item.y = dragState.startItem.y + dy;
+      snapGuides = snapItemPosition(entry.item, page, allItems().map((entry) => entry.item), {
+        enabled: snapEnabled,
+        gridSize
+      });
     } else {
       entry.item.width = dragState.startItem.width + dx;
       entry.item.height = dragState.startItem.height + dy;
@@ -403,6 +420,7 @@
     if (!dragState) return;
     const shouldSave = dragState.changed;
     dragState = null;
+    snapGuides = emptySnapGuides();
     if (shouldSave) void save();
   }
 
@@ -460,13 +478,15 @@
 
   function openPage() {
     if (!page) return;
-    window.location.href = `/page/${encodeURIComponent(page.id)}`;
+    const returnState = captureRouteReturnState();
+    storePendingRouteReturn(returnState);
+    window.location.href = `/page/${encodeURIComponent(page.id)}${returnStateQuery(returnState)}`;
   }
 
   async function closeEditor() {
-    const returnTo = typeof data.returnTo === "string" && data.returnTo.startsWith("/") ? data.returnTo : "/pages";
-    sessionStorage.setItem("bakingrl.editorReturn", JSON.stringify({ scrollY: data.scrollY ?? 0 }));
-    await goto(returnTo);
+    const returnState = routeReturnFromParams(data.returnTo, data.scrollY, "/pages");
+    storeRouteScrollRestore(returnState);
+    await goto(returnState.returnTo);
   }
 
   onMount(() => {
@@ -547,6 +567,12 @@
               </div>
             {/each}
           </div>
+          {#if snapGuides.x !== null}
+            <div class="snap-guide vertical" style={guideStyle("x", snapGuides.x)}></div>
+          {/if}
+          {#if snapGuides.y !== null}
+            <div class="snap-guide horizontal" style={guideStyle("y", snapGuides.y)}></div>
+          {/if}
         {/if}
       {/snippet}
 
@@ -593,16 +619,12 @@
                   <button class="btn-secondary" onclick={() => addNative("image")}>Image</button>
                   <button class="btn-secondary" onclick={() => addNative("shape")}>Shape</button>
                 </div>
-                <div class="search-box">
-                  <input bind:value={visualSearch} placeholder="Search plugin visuals" />
-                </div>
-                <select bind:value={selectedVisualRef}>
-                  <option value="">Select a visual...</option>
-                  {#each filteredVisualExports as entry}
-                    <option value={entry.ref}>{entry.package.name} / {entry.visual.name}</option>
-                  {/each}
-                </select>
-                <button class="btn-primary" onclick={addVisual} disabled={!selectedVisualRef}>Add Visual</button>
+                <VisualLibrary
+                  entries={visualExports}
+                  bind:search={visualSearch}
+                  searchPlaceholder="Search plugin visuals..."
+                  onadd={addVisual}
+                />
               </div>
             {/if}
           </section>
@@ -730,6 +752,18 @@
                 {:else}
                   <p class="empty">Select an item on the page.</p>
                 {/if}
+
+                <div class="divider"></div>
+                <div class="workspace-settings">
+                  <label class="toggle">
+                    <input type="checkbox" bind:checked={snapEnabled} />
+                    Enable Snapping
+                  </label>
+                  <label class="grid-size-control">
+                    Grid Size
+                    <input type="number" min="1" max="200" bind:value={gridSize} disabled={!snapEnabled} />
+                  </label>
+                </div>
               </div>
             {/if}
           </section>
@@ -890,6 +924,19 @@
     flex-wrap: wrap;
   }
 
+  .workspace-settings {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .grid-size-control {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 72px;
+    align-items: center;
+    gap: 8px;
+  }
+
   .toggle {
     flex-direction: row;
     align-items: center;
@@ -985,13 +1032,14 @@
     background: color-mix(in srgb, var(--bg-dark) 35%, transparent);
   }
 
-  .search-box input {
-    background: color-mix(in srgb, var(--bg-dark) 35%, transparent);
-  }
-
   .empty,
   .loading {
     color: var(--text-secondary);
+  }
+
+  .divider {
+    height: 1px;
+    background: var(--border-color);
   }
 
   .loading {

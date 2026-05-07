@@ -162,15 +162,19 @@
 
 .vital-top {
   display: flex;
+  width: 100%;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
 }
 
 .vital-label {
+  min-width: 0;
+  flex: 1;
   color: var(--text-secondary);
   font-size: 12px;
   font-weight: 700;
+  text-align: left;
 }
 
 .vital-value,
@@ -197,6 +201,8 @@
 }
 
 .status-pill {
+  flex: none;
+  margin-left: auto;
   padding: 4px 8px;
 }
 

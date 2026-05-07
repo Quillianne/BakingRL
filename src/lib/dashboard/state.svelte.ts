@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { open } from "@tauri-apps/plugin-dialog";
+import { captureRouteReturnState, returnStateQuery, storePendingRouteReturn } from "$lib/returnState";
 import {
   RL_TELEMETRY_EVENT_NAMES,
   telemetryFrameTemplateJson,
@@ -46,6 +47,7 @@ import type {
 } from "$lib/dashboard/types";
 
 const TELEMETRY_HELP_DISMISSED_KEY = "bakingrl.telemetryHelp.dismissed";
+const TELEMETRY_HELP_LAUNCH_SHOWN_KEY = "bakingrl.telemetryHelp.launchShown";
 const PACKAGE_TOGGLE_ROLLBACK_MS = 5000;
 
 type PendingPackageToggle = {
@@ -633,14 +635,7 @@ export class DashboardState {
   }
 
   editorReturnQuery() {
-    if (typeof window === "undefined") return "";
-    const params = new URLSearchParams();
-    const returnTo = `${window.location.pathname}${window.location.search}${window.location.hash}`;
-    const scrollHost = document.querySelector(".studio-main") as HTMLElement | null;
-    const scrollY = scrollHost?.scrollTop ?? window.scrollY;
-    params.set("returnTo", returnTo);
-    params.set("scrollY", String(Math.round(scrollY)));
-    return `?${params.toString()}`;
+    return returnStateQuery(captureRouteReturnState());
   }
 
   async openLayoutEditor(layoutId: string) {
@@ -770,10 +765,12 @@ export class DashboardState {
   }
 
   async openPage(pageId: string) {
+    const returnState = captureRouteReturnState();
+    storePendingRouteReturn(returnState);
     try {
       await invoke("open_page", { pageId });
     } catch {
-      await this.navigate(`/page/${encodeURIComponent(pageId)}`);
+      await this.navigate(`/page/${encodeURIComponent(pageId)}${returnStateQuery(returnState)}`);
     }
   }
 
@@ -1045,7 +1042,8 @@ export class DashboardState {
   start() {
     this.locale = getInitialLocale();
     this.currentTheme = applyTheme(getStoredTheme());
-    if (!this.telemetryHelpDismissed()) {
+    if (!this.telemetryHelpDismissed() && !this.telemetryHelpShownThisLaunch()) {
+      this.markTelemetryHelpShownThisLaunch();
       this.openTelemetryHelp(false);
     }
     void this.refresh().catch((error) => this.notifyError(error));
@@ -1120,6 +1118,22 @@ export class DashboardState {
       unlistenRuntimeErrors?.();
       this.clearPackageToggleTimers();
     };
+  }
+
+  telemetryHelpShownThisLaunch() {
+    try {
+      return sessionStorage.getItem(TELEMETRY_HELP_LAUNCH_SHOWN_KEY) === "true";
+    } catch {
+      return false;
+    }
+  }
+
+  markTelemetryHelpShownThisLaunch() {
+    try {
+      sessionStorage.setItem(TELEMETRY_HELP_LAUNCH_SHOWN_KEY, "true");
+    } catch {
+      // Session storage is optional in browser fallback contexts.
+    }
   }
 }
 
