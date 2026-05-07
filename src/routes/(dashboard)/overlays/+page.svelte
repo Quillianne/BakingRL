@@ -136,7 +136,7 @@
             <button class="btn-primary" onclick={() => void dashboard.openLayoutEditor(layout.id)}>
               {dashboard.t("common.edit")}
             </button>
-            <button class="btn-outline" onclick={() => dashboard.openPreview(dashboard.layoutUrl(layout.id))} disabled={!dashboard.obsBaseUrl}>
+            <button class="btn-outline" onclick={() => void dashboard.openPreview(dashboard.layoutUrl(layout.id))} disabled={!dashboard.obsBaseUrl}>
               {dashboard.t("common.preview")}
             </button>
             <button class="btn-outline" onclick={() => void dashboard.copyText(dashboard.layoutUrl(layout.id), dashboard.t("common.copyUrl"))} disabled={!dashboard.obsBaseUrl}>

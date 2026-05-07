@@ -176,7 +176,7 @@
               <button class="btn-primary" onclick={() => entry.layout && void state.openLayoutEditor(entry.layout.id)} disabled={!entry.layout}>
                 {state.t("common.edit")}
               </button>
-              <button class="btn-outline" onclick={() => entry.layout && state.openPreview(state.layoutUrl(entry.layout.id))} disabled={!entry.layout || !state.obsBaseUrl}>
+              <button class="btn-outline" onclick={() => entry.layout && void state.openPreview(state.layoutUrl(entry.layout.id))} disabled={!entry.layout || !state.obsBaseUrl}>
                 {state.t("common.preview")}
               </button>
             </div>

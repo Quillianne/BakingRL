@@ -681,12 +681,35 @@ impl PluginHost {
     }
 
     pub fn save_app_settings(&self, settings: AppSettings) -> Result<AppSettings, String> {
+        let previous_settings = self.load_app_settings();
         let raw = serde_json::to_string_pretty(&settings)
             .map_err(|e| format!("Failed to serialize app settings: {e}"))?;
+        if previous_settings.behavior.launch_at_startup != settings.behavior.launch_at_startup {
+            self.apply_launch_at_startup_setting(settings.behavior.launch_at_startup)?;
+        }
         fs::write(&self.app_settings_path, raw)
             .map_err(|e| format!("Failed to write app settings: {e}"))?;
         self.apply_overlay_window_settings(&settings);
         Ok(settings)
+    }
+
+    fn apply_launch_at_startup_setting(&self, enabled: bool) -> Result<(), String> {
+        #[cfg(desktop)]
+        {
+            use tauri_plugin_autostart::ManagerExt;
+
+            let autostart = self.app_handle.autolaunch();
+            if enabled {
+                autostart
+                    .enable()
+                    .map_err(|error| format!("Failed to enable launch at startup: {error}"))?;
+            } else {
+                autostart
+                    .disable()
+                    .map_err(|error| format!("Failed to disable launch at startup: {error}"))?;
+            }
+        }
+        Ok(())
     }
 
     pub fn apply_overlay_window_settings(&self, settings: &AppSettings) {

@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { open } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { captureRouteReturnState, returnStateQuery, storePendingRouteReturn } from "$lib/returnState";
 import {
   RL_TELEMETRY_EVENT_NAMES,
@@ -629,9 +630,14 @@ export class DashboardState {
     }
   }
 
-  openPreview(value: string) {
+  async openPreview(value: string) {
     if (!value) return;
-    window.open(value, "_blank", "noopener,noreferrer");
+    try {
+      await openUrl(value);
+    } catch (error) {
+      const popup = window.open(value, "_blank", "noopener,noreferrer");
+      if (!popup) this.notifyError(error);
+    }
   }
 
   editorReturnQuery() {

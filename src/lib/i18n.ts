@@ -228,6 +228,10 @@ const en = {
   "settings.overlaySize": "Overlay Size",
   "settings.useFullMonitor": "Use full monitor size",
   "settings.hideUnfocused": "Hide overlay when Rocket League is unfocused",
+  "settings.applicationBehavior": "Application Behavior",
+  "settings.startMinimized": "Start minimized",
+  "settings.closeMinimized": "Close minimized",
+  "settings.launchAtStartup": "Launch at startup",
 
   "permissions.telemetryBus": "Telemetry Bus",
   "permissions.readEvents": "Read events",
@@ -515,6 +519,10 @@ const fr: Record<TranslationKey, string> = {
   "settings.overlaySize": "Taille de l'overlay",
   "settings.useFullMonitor": "Utiliser toute la taille du moniteur",
   "settings.hideUnfocused": "Masquer l'overlay quand Rocket League n'a pas le focus",
+  "settings.applicationBehavior": "Comportement de l'application",
+  "settings.startMinimized": "Démarrer minimisé",
+  "settings.closeMinimized": "Réduire à la fermeture",
+  "settings.launchAtStartup": "Lancer au démarrage",
 
   "permissions.telemetryBus": "Bus telemetry",
   "permissions.readEvents": "Lire les events",

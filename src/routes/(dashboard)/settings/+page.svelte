@@ -155,6 +155,28 @@
             {dashboard.t("settings.hideUnfocused")}
           </label>
 
+          <div class="section-heading compact">
+            <div>
+              <h2>{dashboard.t("settings.applicationBehavior")}</h2>
+            </div>
+          </div>
+
+          <label class="check-row">
+            <input type="checkbox" bind:checked={dashboard.appSettings.behavior.start_minimized} />
+            <span></span>
+            {dashboard.t("settings.startMinimized")}
+          </label>
+          <label class="check-row">
+            <input type="checkbox" bind:checked={dashboard.appSettings.behavior.close_will_hide} />
+            <span></span>
+            {dashboard.t("settings.closeMinimized")}
+          </label>
+          <label class="check-row">
+            <input type="checkbox" bind:checked={dashboard.appSettings.behavior.launch_at_startup} />
+            <span></span>
+            {dashboard.t("settings.launchAtStartup")}
+          </label>
+
           <div class="card-actions">
             <button class="btn-primary" onclick={() => void dashboard.saveAppSettings()} disabled={dashboard.busy}>
               {dashboard.t("common.saveSettings")}
