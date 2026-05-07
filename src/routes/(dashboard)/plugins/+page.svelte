@@ -252,7 +252,7 @@
           </div>
           <p>v{detailPackage.version} · {dashboard.t("packages.by")} {detailPackage.author ?? dashboard.t("packages.unknownAuthor")}</p>
         </div>
-        <button type="button" class="icon-button" aria-label={dashboard.t("common.cancel")} onclick={closePackageDetails}>
+        <button type="button" class="icon-button package-detail-close" aria-label={dashboard.t("common.cancel")} onclick={closePackageDetails}>
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M18 6 6 18"></path>
             <path d="m6 6 12 12"></path>

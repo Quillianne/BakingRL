@@ -36,7 +36,7 @@
 
   type DeveloperToolPanel = "registry" | "errors" | "send";
 
-  let activeToolPanel = $state<DeveloperToolPanel>("send");
+  let activeToolPanel = $state<DeveloperToolPanel>("registry");
   let frameDialogOpen = $state(false);
   let frameDialogFrame = $state<GameEventFrame | null>(null);
   let frameDialogError = $state("");

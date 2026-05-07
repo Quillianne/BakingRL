@@ -601,7 +601,6 @@
                 </label>
                 <div class="actions">
                   <button class="btn-primary" onclick={openPage}>Open</button>
-                  <button class="btn-secondary" onclick={() => void save()}>Save</button>
                 </div>
               </div>
             {/if}

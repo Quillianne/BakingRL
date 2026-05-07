@@ -655,7 +655,6 @@
                   <input id="layout-height" type="number" min="240" step="1" bind:value={layout.height} onblur={() => save()} />
                 </div>
               </div>
-              <button class="btn-secondary" onclick={() => void save()}>Save</button>
             </div>
           {/if}
         </section>

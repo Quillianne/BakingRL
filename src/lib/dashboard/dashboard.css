@@ -933,6 +933,7 @@ pre {
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
+  padding-right: 42px;
 }
 
 .package-detail-heading-main {
@@ -958,6 +959,12 @@ pre {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.package-detail-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
 }
 
 .package-detail-heading-main p {

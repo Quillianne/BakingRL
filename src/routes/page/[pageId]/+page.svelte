@@ -29,7 +29,7 @@
 
   let pages = $state<PagesFile | null>(null);
   let message = $state("");
-  let resizedPageId = $state("");
+  let resizedPageSignature = $state("");
   let pageReturnState = $state<RouteReturnState>({ returnTo: "/", scrollY: 0 });
   let pageReturnInitialized = $state(false);
 
@@ -77,6 +77,7 @@
     try {
       const current = getCurrentWindow();
       if (current.label !== "main") return;
+      const signature = pageResizeSignature(entry);
 
       if (!sessionStorage.getItem(MAIN_WINDOW_SIZE_KEY)) {
         const size = await current.innerSize();
@@ -87,10 +88,14 @@
       const height = Math.max(240, Math.round(entry.height)) + PAGE_TOOLBAR_HEIGHT;
       await current.setMinSize(new LogicalSize(320, 260));
       await current.setSize(new LogicalSize(width, height));
-      resizedPageId = entry.id;
+      resizedPageSignature = signature;
     } catch {
       // Browser/dev fallback keeps the current window size.
     }
+  }
+
+  function pageResizeSignature(entry: PageLayout) {
+    return `${entry.id}:${Math.round(entry.width)}:${Math.round(entry.height)}`;
   }
 
   async function restoreMainWindowSize() {
@@ -111,7 +116,7 @@
   }
 
   $effect(() => {
-    if (page && page.id !== resizedPageId) {
+    if (page && pageResizeSignature(page) !== resizedPageSignature) {
       void fitMainWindowToPage(page);
     }
   });
