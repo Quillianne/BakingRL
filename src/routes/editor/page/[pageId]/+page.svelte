@@ -81,6 +81,17 @@
     changed: boolean;
   };
 
+  type PanState = {
+    startPointer: { x: number; y: number };
+    startPan: { x: number; y: number };
+  };
+
+  type ContextMenuState = {
+    itemId: string;
+    x: number;
+    y: number;
+  };
+
   let packages = $state<PackageDescriptor[]>([]);
   let pages = $state<PagesFile | null>(null);
   let selectedItemId = $state("");
@@ -91,7 +102,12 @@
   let message = $state("");
   let stage = $state<HTMLElement>();
   let dragState = $state<DragState | null>(null);
+  let panState = $state<PanState | null>(null);
+  let contextMenu = $state<ContextMenuState | null>(null);
   let layoutRevision = $state(0);
+  let zoom = $state(0.58);
+  let panX = $state(0);
+  let panY = $state(0);
 
   const page = $derived(pages?.pages.find((entry) => entry.id === data.pageId) ?? null);
   const layers = $derived(page ? sortedLayers(page) : []);
@@ -281,10 +297,41 @@
     `;
   }
 
+  function canvasStyle() {
+    if (!page) return "";
+    return `width:${page.width}px;height:${page.height}px;transform:translate(${panX}px, ${panY}px) scale(${zoom});`;
+  }
+
+  function setZoom(nextZoom: number) {
+    zoom = Math.max(0.12, Math.min(1.5, nextZoom));
+  }
+
+  function resetViewport() {
+    zoom = 0.58;
+    panX = 0;
+    panY = 0;
+  }
+
+  function handleWheel(event: WheelEvent) {
+    event.preventDefault();
+    setZoom(zoom + (event.deltaY > 0 ? -0.05 : 0.05));
+  }
+
+  function startPan(event: PointerEvent) {
+    if (event.button !== 1 && !event.altKey) return;
+    event.preventDefault();
+    panState = {
+      startPointer: { x: event.clientX, y: event.clientY },
+      startPan: { x: panX, y: panY }
+    };
+    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+  }
+
   function startDrag(event: PointerEvent, item: PageItem, mode: "move" | "resize") {
     const entry = findItem(item.id);
     event.stopPropagation();
     event.preventDefault();
+    contextMenu = null;
     if (!entry) return;
     selectedItemId = item.id;
     activeLayerId = entry.layer.id;
@@ -305,6 +352,11 @@
   }
 
   function pointerMove(event: PointerEvent) {
+    if (panState) {
+      panX = panState.startPan.x + event.clientX - panState.startPointer.x;
+      panY = panState.startPan.y + event.clientY - panState.startPointer.y;
+      return;
+    }
     if (!dragState || !page) return;
     const entry = findItem(dragState.itemId);
     if (!entry) return;
@@ -324,10 +376,54 @@
   }
 
   function pointerUp() {
+    if (panState) {
+      panState = null;
+      return;
+    }
     if (!dragState) return;
     const shouldSave = dragState.changed;
     dragState = null;
     if (shouldSave) void save();
+  }
+
+  function openContextMenu(event: MouseEvent, item: PageItem) {
+    event.preventDefault();
+    event.stopPropagation();
+    selectedItemId = item.id;
+    contextMenu = { itemId: item.id, x: event.clientX, y: event.clientY };
+  }
+
+  function contextMenuStyle() {
+    if (!contextMenu) return "";
+    return `left:${contextMenu.x}px;top:${contextMenu.y}px;`;
+  }
+
+  function toggleSelectedLock() {
+    if (!selectedEntry) return;
+    selectedEntry.item.locked = !selectedEntry.item.locked;
+    contextMenu = null;
+    void save();
+  }
+
+  function toggleSelectedVisible() {
+    if (!selectedEntry) return;
+    selectedEntry.item.visible = !selectedEntry.item.visible;
+    contextMenu = null;
+    void save();
+  }
+
+  function bringSelectedForward() {
+    if (!selectedEntry || !page) return;
+    selectedEntry.item.z_index = Math.max(0, ...page.layers.flatMap((layer) => layer.items.map((item) => item.z_index))) + 1;
+    contextMenu = null;
+    void save();
+  }
+
+  function sendSelectedBackward() {
+    if (!selectedEntry || !page) return;
+    selectedEntry.item.z_index = Math.min(0, ...page.layers.flatMap((layer) => layer.items.map((item) => item.z_index))) - 1;
+    contextMenu = null;
+    void save();
   }
 
   function setItemSettings(raw: string) {
@@ -378,8 +474,8 @@
 
 <main onpointermove={pointerMove} onpointerup={pointerUp} class:dragging={dragState !== null}>
   {#if page}
-    <section class="stage-wrap">
-      <div class="stage" bind:this={stage}>
+    <section class="stage-wrap" role="application" aria-label="Page editor canvas" onwheel={handleWheel} onpointerdown={startPan}>
+      <div class="stage" bind:this={stage} style={canvasStyle()}>
         <OverlayRenderer
           source="page"
           layoutId={page.id}
@@ -399,6 +495,7 @@
                 tabindex="0"
                 style={itemStyle(entry.item)}
                 onpointerdown={(event) => startDrag(event, entry.item, "move")}
+                oncontextmenu={(event) => openContextMenu(event, entry.item)}
                 title={entry.item.name}
               >
                 <div class="frame-label">
@@ -424,12 +521,22 @@
           <strong>{page.name}</strong>
           {#if message}<span>{message}</span>{/if}
         </div>
+        <div class="editor-header-actions">
+          <button class="icon-btn" onclick={() => setZoom(zoom - 0.08)} title="Zoom out">
+            <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><path d="M8 11h6"></path><path d="m21 21-4.3-4.3"></path></svg>
+          </button>
+          <button class="zoom-readout" onclick={resetViewport}>{Math.round(zoom * 100)}%</button>
+          <button class="icon-btn" onclick={() => setZoom(zoom + 0.08)} title="Zoom in">
+            <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><path d="M8 11h6"></path><path d="M11 8v6"></path><path d="m21 21-4.3-4.3"></path></svg>
+          </button>
+        </div>
         <button class="icon-btn" onclick={backToDashboard} title="Back to dashboard">
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
         </button>
       </header>
 
       <div class="panel-content">
+        <div class="side-panel left">
         <section class="panel-section">
           <div class="section-title">
             <h2>Page</h2>
@@ -496,7 +603,9 @@
           </select>
           <button class="btn-primary" onclick={addVisual} disabled={!selectedVisualRef}>Add Visual</button>
         </section>
+        </div>
 
+        <div class="side-panel right">
         <section class="panel-section">
           <div class="section-title">
             <h2>Layers</h2>
@@ -553,8 +662,19 @@
             <p class="empty">Select an item on the page.</p>
           {/if}
         </section>
+        </div>
       </div>
     </aside>
+    {#if contextMenu && selectedEntry}
+      <div class="context-menu" style={contextMenuStyle()} role="menu">
+        <button role="menuitem" onclick={duplicateSelected}>Duplicate</button>
+        <button role="menuitem" onclick={toggleSelectedLock}>{selectedEntry.item.locked ? "Unlock" : "Lock"}</button>
+        <button role="menuitem" onclick={toggleSelectedVisible}>{selectedEntry.item.visible ? "Hide" : "Show"}</button>
+        <button role="menuitem" onclick={bringSelectedForward}>Bring forward</button>
+        <button role="menuitem" onclick={sendSelectedBackward}>Send backward</button>
+        <button role="menuitem" class="danger" onclick={deleteSelected}>Delete</button>
+      </div>
+    {/if}
   {:else}
     <section class="loading">{message || "Loading page..."}</section>
   {/if}
@@ -871,5 +991,184 @@
     height: 100%;
     display: grid;
     place-items: center;
+  }
+
+  /* Studio page editor */
+  .stage-wrap {
+    position: absolute;
+    inset: 48px 0 0 0;
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+    background:
+      radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--text-muted) 28%, transparent) 1px, transparent 0),
+      var(--editor-bg-dark);
+    background-size: 24px 24px;
+    padding: 24px 348px 24px 292px; /* fallback padding */
+  }
+
+  .stage {
+    width: auto;
+    height: auto;
+    flex: none;
+    overflow: visible;
+    transform-origin: center center;
+    outline: 1px solid var(--border-color-focus);
+    box-shadow: 0 24px 80px color-mix(in srgb, var(--bg-dark) 70%, transparent);
+  }
+
+  .stage::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    background-image:
+      linear-gradient(color-mix(in srgb, var(--text-muted) 18%, transparent) 1px, transparent 1px),
+      linear-gradient(90deg, color-mix(in srgb, var(--text-muted) 18%, transparent) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+  }
+
+  .editor-panel {
+    inset: 0;
+    width: 100vw;
+    border: 0;
+    background: transparent;
+    backdrop-filter: none;
+    pointer-events: none;
+  }
+
+  .editor-panel header {
+    position: fixed;
+    inset: 0 0 auto 0;
+    z-index: 700;
+    height: 48px;
+    min-height: 48px;
+    border-bottom: 1px solid var(--border-color);
+    background: var(--editor-bg-panel);
+    pointer-events: auto;
+  }
+
+  .editor-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+    margin-right: 8px;
+  }
+
+  .panel-content {
+    position: absolute;
+    inset: 48px 0 0 0;
+    display: flex;
+    justify-content: space-between;
+    padding: 12px;
+    box-sizing: border-box;
+    pointer-events: none;
+    z-index: 600;
+  }
+
+  .side-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: 280px;
+    max-height: 100%;
+    pointer-events: none;
+  }
+
+  .side-panel.right {
+    width: 336px;
+  }
+
+  .panel-section {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    max-height: 100%;
+    overflow: hidden;
+    gap: 10px;
+    padding: 12px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--editor-bg-panel);
+    pointer-events: auto;
+  }
+
+  .side-panel.left .panel-section:nth-child(3),
+  .side-panel.right .panel-section:nth-child(2) {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  .zoom-readout {
+    min-width: 54px;
+    height: 30px;
+    padding: 0 8px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--bg-dark) 35%, transparent);
+    color: var(--text-secondary);
+    font-size: 12px;
+  }
+
+  .context-menu {
+    position: fixed;
+    z-index: 900;
+    display: flex;
+    min-width: 180px;
+    flex-direction: column;
+    gap: 2px;
+    padding: 6px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--editor-bg-panel);
+    box-shadow: 0 18px 48px color-mix(in srgb, var(--bg-dark) 72%, transparent);
+  }
+
+  .context-menu button {
+    justify-content: flex-start;
+    padding: 8px 10px;
+    border: 0;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 13px;
+    text-align: left;
+  }
+
+  .context-menu button:hover {
+    background: var(--editor-bg-panel-hover);
+    color: var(--text-primary);
+  }
+
+  .context-menu button.danger {
+    color: var(--danger);
+  }
+
+  @media (max-width: 980px) {
+    .stage-wrap {
+      inset: 48px 0 42vh 0;
+      padding: 24px;
+    }
+
+    .panel-content {
+      top: auto;
+      bottom: 0;
+      height: 42vh;
+      flex-direction: row;
+      background: var(--editor-bg-panel);
+      pointer-events: auto;
+    }
+
+    .side-panel {
+      width: 50% !important;
+      height: 100%;
+    }
+
+    .panel-section {
+      max-height: 100%;
+    }
   }
 </style>

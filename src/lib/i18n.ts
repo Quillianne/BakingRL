@@ -17,6 +17,8 @@ const en = {
   "nav.settings": "Settings",
   "language.label": "Language",
   "shell.packagesDirLoading": "Loading package directory...",
+  "shell.systemVitals": "System Vitals",
+  "shell.obsGateway": "OBS Gateway",
 
   "home.title": "Home",
   "home.desc": "Overview of the local BakingRL workspace and runtime state.",
@@ -53,6 +55,8 @@ const en = {
   "home.noFavoritePages": "No favorite page yet.",
   "home.mainLayouts": "Main Layouts",
   "home.mainLayoutsDesc": "Layouts currently routed to the overlay runtimes.",
+  "home.recentActivity": "Recent Activity",
+  "home.recentActivityDesc": "Recently edited pages and available layouts.",
 
   "common.active": "Active",
   "common.disabled": "Disabled",
@@ -90,6 +94,7 @@ const en = {
   "common.exports": "Exports",
   "common.permissions": "Permissions",
   "common.noItems": "No items in this layer.",
+  "common.error": "Error",
 
   "packages.installedTitle": "Installed Packages",
   "packages.details": "View details & permissions",
@@ -119,6 +124,10 @@ const en = {
   "packages.bundleSha": "Bundle SHA-256",
   "packages.signaturePublicKey": "Signature Public Key",
   "packages.installPackage": "Install Package",
+  "packages.networkPermission": "Network",
+  "packages.hashesVerified": "Hashes verified",
+  "packages.hashesMissing": "Hashes missing",
+  "packages.signature": "Signature",
 
   "overlays.obsTitle": "OBS Browser Source",
   "overlays.obsDesc": "Add a Browser Source in OBS, paste the general URL below, and set the source size to your canvas resolution. This URL always follows the layout marked Stream.",
@@ -267,6 +276,8 @@ const fr: Record<TranslationKey, string> = {
   "nav.settings": "Settings",
   "language.label": "Langue",
   "shell.packagesDirLoading": "Chargement du dossier packages...",
+  "shell.systemVitals": "Vitals système",
+  "shell.obsGateway": "OBS Gateway",
 
   "home.title": "Accueil",
   "home.desc": "Vue d'ensemble du workspace local BakingRL et de l'état runtime.",
@@ -303,6 +314,8 @@ const fr: Record<TranslationKey, string> = {
   "home.noFavoritePages": "Aucune page favorite pour le moment.",
   "home.mainLayouts": "Layouts principaux",
   "home.mainLayoutsDesc": "Layouts actuellement routés vers les runtimes overlay.",
+  "home.recentActivity": "Activité récente",
+  "home.recentActivityDesc": "Pages récemment éditées et layouts disponibles.",
 
   "common.active": "Actif",
   "common.disabled": "Désactivé",
@@ -340,6 +353,7 @@ const fr: Record<TranslationKey, string> = {
   "common.exports": "Exports",
   "common.permissions": "Permissions",
   "common.noItems": "Aucun item dans ce layer.",
+  "common.error": "Erreur",
 
   "packages.installedTitle": "Packages installés",
   "packages.details": "Voir les détails et permissions",
@@ -369,6 +383,10 @@ const fr: Record<TranslationKey, string> = {
   "packages.bundleSha": "Bundle SHA-256",
   "packages.signaturePublicKey": "Clé publique de signature",
   "packages.installPackage": "Installer le package",
+  "packages.networkPermission": "Network",
+  "packages.hashesVerified": "Hashes vérifiés",
+  "packages.hashesMissing": "Hashes absents",
+  "packages.signature": "Signature",
 
   "overlays.obsTitle": "Source navigateur OBS",
   "overlays.obsDesc": "Ajoute une Browser Source dans OBS, colle l'URL générale ci-dessous, puis règle la taille de la source sur ton canvas. Cette URL suit toujours le layout marqué Stream.",

@@ -14,7 +14,8 @@
     layoutRevision = 0,
     mode = "runtime",
     source = "overlay",
-    mockEvent = null
+    mockEvent = null,
+    preview = false
   }: {
     layoutType?: LayoutType;
     layoutId?: string | null;
@@ -23,6 +24,7 @@
     mode?: RendererMode;
     source?: LayoutSource;
     mockEvent?: MockEvent;
+    preview?: boolean;
   } = $props();
 
   type VisualExportDescriptor = {
@@ -198,6 +200,7 @@
   let componentSourceCache = new Map<string, ComponentExportSource>();
   let settingsCache = new Map<string, Record<string, unknown>>();
   let moduleVersion = 0;
+  let previewScale = $state(1);
 
   const persistedActiveOverlay = $derived.by(() => {
     const selectedLayoutId = layoutId ?? (layoutType === "ingame" ? overlayLayouts?.active_layout_id : overlayLayouts?.stream_layout_id);
@@ -213,14 +216,37 @@
 
   const eventLayerActive = $derived(eventActiveItems.size > 0);
   const hostStyle = $derived.by(() => {
-    if (mode !== "page") return "";
+    let style = "";
+    if (preview && activeLayout) {
+      style += `position:absolute;top:50%;left:50%;width:${activeLayout.width}px;height:${activeLayout.height}px;transform:translate(-50%, -50%) scale(${previewScale});transform-origin:center;`;
+    }
+
+    if (mode !== "page") return style;
+
     const background = activeLayout?.background;
-    if (!background) return "background:#0f172a;";
+    if (!background) return style + "background:#0f172a;";
     if (background.kind === "image" && background.image) {
       const size = background.fit === "stretch" ? "100% 100%" : background.fit;
-      return `background-color:${background.color || "#0f172a"};background-image:url("${cssUrl(background.image)}");background-size:${size};background-position:center;background-repeat:no-repeat;`;
+      return style + `background-color:${background.color || "#0f172a"};background-image:url("${cssUrl(background.image)}");background-size:${size};background-position:center;background-repeat:no-repeat;`;
     }
-    return `background:${background.color || "#0f172a"};`;
+    return style + `background:${background.color || "#0f172a"};`;
+  });
+
+  $effect(() => {
+    if (preview && host && activeLayout) {
+      const parent = host.parentElement;
+      if (!parent) return;
+      const observer = new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          const width = entry.contentRect.width || entry.target.clientWidth;
+          if (width > 0 && activeLayout.width > 0) {
+            previewScale = width / activeLayout.width;
+          }
+        }
+      });
+      observer.observe(parent);
+      return () => observer.disconnect();
+    }
   });
 
   $effect(() => {

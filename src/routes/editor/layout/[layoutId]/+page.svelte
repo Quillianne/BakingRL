@@ -1,10 +1,9 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { invoke } from "@tauri-apps/api/core";
-  import { listen } from "@tauri-apps/api/event";
   import ConfirmDialog from "$lib/ConfirmDialog.svelte";
   import InstanceSettingsForm from "$lib/InstanceSettingsForm.svelte";
   import OverlayRenderer from "$lib/OverlayRenderer.svelte";
+  import { adapter } from "$lib/adapter/index";
   import { RL_TELEMETRY_EVENT_NAMES, telemetryFrameTemplate, type RlTelemetryEventName } from "$lib/rlTelemetry";
 
   const { data } = $props();
@@ -74,6 +73,17 @@
     changed: boolean;
   };
 
+  type PanState = {
+    startPointer: { x: number; y: number };
+    startPan: { x: number; y: number };
+  };
+
+  type ContextMenuState = {
+    itemId: string;
+    x: number;
+    y: number;
+  };
+
   type ConfirmRequest = {
     title: string;
     message: string;
@@ -85,8 +95,8 @@
   let overlayLayouts = $state<OverlayLayoutCatalog | null>(null);
   let selectedItemId = $state("");
   let activeLayerId = $state("");
-  let panelX = $state(24);
-  let panelY = $state(24);
+  let loaded = $state(false);
+  let loadError = $state("");
   let snapEnabled = $state(true);
   let gridSize = $state(20);
   let visualSearch = $state("");
@@ -94,8 +104,15 @@
   let mockEvent = $state<{ id: number; event: unknown } | null>(null);
   let stage = $state<HTMLElement>();
   let dragState = $state<DragState | null>(null);
+  let panState = $state<PanState | null>(null);
+  let contextMenu = $state<ContextMenuState | null>(null);
+  let snapGuides = $state<{ x: number | null; y: number | null }>({ x: null, y: null });
   let confirmRequest = $state<ConfirmRequest | null>(null);
   let layoutRevision = $state(0);
+  let zoom = $state(0.48);
+  let panX = $state(0);
+  let panY = $state(0);
+  let dragLayerId = $state("");
 
   // Accordion state
   let showVisuals = $state(false);
@@ -136,22 +153,35 @@
   });
 
   async function refresh() {
-    packages = await invoke<PackageDescriptor[]>("list_packages");
-    overlayLayouts = await invoke<OverlayLayoutCatalog>("get_overlay_layouts");
+    loadError = "";
+    try {
+      [packages, overlayLayouts] = await Promise.all([
+        adapter.invoke<PackageDescriptor[]>("list_packages"),
+        adapter.invoke<OverlayLayoutCatalog>("get_overlay_layouts")
+      ]);
+    } catch (error) {
+      loadError = error instanceof Error ? error.message : String(error);
+    } finally {
+      loaded = true;
+    }
   }
 
   async function save(layoutToSave = layout) {
     if (!layoutToSave) return;
     reindexLayers(layoutToSave);
-    overlayLayouts = await invoke<OverlayLayoutCatalog>("save_overlay_layout", { layout: layoutToSave });
-    message = "Saved.";
-    setTimeout(() => (message = ""), 2000);
+    try {
+      overlayLayouts = await adapter.invoke<OverlayLayoutCatalog>("save_overlay_layout", { layout: layoutToSave });
+      message = "Saved.";
+      setTimeout(() => (message = ""), 2000);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
   }
 
   function sortedLayers(layout: OverlayLayout) {
     return [...layout.layers].sort((a, b) => {
-      if (a.kind === "event" && b.kind !== "event") return 1;
-      if (a.kind !== "event" && b.kind === "event") return -1;
+      if (a.kind === "event" && b.kind !== "event") return -1;
+      if (a.kind !== "event" && b.kind === "event") return 1;
       return a.order - b.order;
     });
   }
@@ -238,6 +268,26 @@
     void save();
   }
 
+  function startLayerDrag(layer: OverlayLayer) {
+    if (layer.kind === "event") return;
+    dragLayerId = layer.id;
+  }
+
+  function dropLayer(target: OverlayLayer) {
+    if (!layout || !dragLayerId || target.kind === "event" || dragLayerId === target.id) return;
+    const normals = sortedLayers(layout).filter((layer) => layer.kind === "normal");
+    const draggedIndex = normals.findIndex((layer) => layer.id === dragLayerId);
+    const targetIndex = normals.findIndex((layer) => layer.id === target.id);
+    if (draggedIndex < 0 || targetIndex < 0) return;
+    const [dragged] = normals.splice(draggedIndex, 1);
+    normals.splice(targetIndex, 0, dragged);
+    normals.forEach((layer, index) => {
+      layer.order = index;
+    });
+    dragLayerId = "";
+    void save();
+  }
+
   function addVisual(ref: string) {
     if (!layout || !activeLayer || !ref) return;
     const selected = visualExports.find((entry) => entry.ref === ref);
@@ -296,9 +346,10 @@
 
   async function closeEditor() {
     try {
-      await invoke("close_overlay_editor");
+      await adapter.invoke("close_overlay_editor");
     } catch (error) {
       message = String(error);
+      window.location.href = "/overlays";
     }
   }
 
@@ -342,6 +393,10 @@
     }
     item.x = snapValue(item.x, xCandidates);
     item.y = snapValue(item.y, yCandidates);
+    snapGuides = {
+      x: Math.abs(item.x - (layout.width / 2 - item.width / 2)) <= 0.1 ? layout.width / 2 : null,
+      y: Math.abs(item.y - (layout.height / 2 - item.height / 2)) <= 0.1 ? layout.height / 2 : null
+    };
   }
 
   function allItems() {
@@ -365,10 +420,47 @@
     `;
   }
 
+  function canvasStyle() {
+    if (!layout) return "";
+    return `width:${layout.width}px;height:${layout.height}px;transform:translate(${panX}px, ${panY}px) scale(${zoom});`;
+  }
+
+  function guideStyle(axis: "x" | "y", value: number | null) {
+    if (!layout || value === null) return "";
+    return axis === "x" ? `left:${(value / layout.width) * 100}%;` : `top:${(value / layout.height) * 100}%;`;
+  }
+
+  function setZoom(nextZoom: number) {
+    zoom = Math.max(0.12, Math.min(1.5, nextZoom));
+  }
+
+  function resetViewport() {
+    zoom = 0.48;
+    panX = 0;
+    panY = 0;
+  }
+
+  function handleWheel(event: WheelEvent) {
+    event.preventDefault();
+    const direction = event.deltaY > 0 ? -0.05 : 0.05;
+    setZoom(zoom + direction);
+  }
+
+  function startPan(event: PointerEvent) {
+    if (event.button !== 1 && !event.altKey) return;
+    event.preventDefault();
+    panState = {
+      startPointer: { x: event.clientX, y: event.clientY },
+      startPan: { x: panX, y: panY }
+    };
+    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+  }
+
   function startDrag(event: PointerEvent, item: OverlayItem, mode: "move" | "resize") {
     const entry = findItem(item.id);
     event.stopPropagation();
     event.preventDefault();
+    contextMenu = null;
     if (!entry) return;
     selectedItemId = item.id;
     activeLayerId = entry.layer.id;
@@ -389,6 +481,11 @@
   }
 
   function pointerMove(event: PointerEvent) {
+    if (panState) {
+      panX = panState.startPan.x + event.clientX - panState.startPointer.x;
+      panY = panState.startPan.y + event.clientY - panState.startPointer.y;
+      return;
+    }
     if (!dragState || !layout) return;
     const entry = findItem(dragState.itemId);
     if (!entry) return;
@@ -411,44 +508,73 @@
   }
 
   function pointerUp() {
+    if (panState) {
+      panState = null;
+      return;
+    }
     if (!dragState) return;
     const shouldSave = dragState.changed;
     dragState = null;
+    snapGuides = { x: null, y: null };
     if (shouldSave) void save();
+  }
+
+  function openContextMenu(event: MouseEvent, item: OverlayItem) {
+    event.preventDefault();
+    event.stopPropagation();
+    selectedItemId = item.id;
+    contextMenu = { itemId: item.id, x: event.clientX, y: event.clientY };
+  }
+
+  function contextMenuStyle() {
+    if (!contextMenu) return "";
+    return `left:${contextMenu.x}px;top:${contextMenu.y}px;`;
+  }
+
+  function toggleSelectedLock() {
+    if (!selectedEntry) return;
+    selectedEntry.item.locked = !selectedEntry.item.locked;
+    contextMenu = null;
+    void save();
+  }
+
+  function toggleSelectedVisible() {
+    if (!selectedEntry) return;
+    selectedEntry.item.visible = !selectedEntry.item.visible;
+    contextMenu = null;
+    void save();
+  }
+
+  function bringSelectedForward() {
+    if (!selectedEntry) return;
+    selectedEntry.item.z_index = Math.max(0, ...allItems().map((entry) => entry.item.z_index)) + 1;
+    contextMenu = null;
+    void save();
+  }
+
+  function sendSelectedBackward() {
+    if (!selectedEntry) return;
+    selectedEntry.item.z_index = Math.min(0, ...allItems().map((entry) => entry.item.z_index)) - 1;
+    contextMenu = null;
+    void save();
   }
 
   function fireMock(eventName: RlTelemetryEventName) {
     mockEvent = { id: Date.now(), event: telemetryFrameTemplate(eventName) };
   }
 
-  function dragPanel(event: PointerEvent) {
-    const startX = event.clientX - panelX;
-    const startY = event.clientY - panelY;
-    const target = event.currentTarget as HTMLElement;
-    target.setPointerCapture(event.pointerId);
-    const move = (moveEvent: PointerEvent) => {
-      panelX = Math.max(8, moveEvent.clientX - startX);
-      panelY = Math.max(8, moveEvent.clientY - startY);
-    };
-    const up = () => {
-      target.removeEventListener("pointermove", move);
-      target.removeEventListener("pointerup", up);
-    };
-    target.addEventListener("pointermove", move);
-    target.addEventListener("pointerup", up);
-  }
-
   onMount(() => {
     void refresh();
     let unlistenOverlays: (() => void) | undefined;
     let unlistenPackages: (() => void) | undefined;
-    void listen<OverlayLayoutCatalog>("bakingrl-overlay-layouts-changed", (event) => {
-      overlayLayouts = event.payload;
+    void adapter.listen<OverlayLayoutCatalog>("bakingrl-overlay-layouts-changed", (payload) => {
+      overlayLayouts = payload;
+      loaded = true;
     }).then((unlisten) => {
       unlistenOverlays = unlisten;
     });
-    void listen<PackageDescriptor[]>("bakingrl-packages-changed", (event) => {
-      packages = event.payload;
+    void adapter.listen<PackageDescriptor[]>("bakingrl-packages-changed", (payload) => {
+      packages = payload;
     }).then((unlisten) => {
       unlistenPackages = unlisten;
     });
@@ -471,10 +597,11 @@
   />
 
   {#if layout}
-    <section class="stage-wrap">
+    <section class="stage-wrap" role="application" aria-label="Layout editor canvas" onwheel={handleWheel} onpointerdown={startPan}>
       <div
         class="stage checkerboard"
         bind:this={stage}
+        style={canvasStyle()}
       >
         <OverlayRenderer layoutId={layout.id} layoutOverride={layout} {layoutRevision} mode="editor" {mockEvent} />
         <div class="frames">
@@ -488,6 +615,7 @@
               tabindex="0"
               style={itemStyle(entry.item)}
               onpointerdown={(event) => startDrag(event, entry.item, "move")}
+              oncontextmenu={(event) => openContextMenu(event, entry.item)}
               title={entry.item.name}
             >
               <div class="frame-label">
@@ -503,11 +631,17 @@
             </div>
           {/each}
         </div>
+        {#if snapGuides.x !== null}
+          <div class="snap-guide vertical" style={guideStyle("x", snapGuides.x)}></div>
+        {/if}
+        {#if snapGuides.y !== null}
+          <div class="snap-guide horizontal" style={guideStyle("y", snapGuides.y)}></div>
+        {/if}
       </div>
     </section>
 
-    <aside class="editor-panel glass" style={`left:${panelX}px;top:${panelY}px;`}>
-      <header role="button" tabindex="0" onpointerdown={dragPanel} class="drag-header">
+    <aside class="editor-panel glass">
+      <header class="drag-header">
         <div class="header-title">
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
           <strong>{layout.name}</strong>
@@ -516,6 +650,13 @@
           {#if message}
             <span class="status-msg">{message}</span>
           {/if}
+          <button class="icon-btn" onclick={() => setZoom(zoom - 0.08)} title="Zoom out">
+            <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><path d="M8 11h6"></path><path d="m21 21-4.3-4.3"></path></svg>
+          </button>
+          <button class="zoom-readout" onclick={resetViewport}>{Math.round(zoom * 100)}%</button>
+          <button class="icon-btn" onclick={() => setZoom(zoom + 0.08)} title="Zoom in">
+            <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><path d="M8 11h6"></path><path d="M11 8v6"></path><path d="m21 21-4.3-4.3"></path></svg>
+          </button>
           <button class="icon-btn close-btn" onclick={() => void closeEditor()} title="Close Editor">
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
           </button>
@@ -523,6 +664,7 @@
       </header>
 
       <div class="panel-content">
+        <div class="side-panel left">
         <!-- Visuals Library -->
         <section class="accordion">
           <button class="accordion-header" onclick={() => showVisuals = !showVisuals}>
@@ -561,6 +703,9 @@
               <h2>Layers</h2>
             </button>
             <div class="header-actions">
+              <button class="icon-btn add-layer-btn event-add" onclick={() => addLayer("event")} title="Add Event Layer" disabled={layout.layers.some((layer) => layer.kind === "event")}>
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+              </button>
               <button class="icon-btn add-layer-btn" onclick={() => addLayer("normal")} title="Add Layer">
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
               </button>
@@ -570,7 +715,15 @@
             <div class="accordion-body">
               <div class="list layer-list">
                 {#each layers as layer}
-                  <div class:active={activeLayerId === layer.id} class="layer-row {layer.kind}">
+                  <div
+                    class:active={activeLayerId === layer.id}
+                    class="layer-row {layer.kind}"
+                    role="listitem"
+                    draggable={layer.kind !== "event"}
+                    ondragstart={() => startLayerDrag(layer)}
+                    ondragover={(event) => event.preventDefault()}
+                    ondrop={() => dropLayer(layer)}
+                  >
                     <button class="layer-select" onclick={() => (activeLayerId = layer.id)} title="Select Layer">
                       <div class="layer-indicator"></div>
                     </button>
@@ -617,7 +770,9 @@
             </div>
           {/if}
         </section>
+        </div>
 
+        <div class="side-panel right">
         <!-- Selected Item Properties -->
         <section class="accordion">
           <button class="accordion-header" onclick={() => showSettings = !showSettings}>
@@ -726,9 +881,34 @@
             </div>
           {/if}
         </section>
-
+        </div>
       </div>
+
     </aside>
+    {#if contextMenu && selectedEntry}
+      <div class="context-menu" style={contextMenuStyle()} role="menu">
+        <button role="menuitem" onclick={duplicateSelected}>Duplicate</button>
+        <button role="menuitem" onclick={toggleSelectedLock}>{selectedEntry.item.locked ? "Unlock" : "Lock"}</button>
+        <button role="menuitem" onclick={toggleSelectedVisible}>{selectedEntry.item.visible ? "Hide" : "Show"}</button>
+        <button role="menuitem" onclick={bringSelectedForward}>Bring forward</button>
+        <button role="menuitem" onclick={sendSelectedBackward}>Send backward</button>
+        <button role="menuitem" class="danger" onclick={deleteSelected}>Delete</button>
+      </div>
+    {/if}
+  {:else if loadError}
+    <div class="loading-state error-state">
+      <p>Unable to load layout.</p>
+      <pre>{loadError}</pre>
+      <button class="btn-secondary" onclick={() => void refresh()}>Retry</button>
+    </div>
+  {:else if loaded}
+    <div class="loading-state error-state">
+      <p>Layout not found: {data.layoutId}</p>
+      {#if overlayLayouts?.layouts.length}
+        <pre>Available layouts: {overlayLayouts.layouts.map((entry) => entry.id).join(", ")}</pre>
+      {/if}
+      <button class="btn-secondary" onclick={() => void refresh()}>Retry</button>
+    </div>
   {:else}
     <div class="loading-state">
       <div class="spinner"></div>
@@ -1211,4 +1391,212 @@
   }
   @keyframes spin { to { transform: rotate(360deg); } }
   @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+  /* Studio editor shell */
+  .stage-wrap {
+    position: absolute;
+    inset: 48px 0 0 0 !important;
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+    background:
+      radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--text-muted) 28%, transparent) 1px, transparent 0),
+      var(--editor-bg-dark);
+    background-size: 24px 24px;
+    cursor: default;
+    padding: 24px 348px 24px 292px; /* fallback padding */
+  }
+
+  .stage {
+    width: auto;
+    height: auto;
+    flex: none;
+    transform-origin: center center;
+    background-color: color-mix(in srgb, var(--bg-dark) 35%, transparent);
+    outline: 1px solid var(--border-color-focus);
+    box-shadow: 0 24px 80px color-mix(in srgb, var(--bg-dark) 70%, transparent);
+  }
+
+  .stage.checkerboard::before {
+    background-image:
+      linear-gradient(color-mix(in srgb, var(--text-muted) 18%, transparent) 1px, transparent 1px),
+      linear-gradient(90deg, color-mix(in srgb, var(--text-muted) 18%, transparent) 1px, transparent 1px);
+    background-size: 40px 40px;
+    background-position: 0 0;
+  }
+
+  .editor-panel {
+    inset: 0 !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100vw !important;
+    max-height: none;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
+    pointer-events: none;
+  }
+
+  .drag-header {
+    position: fixed;
+    inset: 0 0 auto 0;
+    z-index: 700;
+    height: 48px;
+    padding: 0 12px;
+    border-radius: 0;
+    background: var(--editor-bg-panel);
+    cursor: default;
+    pointer-events: auto;
+  }
+
+  .panel-content {
+    position: absolute;
+    inset: 48px 0 0 0;
+    display: flex;
+    justify-content: space-between;
+    padding: 12px;
+    box-sizing: border-box;
+    pointer-events: none;
+    z-index: 600;
+  }
+
+  .side-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: 280px;
+    max-height: 100%;
+    pointer-events: none;
+  }
+
+  .side-panel.right {
+    width: 336px;
+  }
+
+  .accordion {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    max-height: 100%;
+    overflow: hidden;
+    border-color: var(--border-color);
+    background: var(--editor-bg-panel);
+    pointer-events: auto;
+  }
+
+  /* Make layers and properties take remaining height if needed */
+  .side-panel.left .accordion:nth-child(2),
+  .side-panel.right .accordion:nth-child(1) {
+    flex: 1;
+    min-height: 0;
+  }
+
+  .accordion-body {
+    overflow-y: auto;
+  }
+
+  .layer-row.event {
+    border-color: color-mix(in srgb, var(--warn) 48%, transparent);
+    background: color-mix(in srgb, var(--warn) 10%, transparent);
+  }
+
+  .layer-row[draggable="true"] {
+    cursor: grab;
+  }
+
+  .event-add {
+    color: var(--warn);
+  }
+
+  .zoom-readout {
+    min-width: 54px;
+    height: 28px;
+    padding: 0 8px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--bg-dark) 35%, transparent);
+    color: var(--text-secondary);
+    font-size: 12px;
+  }
+
+  .snap-guide {
+    position: absolute;
+    z-index: 130;
+    background: var(--accent);
+    pointer-events: none;
+    box-shadow: 0 0 12px var(--accent);
+  }
+
+  .snap-guide.vertical {
+    top: 0;
+    bottom: 0;
+    width: 1px;
+  }
+
+  .snap-guide.horizontal {
+    right: 0;
+    left: 0;
+    height: 1px;
+  }
+
+  .context-menu {
+    position: fixed;
+    z-index: 900;
+    display: flex;
+    min-width: 180px;
+    flex-direction: column;
+    gap: 2px;
+    padding: 6px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--editor-bg-panel);
+    box-shadow: 0 18px 48px color-mix(in srgb, var(--bg-dark) 72%, transparent);
+  }
+
+  .context-menu button {
+    justify-content: flex-start;
+    padding: 8px 10px;
+    border: 0;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 13px;
+    text-align: left;
+  }
+
+  .context-menu button:hover {
+    background: var(--editor-bg-panel-hover);
+    color: var(--text-primary);
+  }
+
+  .context-menu button.danger {
+    color: var(--danger);
+  }
+
+  @media (max-width: 980px) {
+    .stage-wrap {
+      inset: 48px 0 42vh 0 !important;
+      padding: 24px;
+    }
+
+    .panel-content {
+      top: auto;
+      bottom: 0;
+      height: 42vh;
+      flex-direction: row;
+      background: var(--editor-bg-panel);
+      pointer-events: auto;
+    }
+
+    .side-panel {
+      width: 50% !important;
+      height: 100%;
+    }
+
+    .accordion {
+      max-height: 100%;
+    }
+  }
 </style>
