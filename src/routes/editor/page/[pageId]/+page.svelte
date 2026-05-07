@@ -797,7 +797,7 @@
   main {
     position: relative;
     width: 100vw;
-    height: 100vh;
+    height: var(--app-content-height, 100vh);
     overflow: hidden;
     color: var(--text-primary);
     background: var(--editor-bg-dark);

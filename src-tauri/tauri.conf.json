@@ -20,7 +20,8 @@
         "height": 820,
         "minWidth": 1024,
         "minHeight": 700,
-        "center": true
+        "center": true,
+        "decorations": false
       },
       {
         "title": "BakingRL Overlay",

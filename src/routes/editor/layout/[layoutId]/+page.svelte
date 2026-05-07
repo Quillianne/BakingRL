@@ -899,7 +899,7 @@
   .layout-editor-page {
     width: 100vw;
     min-width: 0;
-    height: 100vh;
+    height: var(--app-content-height, 100vh);
     min-height: 0;
     overflow: hidden;
     position: relative;
@@ -1033,7 +1033,7 @@
     position: absolute;
     z-index: 500;
     width: 320px;
-    max-height: calc(100vh - 48px);
+    max-height: calc(var(--app-content-height, 100vh) - 48px);
     display: flex;
     flex-direction: column;
     border: 1px solid var(--border-color);

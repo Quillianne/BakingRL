@@ -127,7 +127,7 @@
 
   main {
     width: 100vw;
-    height: 100vh;
+    height: var(--app-content-height, 100vh);
     display: grid;
     grid-template-rows: 48px minmax(0, 1fr);
     color: var(--text-primary);

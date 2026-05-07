@@ -201,7 +201,7 @@
     position: relative;
     width: 100vw;
     min-width: 0;
-    height: 100vh;
+    height: var(--app-content-height, 100vh);
     min-height: 0;
     overflow: hidden;
     color: var(--text-primary);
@@ -396,7 +396,7 @@
 
   .side-panel.properties-side :global(.accordion > .accordion-body) {
     min-height: 0;
-    max-height: calc(100vh - 132px);
+    max-height: calc(var(--app-content-height, 100vh) - 132px);
   }
 
   .side-panel :global(.accordion) {
