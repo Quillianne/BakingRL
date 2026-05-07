@@ -108,7 +108,24 @@
           <article class="studio-card package-card" class:disabled={!dashboard.isPackageEnabled(pkg)}>
             <div class="package-head">
               <div class="package-meta">
-                <h3>{pkg.name}</h3>
+                <div class="package-title-row">
+                  <h3>{pkg.name}</h3>
+                  <button
+                    class="icon-button danger"
+                    onclick={() => dashboard.removePackage(pkg)}
+                    disabled={dashboard.busy}
+                    title={dashboard.t("common.remove")}
+                    aria-label={dashboard.t("common.remove")}
+                  >
+                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M3 6h18"></path>
+                      <path d="M8 6V4h8v2"></path>
+                      <path d="M19 6l-1 14H6L5 6"></path>
+                      <path d="M10 11v5"></path>
+                      <path d="M14 11v5"></path>
+                    </svg>
+                  </button>
+                </div>
                 <p>{dashboard.t("packages.by")} {pkg.author ?? dashboard.t("packages.unknownAuthor")} · v{pkg.version}</p>
               </div>
             </div>
@@ -144,9 +161,6 @@
                 disabled={dashboard.busy || dashboard.isPackageTogglePending(pkg)}
               >
                 {dashboard.isPackageToggleButtonEnabled(pkg) ? dashboard.t("common.disable") : dashboard.t("common.enable")}
-              </button>
-              <button class="btn-danger" onclick={() => dashboard.removePackage(pkg)} disabled={dashboard.busy}>
-                {dashboard.t("common.remove")}
               </button>
             </div>
           </article>

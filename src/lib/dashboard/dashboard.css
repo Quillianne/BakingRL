@@ -745,6 +745,25 @@ pre {
   gap: 5px;
 }
 
+.package-title-row {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+}
+
+.package-title-row h3 {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.package-title-row .icon-button {
+  width: 28px;
+  height: 28px;
+  border-color: transparent;
+}
+
 .package-id {
   color: var(--text-muted);
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
@@ -1231,22 +1250,101 @@ pre {
   overflow: hidden;
 }
 
-.developer-column .developer-panel {
-  flex: 1 1 0;
-}
-
-.developer-tools-column .developer-send-panel {
-  flex: 0 0 auto;
-}
-
 .developer-panel-body {
   min-height: 0;
   overflow: auto;
 }
 
+.developer-tools-column .developer-tool-panel {
+  flex: 0 0 auto;
+  padding: 0;
+}
+
+.developer-tools-column .developer-tool-panel.active {
+  flex: 1 1 0;
+}
+
+.developer-tool-heading {
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+}
+
+.developer-tool-panel.active .developer-tool-heading {
+  border-bottom: 1px solid var(--border-color);
+}
+
+.developer-tool-toggle {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 9px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.developer-tool-toggle svg {
+  flex: none;
+  color: var(--text-secondary);
+  transition: transform 0.2s ease;
+}
+
+.developer-tool-toggle svg.rotated {
+  transform: rotate(90deg);
+}
+
+.developer-tool-toggle span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.developer-tool-toggle strong {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.developer-tool-toggle small {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.developer-tool-toggle:hover svg,
+.developer-tool-toggle:hover strong {
+  color: var(--accent);
+}
+
+.developer-tool-panel .developer-panel-body {
+  padding: 12px;
+}
+
 .developer-send-panel .developer-panel-body {
   display: flex;
   flex-direction: column;
+}
+
+.developer-telemetry-panel .inline-actions,
+.developer-telemetry-panel .badge-row {
+  flex: none;
+  flex-wrap: nowrap;
+}
+
+.developer-telemetry-panel .badge-row button {
+  flex: none;
+  white-space: nowrap;
 }
 
 .telemetry-event,
@@ -1333,6 +1431,81 @@ pre {
 
 .dialog-summary {
   flex: none;
+}
+
+.json-frame-editor {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-dark) 34%, transparent);
+  color: var(--text-secondary);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.json-line {
+  display: flex;
+  min-width: 0;
+  min-height: 28px;
+  align-items: center;
+  gap: 3px;
+  padding-left: calc(var(--json-depth) * 18px);
+}
+
+.json-key {
+  flex: none;
+  color: var(--accent);
+}
+
+.json-punctuation,
+.json-string-quote {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.json-readonly-value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+}
+
+.json-value-input {
+  width: auto;
+  min-width: 0;
+  max-width: min(320px, 100%);
+  height: 26px;
+  padding: 3px 7px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-panel-hover) 55%, transparent);
+  color: var(--text-primary);
+  font: inherit;
+  line-height: 1;
+}
+
+.json-value-input.string {
+  flex: 1 1 180px;
+  min-width: 96px;
+}
+
+.json-value-input.number {
+  flex: 0 1 132px;
+}
+
+.json-value-input.boolean {
+  flex: 0 0 auto;
+  min-width: 86px;
+}
+
+.json-value-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 .typed-field-grid {
