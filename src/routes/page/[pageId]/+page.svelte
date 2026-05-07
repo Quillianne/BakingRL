@@ -1,9 +1,9 @@
 <script lang="ts">
   import { goto } from "$app/navigation";
-  import { onDestroy, onMount } from "svelte";
+  import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
-  import { getCurrentWindow, LogicalSize, PhysicalSize } from "@tauri-apps/api/window";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import OverlayRenderer from "$lib/OverlayRenderer.svelte";
   import {
     consumePendingRouteReturn,
@@ -29,16 +29,11 @@
 
   let pages = $state<PagesFile | null>(null);
   let message = $state("");
-  let resizedPageSignature = $state("");
   let pageReturnState = $state<RouteReturnState>({ returnTo: "/", scrollY: 0 });
   let pageReturnInitialized = $state(false);
 
   const page = $derived(pages?.pages.find((entry) => entry.id === data.pageId) ?? null);
   const routePageReturnState = $derived(routeReturnFromParams(data.returnTo, data.scrollY, "/"));
-  const MAIN_WINDOW_SIZE_KEY = "bakingrl.mainWindowBeforeInAppPage";
-  const PAGE_TOOLBAR_HEIGHT = 48;
-  const MAIN_MIN_WIDTH = 1024;
-  const MAIN_MIN_HEIGHT = 700;
 
   async function refresh() {
     pages = await invoke<PagesFile>("get_pages");
@@ -51,7 +46,6 @@
         await current.close();
         return;
       }
-      await restoreMainWindowSize();
     } catch {
       // Browser/dev fallback navigates back to the dashboard.
     }
@@ -60,7 +54,6 @@
   }
 
   async function editPage() {
-    await restoreMainWindowSize();
     const pageUrl = `/page/${encodeURIComponent(data.pageId)}${returnStateQuery(pageReturnState)}`;
     await navigateTo(`/editor/page/${encodeURIComponent(data.pageId)}${returnStateQuery({ returnTo: pageUrl, scrollY: 0 })}`);
   }
@@ -72,54 +65,6 @@
       window.location.href = path;
     }
   }
-
-  async function fitMainWindowToPage(entry: PageLayout) {
-    try {
-      const current = getCurrentWindow();
-      if (current.label !== "main") return;
-      const signature = pageResizeSignature(entry);
-
-      if (!sessionStorage.getItem(MAIN_WINDOW_SIZE_KEY)) {
-        const size = await current.innerSize();
-        sessionStorage.setItem(MAIN_WINDOW_SIZE_KEY, JSON.stringify({ width: size.width, height: size.height }));
-      }
-
-      const width = Math.max(320, Math.round(entry.width));
-      const height = Math.max(240, Math.round(entry.height)) + PAGE_TOOLBAR_HEIGHT;
-      await current.setMinSize(new LogicalSize(320, 260));
-      await current.setSize(new LogicalSize(width, height));
-      resizedPageSignature = signature;
-    } catch {
-      // Browser/dev fallback keeps the current window size.
-    }
-  }
-
-  function pageResizeSignature(entry: PageLayout) {
-    return `${entry.id}:${Math.round(entry.width)}:${Math.round(entry.height)}`;
-  }
-
-  async function restoreMainWindowSize() {
-    try {
-      const current = getCurrentWindow();
-      if (current.label !== "main") return;
-      const raw = sessionStorage.getItem(MAIN_WINDOW_SIZE_KEY);
-      if (!raw) return;
-      const size = JSON.parse(raw) as { width?: number; height?: number };
-      await current.setMinSize(new LogicalSize(MAIN_MIN_WIDTH, MAIN_MIN_HEIGHT));
-      if (typeof size.width === "number" && typeof size.height === "number") {
-        await current.setSize(new PhysicalSize(size.width, size.height));
-      }
-      sessionStorage.removeItem(MAIN_WINDOW_SIZE_KEY);
-    } catch {
-      // Browser/dev fallback has no native window to restore.
-    }
-  }
-
-  $effect(() => {
-    if (page && pageResizeSignature(page) !== resizedPageSignature) {
-      void fitMainWindowToPage(page);
-    }
-  });
 
   $effect(() => {
     if (pageReturnInitialized) return;
@@ -144,10 +89,6 @@
     return () => {
       unlistenPages?.();
     };
-  });
-
-  onDestroy(() => {
-    void restoreMainWindowSize();
   });
 </script>
 
