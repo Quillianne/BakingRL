@@ -214,6 +214,8 @@ const en = {
 
   "settings.appearance": "Appearance",
   "settings.appearanceDesc": "Theme, language and interface style",
+  "settings.general": "General",
+  "settings.generalDesc": "Application launch and window behavior",
   "settings.telemetry": "Telemetry",
   "settings.telemetryDesc": "Rocket League connection",
   "settings.overlay": "Overlay",
@@ -505,6 +507,8 @@ const fr: Record<TranslationKey, string> = {
 
   "settings.appearance": "Apparence",
   "settings.appearanceDesc": "Thème, langue et style d'interface",
+  "settings.general": "Général",
+  "settings.generalDesc": "Démarrage et comportement de fenêtre",
   "settings.telemetry": "Telemetry",
   "settings.telemetryDesc": "Connexion Rocket League",
   "settings.overlay": "Overlay",

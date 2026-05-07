@@ -1595,6 +1595,15 @@ pre {
   text-align: left;
 }
 
+.telemetry-settings-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) max-content;
+  align-items: end;
+}
+
+.telemetry-save-group {
+  flex: none;
+}
+
 .theme-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -1959,6 +1968,7 @@ code {
   }
 
   .three-col,
+  .telemetry-settings-grid,
   .metric-grid,
   .package-detail-summary {
     grid-template-columns: 1fr;

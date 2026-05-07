@@ -5,7 +5,7 @@
 
   const dashboard = getDashboardContext();
 
-  let section = $state<"appearance" | "telemetry" | "overlay">("appearance");
+  let section = $state<"general" | "appearance" | "telemetry" | "overlay">("general");
 </script>
 
 <div class="page-title">
@@ -18,6 +18,9 @@
 {#if dashboard.appSettings}
   <div class="settings-layout">
     <nav class="studio-panel settings-nav" aria-label={dashboard.t("nav.settings")}>
+      <button class="btn-outline" class:active={section === "general"} onclick={() => (section = "general")}>
+        {dashboard.t("settings.general")}
+      </button>
       <button class="btn-outline" class:active={section === "appearance"} onclick={() => (section = "appearance")}>
         {dashboard.t("settings.appearance")}
       </button>
@@ -30,7 +33,38 @@
     </nav>
 
     <section class="studio-panel">
-      {#if section === "appearance"}
+      {#if section === "general"}
+        <div class="panel-heading">
+          <div>
+            <h2>{dashboard.t("settings.general")}</h2>
+            <p>{dashboard.t("settings.generalDesc")}</p>
+          </div>
+        </div>
+
+        <div class="section-stack">
+          <label class="check-row">
+            <input type="checkbox" bind:checked={dashboard.appSettings.behavior.start_minimized} />
+            <span></span>
+            {dashboard.t("settings.startMinimized")}
+          </label>
+          <label class="check-row">
+            <input type="checkbox" bind:checked={dashboard.appSettings.behavior.close_will_hide} />
+            <span></span>
+            {dashboard.t("settings.closeMinimized")}
+          </label>
+          <label class="check-row">
+            <input type="checkbox" bind:checked={dashboard.appSettings.behavior.launch_at_startup} />
+            <span></span>
+            {dashboard.t("settings.launchAtStartup")}
+          </label>
+
+          <div class="card-actions">
+            <button class="btn-primary" onclick={() => void dashboard.saveAppSettings()} disabled={dashboard.busy}>
+              {dashboard.t("common.saveSettings")}
+            </button>
+          </div>
+        </div>
+      {:else if section === "appearance"}
         <div class="panel-heading">
           <div>
             <h2>{dashboard.t("settings.appearance")}</h2>
@@ -90,7 +124,7 @@
           </div>
         </div>
 
-        <div class="studio-grid three-col">
+        <div class="studio-grid telemetry-settings-grid">
           <div class="input-group">
             <label for="telemetryHost">{dashboard.t("settings.host")}</label>
             <input id="telemetryHost" bind:value={dashboard.appSettings.telemetry.rocket_league_host} />
@@ -99,12 +133,12 @@
             <label for="telemetryPort">{dashboard.t("settings.port")}</label>
             <input id="telemetryPort" type="number" bind:value={dashboard.appSettings.telemetry.rocket_league_port} />
           </div>
-        </div>
-
-        <div class="card-actions">
-          <button class="btn-primary" onclick={() => void dashboard.saveAppSettings()} disabled={dashboard.busy}>
-            {dashboard.t("common.saveSettings")}
-          </button>
+          <div class="input-group telemetry-save-group">
+            <span class="field-label">&nbsp;</span>
+            <button class="btn-primary" onclick={() => void dashboard.saveAppSettings()} disabled={dashboard.busy}>
+              {dashboard.t("common.saveSettings")}
+            </button>
+          </div>
         </div>
       {:else}
         <div class="panel-heading">
@@ -153,28 +187,6 @@
             <input type="checkbox" bind:checked={dashboard.appSettings.overlay.hide_when_game_unfocused} />
             <span></span>
             {dashboard.t("settings.hideUnfocused")}
-          </label>
-
-          <div class="section-heading compact">
-            <div>
-              <h2>{dashboard.t("settings.applicationBehavior")}</h2>
-            </div>
-          </div>
-
-          <label class="check-row">
-            <input type="checkbox" bind:checked={dashboard.appSettings.behavior.start_minimized} />
-            <span></span>
-            {dashboard.t("settings.startMinimized")}
-          </label>
-          <label class="check-row">
-            <input type="checkbox" bind:checked={dashboard.appSettings.behavior.close_will_hide} />
-            <span></span>
-            {dashboard.t("settings.closeMinimized")}
-          </label>
-          <label class="check-row">
-            <input type="checkbox" bind:checked={dashboard.appSettings.behavior.launch_at_startup} />
-            <span></span>
-            {dashboard.t("settings.launchAtStartup")}
           </label>
 
           <div class="card-actions">
