@@ -243,11 +243,13 @@
     >
       <div class="modal-heading package-detail-heading">
         <div class="package-detail-heading-main">
-          <span class="status-pill {dashboard.isPackageEnabled(detailPackage) ? 'connected' : 'disconnected'}">
-            <span class="status-dot"></span>
-            {dashboard.isPackageEnabled(detailPackage) ? dashboard.t("common.enabled") : dashboard.t("common.disabled")}
-          </span>
-          <h2 id="package-detail-title">{detailPackage.name}</h2>
+          <div class="package-detail-title-row">
+            <h2 id="package-detail-title">{detailPackage.name}</h2>
+            <span class="status-pill {dashboard.isPackageEnabled(detailPackage) ? 'connected' : 'disconnected'}">
+              <span class="status-dot"></span>
+              {dashboard.isPackageEnabled(detailPackage) ? dashboard.t("common.enabled") : dashboard.t("common.disabled")}
+            </span>
+          </div>
           <p>v{detailPackage.version} · {dashboard.t("packages.by")} {detailPackage.author ?? dashboard.t("packages.unknownAuthor")}</p>
         </div>
         <button type="button" class="icon-button" aria-label={dashboard.t("common.cancel")} onclick={closePackageDetails}>

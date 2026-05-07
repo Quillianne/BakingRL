@@ -938,9 +938,26 @@ pre {
 .package-detail-heading-main {
   display: flex;
   min-width: 0;
+  flex: 1;
   flex-direction: column;
   align-items: flex-start;
   gap: 8px;
+}
+
+.package-detail-title-row {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.package-detail-title-row h2 {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .package-detail-heading-main p {
@@ -1942,6 +1959,15 @@ code {
 
   .package-detail-heading {
     align-items: stretch;
+  }
+
+  .package-detail-title-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .package-detail-title-row h2 {
+    white-space: normal;
   }
 
   .metric-cell {
