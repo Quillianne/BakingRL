@@ -461,6 +461,14 @@
   justify-content: flex-end;
 }
 
+.home-main-action {
+  flex: 1 1 auto;
+}
+
+.home-edit-action {
+  flex: none;
+}
+
 .thumb-preview {
   position: relative;
   height: 62px;

@@ -95,12 +95,12 @@
 <main>
   <header class="page-toolbar">
     <div class="page-title">
-      <button type="button" class="icon-btn" onclick={() => void closePage()} title="Close page">
-        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+      <button type="button" class="icon-btn" onclick={() => void closePage()} title="Retour" aria-label="Retour">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 19-7-7 7-7"></path><path d="M19 12H5"></path></svg>
       </button>
+      <button type="button" class="btn-primary" onclick={() => void editPage()}>Edit</button>
       <strong>{page?.name ?? "Page"}</strong>
     </div>
-    <button type="button" class="btn-primary" onclick={() => void editPage()}>Edit</button>
   </header>
 
   {#if page}
@@ -137,8 +137,8 @@
   .page-toolbar {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    padding: 0 14px;
+    justify-content: flex-start;
+    padding: 0 112px 0 14px;
     border-bottom: 1px solid var(--border-color);
     background: var(--editor-bg-panel);
   }

@@ -273,7 +273,7 @@ export class DashboardState {
   reconcilePackageToggles(packages: PackageDescriptor[]) {
     for (const [packageId, pending] of Object.entries(this.pendingPackageToggles)) {
       const actual = packages.find((pkg) => pkg.id === packageId);
-      if (!actual || actual.enabled === pending.enabled) {
+      if (!actual || actual.status === "deleting" || actual.enabled === pending.enabled) {
         this.clearPackageToggle(packageId);
       }
     }
@@ -333,6 +333,7 @@ export class DashboardState {
   }
 
   async togglePackage(pkg: PackageDescriptor) {
+    if (this.isPackageDeleting(pkg)) return;
     const previousEnabled = pkg.enabled;
     const nextEnabled = !previousEnabled;
     this.pendingPackageToggles = {
@@ -356,7 +357,7 @@ export class DashboardState {
   }
 
   isPackageEnabled(pkg: PackageDescriptor) {
-    return pkg.enabled;
+    return pkg.status !== "deleting" && pkg.enabled;
   }
 
   isPackageToggleButtonEnabled(pkg: PackageDescriptor) {
@@ -367,7 +368,26 @@ export class DashboardState {
     return Object.prototype.hasOwnProperty.call(this.pendingPackageToggles, pkg.id);
   }
 
+  isPackageDeleting(pkg: PackageDescriptor) {
+    return pkg.status === "deleting";
+  }
+
+  packageStateClass(pkg: PackageDescriptor) {
+    if (this.isPackageDeleting(pkg)) return "connecting";
+    return this.isPackageEnabled(pkg) ? "connected" : "disconnected";
+  }
+
+  packageStateLabel(pkg: PackageDescriptor) {
+    if (this.isPackageDeleting(pkg)) return this.t("common.deleting");
+    return this.isPackageEnabled(pkg) ? this.t("common.enabled") : this.t("common.disabled");
+  }
+
+  isPackageActionDisabled(pkg: PackageDescriptor) {
+    return this.busy || this.isPackageDeleting(pkg);
+  }
+
   removePackage(pkg: PackageDescriptor) {
+    if (this.isPackageDeleting(pkg)) return;
     this.askConfirmation({
       title: this.t("confirm.removePackageTitle"),
       message: this.tx("confirm.removePackageMessage", { name: pkg.name }),
@@ -378,18 +398,16 @@ export class DashboardState {
   }
 
   async removePackageConfirmed(pkg: PackageDescriptor) {
-    this.busy = true;
+    if (this.isPackageDeleting(pkg)) return;
     try {
       this.setPackagesFromBackend(
         await invoke<PackageDescriptor[]>("remove_package", {
           packageId: pkg.id
         })
       );
-      this.notify(this.t("msg.packageRemoved"), "success");
+      this.notify(this.t("msg.packageRemovalStarted"), "info");
     } catch (error) {
       this.notifyError(error);
-    } finally {
-      this.busy = false;
     }
   }
 

@@ -44,12 +44,20 @@ pub struct PackageDescriptor {
     pub version: String,
     pub author: Option<String>,
     pub enabled: bool,
+    pub status: PackageStatus,
     pub path: String,
     pub exports: PackageExportsDescriptor,
     pub imports: PackageImportsDescriptor,
     pub effective_permissions: EffectivePackagePermissionsV2,
     pub settings: Option<String>,
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PackageStatus {
+    Installed,
+    Deleting,
 }
 
 #[derive(Debug, Clone, serde::Serialize, Default)]
@@ -128,6 +136,16 @@ struct PackageRecord {
     manifest: PluginPackageManifestV2,
 }
 
+#[derive(Debug, Clone)]
+struct PendingPackageDeletion {
+    previous_enabled: bool,
+}
+
+struct PackageRemovalStart {
+    packages: Vec<PackageDescriptor>,
+    started: bool,
+}
+
 pub struct PluginHost {
     app_handle: AppHandle,
     bus: Arc<EventBus>,
@@ -139,6 +157,7 @@ pub struct PluginHost {
     app_settings_path: PathBuf,
     package_settings_path: PathBuf,
     records: Mutex<HashMap<String, PackageRecord>>,
+    deleting_packages: Mutex<HashMap<String, PendingPackageDeletion>>,
     service_runtimes: ServiceRuntimeManager,
     connector_runtimes: ConnectorRuntimeManager,
 }
@@ -171,6 +190,7 @@ impl PluginHost {
             app_settings_path: app_data.join("app_settings.json"),
             package_settings_path: app_data.join("package_settings.json"),
             records: Mutex::new(HashMap::new()),
+            deleting_packages: Mutex::new(HashMap::new()),
             service_runtimes: ServiceRuntimeManager::default(),
             connector_runtimes: ConnectorRuntimeManager::default(),
         })
@@ -218,6 +238,7 @@ impl PluginHost {
             .values()
             .map(|record| record.descriptor.clone())
             .collect();
+        self.apply_package_statuses(&mut packages);
         packages.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
         packages
     }
@@ -461,6 +482,10 @@ impl PluginHost {
         package_id: String,
         enabled: bool,
     ) -> Result<Vec<PackageDescriptor>, String> {
+        if self.is_package_deleting(&package_id) {
+            return Err(format!("Package '{package_id}' is being removed."));
+        }
+
         {
             let records = self.records.lock().unwrap();
             if !records.contains_key(&package_id) {
@@ -482,16 +507,86 @@ impl PluginHost {
         Ok(packages)
     }
 
-    pub fn remove_package(&self, package_id: String) -> Result<Vec<PackageDescriptor>, String> {
-        let target = safe_installed_package_dir(&self.packages_dir, &package_id)?;
+    fn begin_remove_package(&self, package_id: &str) -> Result<PackageRemovalStart, String> {
+        let target = safe_installed_package_dir(&self.packages_dir, package_id)?;
         if !target.exists() {
             return Err(format!("Package '{package_id}' is not installed."));
         }
-        fs::remove_dir_all(&target).map_err(|e| format!("Unable to remove package: {e}"))?;
+
+        let previous_enabled = {
+            let records = self.records.lock().unwrap();
+            let record = records
+                .get(package_id)
+                .ok_or_else(|| format!("Package '{package_id}' is not installed."))?;
+            record.descriptor.enabled
+        };
+
+        let mut deleting_packages = self.deleting_packages.lock().unwrap();
+        let started = if deleting_packages.contains_key(package_id) {
+            false
+        } else {
+            deleting_packages.insert(
+                package_id.to_string(),
+                PendingPackageDeletion { previous_enabled },
+            );
+            true
+        };
+        drop(deleting_packages);
+
+        let packages = self.list_packages();
+        self.emit_packages_changed(&packages);
+        Ok(PackageRemovalStart { packages, started })
+    }
+
+    fn remove_package_in_background(&self, package_id: String) {
+        let result = self.remove_package_files(&package_id);
+        match result {
+            Ok(()) => self.finish_package_removal(&package_id),
+            Err(error) => self.fail_package_removal(&package_id, &error),
+        }
+    }
+
+    fn remove_package_files(&self, package_id: &str) -> Result<(), String> {
         let mut state = self.load_state();
-        state.enabled.remove(&package_id);
+        state.enabled.insert(package_id.to_string(), false);
         self.save_state(&state)?;
-        Ok(self.reload_packages())
+        self.reload_packages();
+
+        let target = safe_installed_package_dir(&self.packages_dir, package_id)?;
+        if target.exists() {
+            fs::remove_dir_all(&target).map_err(|e| format!("Unable to remove package: {e}"))?;
+        }
+        Ok(())
+    }
+
+    fn finish_package_removal(&self, package_id: &str) {
+        let mut state = self.load_state();
+        state.enabled.remove(package_id);
+        if let Err(error) = self.save_state(&state) {
+            self.emit_package_operation_error(package_id, &error);
+        }
+        self.deleting_packages.lock().unwrap().remove(package_id);
+        self.reload_packages();
+    }
+
+    fn fail_package_removal(&self, package_id: &str, error: &str) {
+        let previous_enabled = self
+            .deleting_packages
+            .lock()
+            .unwrap()
+            .remove(package_id)
+            .map(|pending| pending.previous_enabled);
+        if let Some(previous_enabled) = previous_enabled {
+            let mut state = self.load_state();
+            state
+                .enabled
+                .insert(package_id.to_string(), previous_enabled);
+            if let Err(save_error) = self.save_state(&state) {
+                self.emit_package_operation_error(package_id, &save_error);
+            }
+        }
+        self.reload_packages();
+        self.emit_package_operation_error(package_id, error);
     }
 
     pub fn read_visual_export_source(
@@ -503,6 +598,9 @@ impl PluginHost {
         let record = records
             .get(package_id)
             .ok_or_else(|| format!("Package '{package_id}' is not installed."))?;
+        if self.is_package_deleting(package_id) {
+            return Err(format!("Package '{package_id}' is being removed."));
+        }
         if !record.descriptor.enabled {
             return Err(format!("Package '{package_id}' is disabled."));
         }
@@ -525,6 +623,9 @@ impl PluginHost {
         let record = records
             .get(package_id)
             .ok_or_else(|| format!("Package '{package_id}' is not installed."))?;
+        if self.is_package_deleting(package_id) {
+            return Err(format!("Package '{package_id}' is being removed."));
+        }
         if !record.descriptor.enabled {
             return Err(format!("Package '{package_id}' is disabled."));
         }
@@ -549,6 +650,9 @@ impl PluginHost {
         let record = records
             .get(package_id)
             .ok_or_else(|| format!("Package '{package_id}' is not installed."))?;
+        if self.is_package_deleting(package_id) {
+            return Err(format!("Package '{package_id}' is being removed."));
+        }
         if !record.descriptor.enabled {
             return Err(format!("Package '{package_id}' is disabled."));
         }
@@ -673,6 +777,9 @@ impl PluginHost {
         let record = records
             .get(package_id)
             .ok_or_else(|| format!("Package '{package_id}' is not installed."))?;
+        if self.is_package_deleting(package_id) {
+            return Err(format!("Package '{package_id}' is being removed."));
+        }
         if !record.descriptor.enabled {
             return Err(format!("Package '{package_id}' is disabled."));
         }
@@ -1126,6 +1233,7 @@ impl PluginHost {
             .title(format!("BakingRL - {}", page.name))
             .inner_size(page.width.max(480.0), (page.height + 48.0).max(368.0))
             .min_inner_size(480.0, 320.0)
+            .decorations(false)
             .resizable(true)
             .visible(true)
             .build()
@@ -1288,6 +1396,37 @@ impl PluginHost {
         let _ = self.app_handle.emit("bakingrl-packages-changed", packages);
     }
 
+    fn apply_package_statuses(&self, packages: &mut [PackageDescriptor]) {
+        let deleting_packages = self.deleting_packages.lock().unwrap();
+        for package in packages {
+            if deleting_packages.contains_key(&package.id) {
+                package.enabled = false;
+                package.status = PackageStatus::Deleting;
+            }
+        }
+    }
+
+    fn is_package_deleting(&self, package_id: &str) -> bool {
+        self.deleting_packages
+            .lock()
+            .unwrap()
+            .contains_key(package_id)
+    }
+
+    fn emit_package_operation_error(&self, package_id: &str, message: &str) {
+        let timestamp_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_millis() as u64)
+            .unwrap_or_default();
+        let payload = serde_json::json!({
+            "kind": "package",
+            "source": package_id,
+            "message": message,
+            "timestamp_ms": timestamp_ms
+        });
+        let _ = self.app_handle.emit("bakingrl-runtime-error", payload);
+    }
+
     fn emit_package_settings_changed(&self, package_id: &str) {
         let _ = self
             .app_handle
@@ -1336,6 +1475,7 @@ fn descriptor_for_manifest(
         version: manifest.version.clone(),
         author: manifest.author.clone(),
         enabled,
+        status: PackageStatus::Installed,
         path,
         exports: PackageExportsDescriptor {
             visuals: manifest
@@ -2291,7 +2431,14 @@ pub fn remove_package(
     host: State<'_, Arc<PluginHost>>,
     package_id: String,
 ) -> Result<Vec<PackageDescriptor>, String> {
-    host.remove_package(package_id)
+    let host = host.inner().clone();
+    let removal = host.begin_remove_package(&package_id)?;
+    if removal.started {
+        tauri::async_runtime::spawn_blocking(move || {
+            host.remove_package_in_background(package_id);
+        });
+    }
+    Ok(removal.packages)
 }
 
 #[tauri::command]

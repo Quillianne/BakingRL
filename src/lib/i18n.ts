@@ -70,6 +70,7 @@ const en = {
   "common.loading": "Loading",
   "common.connected": "Connected",
   "common.connecting": "Connecting",
+  "common.deleting": "Deleting",
   "common.disconnected": "Disconnected",
   "common.running": "Running",
   "common.stopped": "Stopped",
@@ -276,6 +277,7 @@ const en = {
   "telemetry.dontShow": "Don't show this again",
 
   "msg.packagesReloaded": "Packages reloaded successfully.",
+  "msg.packageRemovalStarted": "Package removal started.",
   "msg.packageRemoved": "Package removed successfully.",
   "msg.installedFile": "Package installed from file.",
   "msg.installedUrl": "Package installed from URL.",
@@ -369,6 +371,7 @@ const fr: Record<TranslationKey, string> = {
   "common.loading": "Chargement",
   "common.connected": "Connecté",
   "common.connecting": "Connexion",
+  "common.deleting": "Suppression",
   "common.disconnected": "Déconnecté",
   "common.running": "En marche",
   "common.stopped": "Arrêté",
@@ -575,6 +578,7 @@ const fr: Record<TranslationKey, string> = {
   "telemetry.dontShow": "Ne plus afficher",
 
   "msg.packagesReloaded": "Packages rechargés.",
+  "msg.packageRemovalStarted": "Suppression du package lancée.",
   "msg.packageRemoved": "Package supprimé.",
   "msg.installedFile": "Package installé depuis un fichier.",
   "msg.installedUrl": "Package installé depuis l'URL.",

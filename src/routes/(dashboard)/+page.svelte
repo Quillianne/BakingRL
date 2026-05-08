@@ -39,8 +39,24 @@
               <span class="badge {entry.kind === 'stream' ? 'stream' : 'route'}">{entry.label}</span>
             </div>
             <div class="card-actions">
-              <button class="btn-primary" onclick={() => entry.layout && void state.openLayoutEditor(entry.layout.id)} disabled={!entry.layout}>
-                {state.t("common.edit")}
+              <button
+                class="btn-secondary home-main-action"
+                onclick={() => entry.layout && void state.openPreview(entry.kind === "stream" ? state.streamUrl() : state.layoutUrl(entry.layout.id))}
+                disabled={!entry.layout || !state.obsBaseUrl}
+              >
+                {state.t("common.preview")}
+              </button>
+              <button
+                class="icon-button home-edit-action"
+                onclick={() => entry.layout && void state.openLayoutEditor(entry.layout.id)}
+                disabled={!entry.layout}
+                title={state.t("common.edit")}
+                aria-label={state.t("common.edit")}
+              >
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M12 20h9"></path>
+                  <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"></path>
+                </svg>
               </button>
             </div>
           </div>
@@ -66,7 +82,20 @@
             <div class="thumb-copy">
               <span class="thumb-title">{page.name}</span>
               <div class="card-actions">
-                <button class="btn-outline" onclick={() => void state.openPage(page.id)}>{state.t("common.open")}</button>
+                <button class="btn-primary home-main-action" onclick={() => void state.openPage(page.id)}>
+                  {state.t("common.open")}
+                </button>
+                <button
+                  class="icon-button home-edit-action"
+                  onclick={() => void state.openPageEditor(page.id)}
+                  title={state.t("common.edit")}
+                  aria-label={state.t("common.edit")}
+                >
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 20h9"></path>
+                    <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"></path>
+                  </svg>
+                </button>
               </div>
             </div>
           </article>

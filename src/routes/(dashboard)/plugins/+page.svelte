@@ -113,7 +113,7 @@
                   <button
                     class="icon-button danger"
                     onclick={() => dashboard.removePackage(pkg)}
-                    disabled={dashboard.busy}
+                    disabled={dashboard.isPackageActionDisabled(pkg)}
                     title={dashboard.t("common.remove")}
                     aria-label={dashboard.t("common.remove")}
                   >
@@ -133,9 +133,9 @@
             <div class="package-card-summary">
               <div class="package-summary-item">
                 <span class="package-summary-label">{dashboard.t("common.state")}</span>
-                <span class="status-pill {dashboard.isPackageEnabled(pkg) ? 'connected' : 'disconnected'}">
+                <span class="status-pill {dashboard.packageStateClass(pkg)}">
                   <span class="status-dot"></span>
-                  {dashboard.isPackageEnabled(pkg) ? dashboard.t("common.enabled") : dashboard.t("common.disabled")}
+                  {dashboard.packageStateLabel(pkg)}
                 </span>
               </div>
               <div class="package-summary-item">
@@ -158,7 +158,7 @@
               <button
                 class={dashboard.isPackageToggleButtonEnabled(pkg) ? "btn-secondary" : "btn-primary"}
                 onclick={() => void dashboard.togglePackage(pkg)}
-                disabled={dashboard.busy || dashboard.isPackageTogglePending(pkg)}
+                disabled={dashboard.isPackageActionDisabled(pkg) || dashboard.isPackageTogglePending(pkg)}
               >
                 {dashboard.isPackageToggleButtonEnabled(pkg) ? dashboard.t("common.disable") : dashboard.t("common.enable")}
               </button>
@@ -245,9 +245,9 @@
         <div class="package-detail-heading-main">
           <div class="package-detail-title-row">
             <h2 id="package-detail-title">{detailPackage.name}</h2>
-            <span class="status-pill {dashboard.isPackageEnabled(detailPackage) ? 'connected' : 'disconnected'}">
+            <span class="status-pill {dashboard.packageStateClass(detailPackage)}">
               <span class="status-dot"></span>
-              {dashboard.isPackageEnabled(detailPackage) ? dashboard.t("common.enabled") : dashboard.t("common.disabled")}
+              {dashboard.packageStateLabel(detailPackage)}
             </span>
           </div>
           <p>v{detailPackage.version} · {dashboard.t("packages.by")} {detailPackage.author ?? dashboard.t("packages.unknownAuthor")}</p>
@@ -270,7 +270,7 @@
 
       <div class="package-detail-summary">
         <div class="package-detail-stat">
-          <strong>{dashboard.isPackageEnabled(detailPackage) ? dashboard.t("common.enabled") : dashboard.t("common.disabled")}</strong>
+          <strong>{dashboard.packageStateLabel(detailPackage)}</strong>
           <span>{dashboard.t("common.state")}</span>
         </div>
         <div class="package-detail-stat">
@@ -356,7 +356,7 @@
           type="button"
           class={dashboard.isPackageToggleButtonEnabled(detailPackage) ? "btn-secondary" : "btn-primary"}
           onclick={() => void dashboard.togglePackage(detailPackage)}
-          disabled={dashboard.busy || dashboard.isPackageTogglePending(detailPackage)}
+          disabled={dashboard.isPackageActionDisabled(detailPackage) || dashboard.isPackageTogglePending(detailPackage)}
         >
           {dashboard.isPackageToggleButtonEnabled(detailPackage) ? dashboard.t("common.disable") : dashboard.t("common.enable")}
         </button>

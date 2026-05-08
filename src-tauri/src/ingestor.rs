@@ -20,16 +20,20 @@ pub async fn start_tcp_ingestor(
 ) {
     let addr = format!("{host}:{port}");
     info!("Tentative de connexion au serveur TCP sur {}...", addr);
+    let mut first_attempt = true;
 
     loop {
-        set_connection_status(
-            &app_handle,
-            &status_state,
-            "connecting",
-            Some(format!("Connecting to {addr}")),
-            &host,
-            port,
-        );
+        if first_attempt {
+            set_connection_status(
+                &app_handle,
+                &status_state,
+                "connecting",
+                Some(format!("Connecting to {addr}")),
+                &host,
+                port,
+            );
+            first_attempt = false;
+        }
         match TcpStream::connect(&addr).await {
             Ok(mut stream) => {
                 info!("Connecté avec succès au flux de données Rocket League !");

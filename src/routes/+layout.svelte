@@ -6,22 +6,21 @@
   import { applyTheme, getStoredTheme } from "$lib/themes";
 
   let { children } = $props();
-  let isMainWindow = $state(detectMainWindow());
+  let windowLabel = $state(detectWindowLabel());
 
   const dragZoneHeight = 36;
-  const showWindowFrame = $derived(isMainWindow && !isOverlayRuntimeRoute($page.url.pathname));
-  const showWindowControls = $derived(showWindowFrame && !$page.url.pathname.startsWith("/editor"));
+  const showWindowFrame = $derived(windowLabel !== null && !isOverlayRuntimeRoute($page.url.pathname));
 
   onMount(() => {
     applyTheme(getStoredTheme());
-    isMainWindow = detectMainWindow();
+    windowLabel = detectWindowLabel();
   });
 
-  function detectMainWindow() {
+  function detectWindowLabel() {
     try {
-      return getCurrentWindow().label === "main";
+      return getCurrentWindow().label;
     } catch {
-      return false;
+      return null;
     }
   }
 
@@ -62,25 +61,23 @@
 
 {#if showWindowFrame}
   <div class="app-window-frame" role="presentation" onpointerdown={startWindowDrag}>
-    {#if showWindowControls}
-      <div class="app-window-controls">
-        <button type="button" class="app-window-control" aria-label="Réduire" title="Réduire" onclick={minimizeWindow}>
-          <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
-            <path d="M2 6h8" />
-          </svg>
-        </button>
-        <button type="button" class="app-window-control" aria-label="Agrandir" title="Agrandir" onclick={toggleMaximizeWindow}>
-          <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
-            <rect x="3" y="3" width="6" height="6" rx="1" />
-          </svg>
-        </button>
-        <button type="button" class="app-window-control close" aria-label="Fermer" title="Fermer" onclick={closeWindow}>
-          <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
-            <path d="m3 3 6 6M9 3 3 9" />
-          </svg>
-        </button>
-      </div>
-    {/if}
+    <div class="app-window-controls">
+      <button type="button" class="app-window-control" aria-label="Réduire" title="Réduire" onclick={minimizeWindow}>
+        <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
+          <path d="M2 6h8" />
+        </svg>
+      </button>
+      <button type="button" class="app-window-control" aria-label="Agrandir" title="Agrandir" onclick={toggleMaximizeWindow}>
+        <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
+          <rect x="3" y="3" width="6" height="6" rx="1" />
+        </svg>
+      </button>
+      <button type="button" class="app-window-control close" aria-label="Fermer" title="Fermer" onclick={closeWindow}>
+        <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
+          <path d="m3 3 6 6M9 3 3 9" />
+        </svg>
+      </button>
+    </div>
     {@render children()}
   </div>
 {:else}

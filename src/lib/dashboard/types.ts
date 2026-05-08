@@ -67,6 +67,7 @@ export type PackageDescriptor = {
   version: string;
   author: string | null;
   enabled: boolean;
+  status: "installed" | "deleting";
   path: string;
   exports: {
     visuals: VisualExportDescriptor[];

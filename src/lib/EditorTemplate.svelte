@@ -161,6 +161,9 @@
   <aside class="editor-panel">
     <header class="editor-header">
       <div class="header-title">
+        <button type="button" class="icon-btn back-btn" onclick={() => void onClose()} title="Retour" aria-label="Retour">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 19-7-7 7-7"></path><path d="M19 12H5"></path></svg>
+        </button>
         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
         <strong>{title}</strong>
       </div>
@@ -174,9 +177,6 @@
         <button class="zoom-readout" onclick={resetViewport}>{Math.round(zoom * 100)}%</button>
         <button class="icon-btn" onclick={() => setZoom(zoom + 0.08)} title="Zoom in">
           <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><path d="M8 11h6"></path><path d="M11 8v6"></path><path d="m21 21-4.3-4.3"></path></svg>
-        </button>
-        <button class="icon-btn close-btn" onclick={() => void onClose()} title="Close Editor">
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
         </button>
       </div>
     </header>
@@ -268,7 +268,7 @@
     justify-content: space-between;
     height: 48px;
     min-height: 48px;
-    padding: 0 12px;
+    padding: 0 112px 0 10px;
     border-bottom: 1px solid var(--border-color);
     background: var(--editor-bg-panel);
     pointer-events: auto;
@@ -285,6 +285,15 @@
   .header-title svg {
     flex: none;
     color: var(--accent);
+  }
+
+  .header-title .back-btn {
+    margin-right: 2px;
+    color: var(--text-primary);
+  }
+
+  .header-title .back-btn svg {
+    color: currentColor;
   }
 
   .header-title strong {
