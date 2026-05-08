@@ -3,7 +3,8 @@ name: Build BakingRL Windows
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    tags:
+      - "v*"
 
 permissions:
   contents: read
@@ -32,8 +33,12 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
 
-      - name: Setup Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust stable MSVC
+        run: |
+          rustup toolchain install stable-msvc
+          rustup default stable-msvc
+          rustup target add x86_64-pc-windows-msvc
+          rustup show
 
       - name: Install frontend dependencies
         run: npm ci
@@ -53,7 +58,7 @@ jobs:
       - name: Upload Windows bundles
         uses: actions/upload-artifact@v7
         with:
-          name: BakingRL-windows
+          name: BakingRL-windows-${{ github.ref_name }}
           path: src-tauri/target/release/bundle/**
           if-no-files-found: error
           retention-days: 14
