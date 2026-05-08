@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use deno_core::{op2, FsModuleLoader, JsRuntime, OpState, RuntimeOptions};
+use deno_core::{op2, JsRuntime, OpState, RuntimeOptions};
 use deno_error::JsErrorBox;
 use futures_util::{SinkExt, StreamExt};
 use tauri::{AppHandle, Emitter};
@@ -14,6 +14,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::tungstenite::Message as TungsteniteMessage;
 use tracing::{error, info, warn};
 
+use super::runtime_module_loader::PackageModuleLoader;
 use super::service_runtime::ServiceCallRouter;
 use crate::bus::{BusEvent, EventBus};
 use crate::models::GameEvent;
@@ -21,6 +22,15 @@ use crate::plugin_v2::permissions::EffectivePackagePermissionsV2;
 use crate::registry::Registry;
 
 const MAX_FETCH_BYTES: usize = 1024 * 1024;
+const RUNTIME_EVENT_QUEUE: usize = 256;
+const WEBSOCKET_WRITE_QUEUE: usize = 128;
+const WEBSOCKET_READ_QUEUE: usize = 256;
+
+#[derive(Debug, Clone)]
+pub struct ConnectorRuntimeModuleSpec {
+    pub connector_name: String,
+    pub entry_path: PathBuf,
+}
 
 #[derive(Debug, Clone)]
 pub struct ConnectorRuntimeSpec {
@@ -31,15 +41,34 @@ pub struct ConnectorRuntimeSpec {
     pub service_imports: Vec<String>,
     pub service_methods: HashMap<String, Vec<String>>,
     pub permissions: EffectivePackagePermissionsV2,
+    pub additional_modules: Vec<ConnectorRuntimeModuleSpec>,
 }
 
 impl ConnectorRuntimeSpec {
     fn connector_ref(&self) -> String {
         format!("{}/{}", self.package_id, self.connector_name)
     }
+
+    fn runtime_key(&self) -> String {
+        if self.additional_modules.is_empty() {
+            self.connector_ref()
+        } else {
+            format!("{}/__package_connectors__", self.package_id)
+        }
+    }
+
+    fn module_specs(&self) -> Vec<ConnectorRuntimeModuleSpec> {
+        let mut modules = vec![ConnectorRuntimeModuleSpec {
+            connector_name: self.connector_name.clone(),
+            entry_path: self.entry_path.clone(),
+        }];
+        modules.extend(self.additional_modules.clone());
+        modules
+    }
 }
 
 struct ConnectorRuntimeHandle {
+    fingerprint: String,
     shutdown: Option<oneshot::Sender<()>>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -69,7 +98,18 @@ pub struct ConnectorRuntimeManager {
 }
 
 impl ConnectorRuntimeManager {
+    #[cfg(test)]
     pub fn reload(
+        &self,
+        specs: Vec<ConnectorRuntimeSpec>,
+        bus: Arc<EventBus>,
+        registry: Arc<Registry>,
+        service_router: ServiceCallRouter,
+    ) {
+        self.reload_with_optional_app_handle(specs, bus, registry, service_router, None);
+    }
+
+    pub fn reload_with_app_handle(
         &self,
         specs: Vec<ConnectorRuntimeSpec>,
         bus: Arc<EventBus>,
@@ -77,27 +117,51 @@ impl ConnectorRuntimeManager {
         service_router: ServiceCallRouter,
         app_handle: AppHandle,
     ) {
+        self.reload_with_optional_app_handle(
+            specs,
+            bus,
+            registry,
+            service_router,
+            Some(app_handle),
+        );
+    }
+
+    fn reload_with_optional_app_handle(
+        &self,
+        specs: Vec<ConnectorRuntimeSpec>,
+        bus: Arc<EventBus>,
+        registry: Arc<Registry>,
+        service_router: ServiceCallRouter,
+        app_handle: Option<AppHandle>,
+    ) {
         let mut handles = self.handles.lock().unwrap();
         let desired: HashSet<String> = specs
             .iter()
-            .map(ConnectorRuntimeSpec::connector_ref)
+            .map(ConnectorRuntimeSpec::runtime_key)
             .collect();
 
         let stale: Vec<_> = handles
             .keys()
-            .filter(|connector_ref| !desired.contains(*connector_ref))
+            .filter(|runtime_key| !desired.contains(*runtime_key))
             .cloned()
             .collect();
-        for connector_ref in stale {
-            if let Some(handle) = handles.remove(&connector_ref) {
+        for runtime_key in stale {
+            if let Some(handle) = handles.remove(&runtime_key) {
                 handle.shutdown();
             }
         }
 
         for spec in specs {
-            let connector_ref = spec.connector_ref();
-            if handles.contains_key(&connector_ref) {
+            let runtime_key = spec.runtime_key();
+            let fingerprint = format!("{spec:?}");
+            if handles
+                .get(&runtime_key)
+                .is_some_and(|handle| handle.fingerprint == fingerprint)
+            {
                 continue;
+            }
+            if let Some(handle) = handles.remove(&runtime_key) {
+                handle.shutdown();
             }
             match spawn_connector_runtime(
                 spec,
@@ -107,11 +171,13 @@ impl ConnectorRuntimeManager {
                 app_handle.clone(),
             ) {
                 Ok(handle) => {
-                    handles.insert(connector_ref, handle);
+                    handles.insert(runtime_key, handle);
                 }
                 Err(err) => {
                     warn!("Unable to start connector runtime: {}", err);
-                    emit_runtime_error(&app_handle, "connector", &connector_ref, &err);
+                    if let Some(app_handle) = app_handle.as_ref() {
+                        emit_runtime_error(app_handle, "connector", &runtime_key, &err);
+                    }
                 }
             }
         }
@@ -136,13 +202,20 @@ struct ConnectorRuntimeContext {
     permissions: EffectivePackagePermissionsV2,
 }
 
-type EventReceiver = Rc<tokio::sync::Mutex<mpsc::UnboundedReceiver<serde_json::Value>>>;
+type EventReceiver = Rc<tokio::sync::Mutex<mpsc::Receiver<serde_json::Value>>>;
 type Subscriptions = Arc<Mutex<HashSet<String>>>;
 type WebSocketMap = Arc<Mutex<HashMap<u32, WebSocketHandle>>>;
 
 struct WebSocketHandle {
-    tx: mpsc::UnboundedSender<TungsteniteMessage>,
-    rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<serde_json::Value>>>,
+    tx: mpsc::Sender<TungsteniteMessage>,
+    rx: Arc<tokio::sync::Mutex<mpsc::Receiver<serde_json::Value>>>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConnectorBootstrapModule {
+    connector_ref: String,
+    entry_url: String,
 }
 
 static NEXT_WEBSOCKET_ID: AtomicU32 = AtomicU32::new(1);
@@ -152,10 +225,11 @@ fn spawn_connector_runtime(
     bus: Arc<EventBus>,
     registry: Arc<Registry>,
     service_router: ServiceCallRouter,
-    app_handle: AppHandle,
+    app_handle: Option<AppHandle>,
 ) -> Result<ConnectorRuntimeHandle, String> {
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
     let connector_ref = spec.connector_ref();
+    let fingerprint = format!("{spec:?}");
     let error_connector_ref = connector_ref.clone();
     let thread = std::thread::Builder::new()
         .name(format!("bakingrl-connector-{connector_ref}"))
@@ -170,13 +244,16 @@ fn spawn_connector_runtime(
                     run_connector_runtime(spec, bus, registry, service_router, shutdown_rx).await
                 {
                     error!("Connector runtime failed: {}", err);
-                    emit_runtime_error(&app_handle, "connector", &error_connector_ref, &err);
+                    if let Some(app_handle) = app_handle.as_ref() {
+                        emit_runtime_error(app_handle, "connector", &error_connector_ref, &err);
+                    }
                 }
             });
         })
         .map_err(|e| format!("Unable to spawn connector runtime thread: {e}"))?;
 
     Ok(ConnectorRuntimeHandle {
+        fingerprint,
         shutdown: Some(shutdown_tx),
         thread: Some(thread),
     })
@@ -204,7 +281,7 @@ async fn run_connector_runtime(
     shutdown_rx: oneshot::Receiver<()>,
 ) -> Result<(), String> {
     let connector_ref = spec.connector_ref();
-    let (event_tx, event_rx) = mpsc::unbounded_channel::<serde_json::Value>();
+    let (event_tx, event_rx) = mpsc::channel::<serde_json::Value>(RUNTIME_EVENT_QUEUE);
     let event_rx = Rc::new(tokio::sync::Mutex::new(event_rx));
     let subscriptions: Subscriptions = Arc::new(Mutex::new(HashSet::new()));
     let context = ConnectorRuntimeContext {
@@ -223,11 +300,42 @@ async fn run_connector_runtime(
         shutdown_rx,
     );
 
+    let module_specs = spec.module_specs();
+    let modules = module_specs
+        .iter()
+        .map(|module| {
+            let entry_url = url::Url::from_file_path(&module.entry_path).map_err(|_| {
+                format!(
+                    "Unable to convert connector entry to file URL: {:?}",
+                    module.entry_path
+                )
+            })?;
+            Ok(ConnectorBootstrapModule {
+                connector_ref: format!("{}/{}", spec.package_id, module.connector_name),
+                entry_url: entry_url.to_string(),
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let bootstrap = connector_bootstrap(&modules)?;
+    let bootstrap_url = deno_core::resolve_path(
+        &format!("./bakingrl-connector-{}.js", spec.connector_name),
+        &std::env::current_dir().map_err(|e| format!("Unable to resolve cwd: {e}"))?,
+    )
+    .map_err(|e| format!("Unable to resolve connector bootstrap module: {e}"))?;
+    let module_loader = PackageModuleLoader::from_entry_paths(
+        module_specs.iter().map(|module| module.entry_path.clone()),
+        &spec.storage_root,
+    )
+    .with_virtual_module(&bootstrap_url, bootstrap.clone());
     let mut js_runtime = JsRuntime::new(RuntimeOptions {
-        module_loader: Some(Rc::new(FsModuleLoader)),
+        module_loader: Some(Rc::new(module_loader)),
         extensions: vec![bakingrl_connector::init()],
         ..Default::default()
     });
+    let http_client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("Unable to create connector HTTP client: {e}"))?;
 
     {
         let op_state = js_runtime.op_state();
@@ -239,20 +347,9 @@ async fn run_connector_runtime(
         state.put::<EventReceiver>(event_rx);
         state.put::<Subscriptions>(subscriptions);
         state.put::<WebSocketMap>(Arc::new(Mutex::new(HashMap::new())));
+        state.put::<reqwest::Client>(http_client);
     }
 
-    let entry_url = url::Url::from_file_path(&spec.entry_path).map_err(|_| {
-        format!(
-            "Unable to convert connector entry to file URL: {:?}",
-            spec.entry_path
-        )
-    })?;
-    let bootstrap = connector_bootstrap(entry_url.as_str());
-    let bootstrap_url = deno_core::resolve_path(
-        &format!("./bakingrl-connector-{}.js", spec.connector_name),
-        &std::env::current_dir().map_err(|e| format!("Unable to resolve cwd: {e}"))?,
-    )
-    .map_err(|e| format!("Unable to resolve connector bootstrap module: {e}"))?;
     let mod_id = js_runtime
         .load_main_es_module_from_code(&bootstrap_url, bootstrap)
         .await
@@ -272,7 +369,7 @@ async fn run_connector_runtime(
 fn forward_bus_events(
     context: ConnectorRuntimeContext,
     bus: Arc<EventBus>,
-    event_tx: mpsc::UnboundedSender<serde_json::Value>,
+    event_tx: mpsc::Sender<serde_json::Value>,
     subscriptions: Subscriptions,
     mut shutdown_rx: oneshot::Receiver<()>,
 ) {
@@ -301,7 +398,7 @@ fn forward_bus_events(
                         BusEvent::GameData(event) => serde_json::to_value(&*event).unwrap_or(serde_json::Value::Null),
                         BusEvent::RawJson(raw) => serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null),
                     };
-                    if event_tx.send(value).is_err() {
+                    if event_tx.send(value).await.is_err() {
                         break;
                     }
                 }
@@ -310,14 +407,20 @@ fn forward_bus_events(
     });
 }
 
-fn connector_bootstrap(entry_url: &str) -> String {
-    let entry_url = serde_json::to_string(entry_url).unwrap();
-    format!(
+fn connector_bootstrap(modules: &[ConnectorBootstrapModule]) -> Result<String, String> {
+    let modules_json = serde_json::to_string(modules)
+        .map_err(|e| format!("Unable to serialize connector bootstrap modules: {e}"))?;
+    Ok(format!(
         r#"
-const connectorModule = await import({entry_url});
-const connector = connectorModule.default ?? connectorModule;
-if (!connector || typeof connector !== "object") {{
-  throw new Error("Connector module must export an object.");
+const connectorEntries = {modules_json};
+const connectors = [];
+for (const entry of connectorEntries) {{
+  const connectorModule = await import(entry.entryUrl);
+  const connector = connectorModule.default ?? connectorModule;
+  if (!connector || typeof connector !== "object") {{
+    throw new Error(`Connector module '${{entry.connectorRef}}' must export an object.`);
+  }}
+  connectors.push({{ ref: entry.connectorRef, connector }});
 }}
 const listeners = new Map();
 const context = {{
@@ -380,7 +483,9 @@ const context = {{
   }},
   diagnostics: console
 }};
-await connector.mount?.(context);
+for (const entry of connectors) {{
+  await entry.connector.mount?.(context);
+}}
 async function dispatchEvents() {{
   while (true) {{
     let event;
@@ -400,7 +505,7 @@ async function dispatchEvents() {{
 }}
 await dispatchEvents();
 "#
-    )
+    ))
 }
 
 #[op2(fast)]
@@ -625,9 +730,12 @@ pub async fn op_connector_fetch(
     #[string] request_url: String,
     #[serde] init: serde_json::Value,
 ) -> Result<serde_json::Value, JsErrorBox> {
-    let context = {
+    let (context, client) = {
         let state = state.borrow();
-        state.borrow::<ConnectorRuntimeContext>().clone()
+        (
+            state.borrow::<ConnectorRuntimeContext>().clone(),
+            state.borrow::<reqwest::Client>().clone(),
+        )
     };
     let parsed = url::Url::parse(&request_url).map_err(JsErrorBox::from_err)?;
     let host = parsed
@@ -639,10 +747,11 @@ pub async fn op_connector_fetch(
             context.package_id, host
         )));
     }
-    connector_fetch(&request_url, init).await
+    connector_fetch(&client, &request_url, init).await
 }
 
 async fn connector_fetch(
+    client: &reqwest::Client,
     request_url: &str,
     init: serde_json::Value,
 ) -> Result<serde_json::Value, JsErrorBox> {
@@ -652,10 +761,6 @@ async fn connector_fetch(
         .unwrap_or("GET")
         .parse()
         .map_err(|e| JsErrorBox::generic(format!("Invalid fetch method: {e}")))?;
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|e| JsErrorBox::generic(format!("Unable to create HTTP client: {e}")))?;
     let mut request = client.request(method, request_url);
     if let Some(headers) = init.get("headers").and_then(|headers| headers.as_object()) {
         for (key, value) in headers {
@@ -672,6 +777,14 @@ async fn connector_fetch(
         .await
         .map_err(|e| JsErrorBox::generic(format!("Connector fetch failed: {e}")))?;
     let status = response.status().as_u16();
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_FETCH_BYTES as u64)
+    {
+        return Err(JsErrorBox::generic(
+            "Connector fetch response is too large.",
+        ));
+    }
     let headers = response
         .headers()
         .iter()
@@ -684,13 +797,18 @@ async fn connector_fetch(
             })
         })
         .collect::<serde_json::Map<_, _>>();
-    let bytes = response.bytes().await.map_err(|e| {
-        JsErrorBox::generic(format!("Unable to read connector fetch response: {e}"))
-    })?;
-    if bytes.len() > MAX_FETCH_BYTES {
-        return Err(JsErrorBox::generic(
-            "Connector fetch response is too large.",
-        ));
+    let mut stream = response.bytes_stream();
+    let mut bytes = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| {
+            JsErrorBox::generic(format!("Unable to read connector fetch response: {e}"))
+        })?;
+        if bytes.len().saturating_add(chunk.len()) > MAX_FETCH_BYTES {
+            return Err(JsErrorBox::generic(
+                "Connector fetch response is too large.",
+            ));
+        }
+        bytes.extend_from_slice(&chunk);
     }
     let body = String::from_utf8_lossy(&bytes).to_string();
     Ok(serde_json::json!({
@@ -726,8 +844,8 @@ pub async fn op_connector_websocket_connect(
         .await
         .map_err(|e| JsErrorBox::generic(format!("Connector WebSocket connect failed: {e}")))?;
     let (mut writer, mut reader) = stream.split();
-    let (write_tx, mut write_rx) = mpsc::unbounded_channel::<TungsteniteMessage>();
-    let (read_tx, read_rx) = mpsc::unbounded_channel::<serde_json::Value>();
+    let (write_tx, mut write_rx) = mpsc::channel::<TungsteniteMessage>(WEBSOCKET_WRITE_QUEUE);
+    let (read_tx, read_rx) = mpsc::channel::<serde_json::Value>(WEBSOCKET_READ_QUEUE);
     let socket_id = NEXT_WEBSOCKET_ID.fetch_add(1, Ordering::Relaxed);
 
     tokio::task::spawn_local(async move {
@@ -749,19 +867,21 @@ pub async fn op_connector_websocket_connect(
                     "data": hex::encode(bytes)
                 }),
                 Ok(TungsteniteMessage::Close(_)) => {
-                    let _ = read_tx.send(serde_json::json!({ "type": "close" }));
+                    let _ = read_tx.send(serde_json::json!({ "type": "close" })).await;
                     break;
                 }
                 Ok(_) => continue,
                 Err(err) => {
-                    let _ = read_tx.send(serde_json::json!({
-                        "type": "error",
-                        "error": err.to_string()
-                    }));
+                    let _ = read_tx
+                        .send(serde_json::json!({
+                            "type": "error",
+                            "error": err.to_string()
+                        }))
+                        .await;
                     break;
                 }
             };
-            if read_tx.send(value).is_err() {
+            if read_tx.send(value).await.is_err() {
                 break;
             }
         }
@@ -790,8 +910,10 @@ pub fn op_connector_websocket_send(
         .ok_or_else(|| JsErrorBox::generic(format!("Unknown WebSocket id '{socket_id}'")))?;
     socket
         .tx
-        .send(TungsteniteMessage::Text(message.into()))
-        .map_err(|_| JsErrorBox::generic(format!("WebSocket '{socket_id}' is closed")))
+        .try_send(TungsteniteMessage::Text(message.into()))
+        .map_err(|_| {
+            JsErrorBox::generic(format!("WebSocket '{socket_id}' is overloaded or closed"))
+        })
 }
 
 #[op2]
@@ -823,7 +945,7 @@ pub fn op_connector_websocket_close(state: &mut OpState, socket_id: u32) -> Resu
             "Unknown WebSocket id '{socket_id}'"
         )));
     };
-    let _ = socket.tx.send(TungsteniteMessage::Close(None));
+    let _ = socket.tx.try_send(TungsteniteMessage::Close(None));
     Ok(())
 }
 
@@ -921,6 +1043,7 @@ export default {
                         write: vec![],
                     },
                 },
+                additional_modules: Vec::new(),
             }],
             Arc::new(EventBus::new(16)),
             registry.clone(),
@@ -987,6 +1110,7 @@ export default {
                         write: vec!["plugin://self/*".to_string()],
                     },
                 },
+                additional_modules: Vec::new(),
             }],
             Arc::new(EventBus::new(16)),
             registry.clone(),
@@ -1055,6 +1179,7 @@ export default {
                 service_imports: vec![],
                 service_methods: service_methods.clone(),
                 permissions: empty_permissions(),
+                additional_modules: Vec::new(),
             }],
             Arc::new(EventBus::new(16)),
             Arc::new(Registry::new()),
@@ -1085,6 +1210,7 @@ export default {
                         write: vec![],
                     },
                 },
+                additional_modules: Vec::new(),
             }],
             Arc::new(EventBus::new(16)),
             registry.clone(),

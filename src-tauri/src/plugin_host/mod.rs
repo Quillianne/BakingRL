@@ -1,4 +1,5 @@
 mod connector_runtime;
+mod runtime_module_loader;
 mod service_runtime;
 
 use std::collections::HashMap;
@@ -18,6 +19,7 @@ use crate::bus::EventBus;
 use crate::models::{
     AppSettings, OverlayItem, OverlayLayer, OverlayLayout, OverlayLayoutsFile, PackageSettingsFile,
     PackageStateFile, PageBackground, PageItem, PageLayer, PageLayout, PageSettings, PagesFile,
+    PluginRuntimeIsolation,
 };
 use crate::plugin_v2::bundle::BundleInspection;
 use crate::plugin_v2::install::{
@@ -27,9 +29,13 @@ use crate::plugin_v2::install::{
 use crate::plugin_v2::manifest::PluginPackageManifestV2;
 use crate::plugin_v2::permissions::EffectivePackagePermissionsV2;
 use crate::registry::Registry;
-use connector_runtime::{ConnectorRuntimeManager, ConnectorRuntimeSpec};
-use service_runtime::{ServiceRuntimeManager, ServiceRuntimeSpec};
+use connector_runtime::{
+    ConnectorRuntimeManager, ConnectorRuntimeModuleSpec, ConnectorRuntimeSpec,
+};
+use service_runtime::{ServiceRuntimeManager, ServiceRuntimeModuleSpec, ServiceRuntimeSpec};
 use walkdir::WalkDir;
+
+const MAX_GATEWAY_PACKAGE_FILE_BYTES: u64 = 25 * 1024 * 1024;
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PackageDescriptor {
@@ -171,6 +177,7 @@ impl PluginHost {
     }
 
     pub fn initialize(&self) {
+        self.ensure_app_settings();
         self.ensure_overlay_layouts();
         self.ensure_pages();
         self.reload_packages();
@@ -239,15 +246,16 @@ impl PluginHost {
         }
 
         apply_graph_diagnostics(&mut records);
-        let service_specs = service_specs_for_records(&records);
-        self.service_runtimes.reload(
+        let runtime_isolation = self.load_app_settings().security.plugin_runtime_isolation;
+        let service_specs = service_specs_for_records(&records, &runtime_isolation);
+        self.service_runtimes.reload_with_app_handle(
             service_specs,
             self.bus.clone(),
             self.registry.clone(),
             self.app_handle.clone(),
         );
-        let connector_specs = connector_specs_for_records(&records);
-        self.connector_runtimes.reload(
+        let connector_specs = connector_specs_for_records(&records, &runtime_isolation);
+        self.connector_runtimes.reload_with_app_handle(
             connector_specs,
             self.bus.clone(),
             self.registry.clone(),
@@ -408,6 +416,7 @@ impl PluginHost {
         source: String,
     ) -> Result<InstallReceipt, String> {
         let bundle_path = PathBuf::from(&path);
+        self.validate_install_trust(&bundle_path, &source)?;
         let receipt = install_bundle_from_file(
             &bundle_path,
             &self.packages_dir,
@@ -474,7 +483,7 @@ impl PluginHost {
     }
 
     pub fn remove_package(&self, package_id: String) -> Result<Vec<PackageDescriptor>, String> {
-        let target = self.packages_dir.join(&package_id);
+        let target = safe_installed_package_dir(&self.packages_dir, &package_id)?;
         if !target.exists() {
             return Err(format!("Package '{package_id}' is not installed."));
         }
@@ -544,8 +553,7 @@ impl PluginHost {
             return Err(format!("Package '{package_id}' is disabled."));
         }
         let safe_path = safe_package_relative_path(relative_path)?;
-        fs::read(Path::new(&record.descriptor.path).join(safe_path))
-            .map_err(|e| format!("Unable to read package file: {e}"))
+        read_binary_package_file(Path::new(&record.descriptor.path), &safe_path)
     }
 
     pub fn read_component_export_source(
@@ -681,6 +689,10 @@ impl PluginHost {
     }
 
     pub fn save_app_settings(&self, settings: AppSettings) -> Result<AppSettings, String> {
+        let mut settings = settings;
+        if settings.obs.access_token.trim().is_empty() {
+            settings.obs.access_token = generate_access_token();
+        }
         let previous_settings = self.load_app_settings();
         let raw = serde_json::to_string_pretty(&settings)
             .map_err(|e| format!("Failed to serialize app settings: {e}"))?;
@@ -827,6 +839,7 @@ impl PluginHost {
             created_at_ms: now,
             updated_at_ms: now,
             template_source: None,
+            thumbnail: None,
         });
         file.active_layout_id = id;
         ensure_active_layout_ids(&mut file);
@@ -995,6 +1008,7 @@ impl PluginHost {
             created_at_ms: now,
             updated_at_ms: now,
             template_source: None,
+            thumbnail: None,
         };
         normalize_page(&mut page, false);
         file.pages.push(page);
@@ -1175,6 +1189,14 @@ impl PluginHost {
         read_json_or_default(&self.app_settings_path)
     }
 
+    fn ensure_app_settings(&self) {
+        let mut settings = self.load_app_settings();
+        if settings.obs.access_token.trim().is_empty() {
+            settings.obs.access_token = generate_access_token();
+            let _ = self.save_app_settings(settings);
+        }
+    }
+
     fn load_package_settings(&self) -> PackageSettingsFile {
         read_json_or_default(&self.package_settings_path)
     }
@@ -1190,6 +1212,39 @@ impl PluginHost {
             let mut file = self.load_overlay_layouts();
             normalize_overlay_layouts(&mut file);
             let _ = self.save_overlay_layouts(&file);
+        }
+    }
+
+    fn validate_install_trust(&self, bundle_path: &Path, source: &str) -> Result<(), String> {
+        let settings = self.load_app_settings();
+        if !settings.security.require_trusted_remote_packages || !is_remote_package_source(source) {
+            return Ok(());
+        }
+        let inspection = inspect_bundle_file(bundle_path)?;
+        if !inspection.signature_verified {
+            return Err("Remote package installs require a verified Ed25519 signature. Disable signed remote package enforcement only for packages you explicitly trust.".to_string());
+        }
+        let trusted_keys = settings
+            .security
+            .trusted_package_public_keys
+            .iter()
+            .map(|key| key.trim())
+            .filter(|key| !key.is_empty())
+            .collect::<Vec<_>>();
+        if trusted_keys.is_empty() {
+            return Ok(());
+        }
+        let public_key = inspection
+            .signature_public_key
+            .as_deref()
+            .ok_or_else(|| "Remote package signature did not expose a public key.".to_string())?;
+        if trusted_keys.iter().any(|key| key == &public_key) {
+            Ok(())
+        } else {
+            Err(
+                "Remote package signature public key is not trusted by this installation."
+                    .to_string(),
+            )
         }
     }
 
@@ -1411,7 +1466,10 @@ fn apply_graph_diagnostics(records: &mut HashMap<String, PackageRecord>) {
     }
 }
 
-fn service_specs_for_records(records: &HashMap<String, PackageRecord>) -> Vec<ServiceRuntimeSpec> {
+fn service_specs_for_records(
+    records: &HashMap<String, PackageRecord>,
+    runtime_isolation: &PluginRuntimeIsolation,
+) -> Vec<ServiceRuntimeSpec> {
     let service_methods: HashMap<String, Vec<String>> = records
         .values()
         .flat_map(|record| {
@@ -1430,33 +1488,59 @@ fn service_specs_for_records(records: &HashMap<String, PackageRecord>) -> Vec<Se
         })
         .collect();
 
-    records
+    let mut specs = Vec::new();
+    for record in records
         .values()
         .filter(|record| record.descriptor.enabled && record.descriptor.error.is_none())
-        .flat_map(|record| {
-            record
-                .manifest
-                .exports
-                .services
-                .iter()
-                .map(|(name, export)| ServiceRuntimeSpec {
+    {
+        let storage_root = Path::new(&record.descriptor.path)
+            .join(".bakingrl")
+            .join("storage");
+        match runtime_isolation {
+            PluginRuntimeIsolation::Export => {
+                for (name, export) in &record.manifest.exports.services {
+                    specs.push(ServiceRuntimeSpec {
+                        package_id: record.manifest.id.clone(),
+                        service_name: name.clone(),
+                        entry_path: Path::new(&record.descriptor.path).join(&export.entry),
+                        storage_root: storage_root.clone(),
+                        service_imports: record.manifest.imports.services.clone(),
+                        service_methods: service_methods.clone(),
+                        permissions: record.descriptor.effective_permissions.clone(),
+                        additional_modules: Vec::new(),
+                    });
+                }
+            }
+            PluginRuntimeIsolation::Package => {
+                let mut services = record.manifest.exports.services.iter();
+                let Some((name, export)) = services.next() else {
+                    continue;
+                };
+                let additional_modules = services
+                    .map(|(service_name, service_export)| ServiceRuntimeModuleSpec {
+                        service_name: service_name.clone(),
+                        entry_path: Path::new(&record.descriptor.path).join(&service_export.entry),
+                    })
+                    .collect();
+                specs.push(ServiceRuntimeSpec {
                     package_id: record.manifest.id.clone(),
                     service_name: name.clone(),
                     entry_path: Path::new(&record.descriptor.path).join(&export.entry),
-                    storage_root: Path::new(&record.descriptor.path)
-                        .join(".bakingrl")
-                        .join("storage"),
+                    storage_root,
                     service_imports: record.manifest.imports.services.clone(),
                     service_methods: service_methods.clone(),
                     permissions: record.descriptor.effective_permissions.clone(),
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect()
+                    additional_modules,
+                });
+            }
+        }
+    }
+    specs
 }
 
 fn connector_specs_for_records(
     records: &HashMap<String, PackageRecord>,
+    runtime_isolation: &PluginRuntimeIsolation,
 ) -> Vec<ConnectorRuntimeSpec> {
     let service_methods: HashMap<String, Vec<String>> = records
         .values()
@@ -1476,29 +1560,57 @@ fn connector_specs_for_records(
         })
         .collect();
 
-    records
+    let mut specs = Vec::new();
+    for record in records
         .values()
         .filter(|record| record.descriptor.enabled && record.descriptor.error.is_none())
-        .flat_map(|record| {
-            record
-                .manifest
-                .exports
-                .connectors
-                .iter()
-                .map(|(name, export)| ConnectorRuntimeSpec {
+    {
+        let storage_root = Path::new(&record.descriptor.path)
+            .join(".bakingrl")
+            .join("storage");
+        match runtime_isolation {
+            PluginRuntimeIsolation::Export => {
+                for (name, export) in &record.manifest.exports.connectors {
+                    specs.push(ConnectorRuntimeSpec {
+                        package_id: record.manifest.id.clone(),
+                        connector_name: name.clone(),
+                        entry_path: Path::new(&record.descriptor.path).join(&export.entry),
+                        storage_root: storage_root.clone(),
+                        service_imports: record.manifest.imports.services.clone(),
+                        service_methods: service_methods.clone(),
+                        permissions: record.descriptor.effective_permissions.clone(),
+                        additional_modules: Vec::new(),
+                    });
+                }
+            }
+            PluginRuntimeIsolation::Package => {
+                let mut connectors = record.manifest.exports.connectors.iter();
+                let Some((name, export)) = connectors.next() else {
+                    continue;
+                };
+                let additional_modules = connectors
+                    .map(
+                        |(connector_name, connector_export)| ConnectorRuntimeModuleSpec {
+                            connector_name: connector_name.clone(),
+                            entry_path: Path::new(&record.descriptor.path)
+                                .join(&connector_export.entry),
+                        },
+                    )
+                    .collect();
+                specs.push(ConnectorRuntimeSpec {
                     package_id: record.manifest.id.clone(),
                     connector_name: name.clone(),
                     entry_path: Path::new(&record.descriptor.path).join(&export.entry),
-                    storage_root: Path::new(&record.descriptor.path)
-                        .join(".bakingrl")
-                        .join("storage"),
+                    storage_root,
                     service_imports: record.manifest.imports.services.clone(),
                     service_methods: service_methods.clone(),
                     permissions: record.descriptor.effective_permissions.clone(),
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect()
+                    additional_modules,
+                });
+            }
+        }
+    }
+    specs
 }
 
 fn merge_settings(
@@ -1570,6 +1682,66 @@ fn safe_package_relative_path(relative_path: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+fn safe_installed_package_dir(packages_dir: &Path, package_id: &str) -> Result<PathBuf, String> {
+    if package_id == "."
+        || package_id == ".."
+        || package_id.contains('/')
+        || package_id.contains('\\')
+        || package_id.trim().is_empty()
+    {
+        return Err(format!(
+            "Package id '{package_id}' is not a safe package directory name."
+        ));
+    }
+    let packages_dir = packages_dir
+        .canonicalize()
+        .map_err(|e| format!("Unable to resolve package directory: {e}"))?;
+    let target = packages_dir.join(package_id);
+    if target.parent() != Some(packages_dir.as_path()) {
+        return Err(format!(
+            "Package id '{package_id}' escapes the package directory."
+        ));
+    }
+    Ok(target)
+}
+
+fn read_binary_package_file(package_root: &Path, relative_path: &Path) -> Result<Vec<u8>, String> {
+    let root = package_root
+        .canonicalize()
+        .map_err(|e| format!("Unable to resolve package root: {e}"))?;
+    let path = root.join(relative_path);
+    let resolved = path.canonicalize().map_err(|e| {
+        format!(
+            "Unable to resolve package file '{}': {e}",
+            relative_path.display()
+        )
+    })?;
+    if !resolved.starts_with(&root) {
+        return Err(format!(
+            "Package file '{}' escapes the package root.",
+            relative_path.display()
+        ));
+    }
+    let metadata = resolved.metadata().map_err(|e| {
+        format!(
+            "Unable to inspect package file '{}': {e}",
+            relative_path.display()
+        )
+    })?;
+    if metadata.len() > MAX_GATEWAY_PACKAGE_FILE_BYTES {
+        return Err(format!(
+            "Package file '{}' exceeds the read limit.",
+            relative_path.display()
+        ));
+    }
+    fs::read(resolved).map_err(|e| {
+        format!(
+            "Unable to read package file '{}': {e}",
+            relative_path.display()
+        )
+    })
+}
+
 fn read_package_file(package_root: &Path, relative_path: &str) -> Result<String, String> {
     let root = package_root
         .canonicalize()
@@ -1581,6 +1753,14 @@ fn read_package_file(package_root: &Path, relative_path: &str) -> Result<String,
     if !resolved.starts_with(&root) {
         return Err(format!(
             "Package file '{relative_path}' escapes the package root."
+        ));
+    }
+    let metadata = resolved
+        .metadata()
+        .map_err(|e| format!("Unable to inspect package file '{relative_path}': {e}"))?;
+    if metadata.len() > MAX_GATEWAY_PACKAGE_FILE_BYTES {
+        return Err(format!(
+            "Package file '{relative_path}' exceeds the read limit."
         ));
     }
     fs::read_to_string(resolved)
@@ -1979,6 +2159,18 @@ fn format_command_error(command: &str, stderr: &[u8]) -> String {
     }
 }
 
+fn is_remote_package_source(source: &str) -> bool {
+    source.starts_with("url:") || source.starts_with("deeplink:") || source.starts_with("git:")
+}
+
+fn generate_access_token() -> String {
+    let mut bytes = [0_u8; 32];
+    if getrandom::fill(&mut bytes).is_ok() {
+        return hex::encode(bytes);
+    }
+    format!("fallback-{}", unique_id("obs"))
+}
+
 fn default_overlay_layouts() -> OverlayLayoutsFile {
     let now = now_ms();
     OverlayLayoutsFile {
@@ -1994,6 +2186,7 @@ fn default_overlay_layouts() -> OverlayLayoutsFile {
             created_at_ms: now,
             updated_at_ms: now,
             template_source: None,
+            thumbnail: None,
         }],
     }
 }

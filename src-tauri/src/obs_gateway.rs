@@ -3,8 +3,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::extract::ws::{Message, WebSocketUpgrade};
-use axum::extract::{Path, State};
-use axum::http::{HeaderValue, Method, StatusCode};
+use axum::extract::{Path, Query, State};
+use axum::http::header::AUTHORIZATION;
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -25,6 +26,7 @@ struct ObsGatewayState {
     plugin_host: Arc<PluginHost>,
     registry: Arc<Registry>,
     frontend_dir: PathBuf,
+    access_token: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -41,6 +43,11 @@ struct ServiceCallRequest {
     input: serde_json::Value,
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct AuthQuery {
+    token: Option<String>,
+}
+
 pub fn start_obs_gateway(
     bus: Arc<EventBus>,
     plugin_host: Arc<PluginHost>,
@@ -54,11 +61,13 @@ pub fn start_obs_gateway(
             .map(|addr| addr.to_string())
             .unwrap_or_else(|_| "unknown".to_string());
         let frontend_dir = plugin_host.frontend_dist_dir();
+        let access_token = plugin_host.get_app_settings().obs.access_token;
         let state = ObsGatewayState {
             bus,
             plugin_host,
             registry,
             frontend_dir: frontend_dir.clone(),
+            access_token,
         };
         let cors = CorsLayer::new()
             .allow_origin("*".parse::<HeaderValue>().unwrap())
@@ -75,6 +84,14 @@ pub fn start_obs_gateway(
             .route(
                 "/api/packages/{package_id}/files/{*path}",
                 get(read_package_file),
+            )
+            .route(
+                "/api/package-files/{token}/{package_id}/{*path}",
+                get(read_package_file_with_path_token),
+            )
+            .route(
+                "/api/package-modules/{token}/{cache_key}/{package_id}/{*path}",
+                get(read_package_module_with_path_token),
             )
             .route(
                 "/api/packages/{package_id}/components/source",
@@ -121,22 +138,50 @@ pub fn start_obs_gateway(
     });
 }
 
-async fn list_packages(State(state): State<ObsGatewayState>) -> Json<serde_json::Value> {
+async fn list_packages(
+    State(state): State<ObsGatewayState>,
+    Query(auth): Query<AuthQuery>,
+    headers: HeaderMap,
+) -> Response {
+    if !gateway_authorized(&state, &headers, &auth) {
+        return unauthorized();
+    }
     Json(serde_json::to_value(state.plugin_host.list_packages()).unwrap_or_default())
+        .into_response()
 }
 
-async fn get_overlay_layouts(State(state): State<ObsGatewayState>) -> Json<serde_json::Value> {
+async fn get_overlay_layouts(
+    State(state): State<ObsGatewayState>,
+    Query(auth): Query<AuthQuery>,
+    headers: HeaderMap,
+) -> Response {
+    if !gateway_authorized(&state, &headers, &auth) {
+        return unauthorized();
+    }
     Json(serde_json::to_value(state.plugin_host.get_overlay_layouts()).unwrap_or_default())
+        .into_response()
 }
 
-async fn get_pages(State(state): State<ObsGatewayState>) -> Json<serde_json::Value> {
-    Json(serde_json::to_value(state.plugin_host.get_pages()).unwrap_or_default())
+async fn get_pages(
+    State(state): State<ObsGatewayState>,
+    Query(auth): Query<AuthQuery>,
+    headers: HeaderMap,
+) -> Response {
+    if !gateway_authorized(&state, &headers, &auth) {
+        return unauthorized();
+    }
+    Json(serde_json::to_value(state.plugin_host.get_pages()).unwrap_or_default()).into_response()
 }
 
 async fn read_visual_export_source(
     State(state): State<ObsGatewayState>,
+    Query(auth): Query<AuthQuery>,
+    headers: HeaderMap,
     Path((package_id, export_name)): Path<(String, String)>,
 ) -> Response {
+    if !gateway_authorized(&state, &headers, &auth) {
+        return unauthorized();
+    }
     text_result(
         state
             .plugin_host
@@ -146,9 +191,38 @@ async fn read_visual_export_source(
 
 async fn read_package_file(
     State(state): State<ObsGatewayState>,
+    Query(auth): Query<AuthQuery>,
+    headers: HeaderMap,
     Path((package_id, path)): Path<(String, String)>,
 ) -> Response {
-    match state.plugin_host.read_package_file(&package_id, &path) {
+    if !gateway_authorized(&state, &headers, &auth) {
+        return unauthorized();
+    }
+    package_file_response(&state, &package_id, &path)
+}
+
+async fn read_package_file_with_path_token(
+    State(state): State<ObsGatewayState>,
+    Path((token, package_id, path)): Path<(String, String, String)>,
+) -> Response {
+    if !gateway_path_token_authorized(&state, &token) {
+        return unauthorized();
+    }
+    package_file_response(&state, &package_id, &path)
+}
+
+async fn read_package_module_with_path_token(
+    State(state): State<ObsGatewayState>,
+    Path((token, _cache_key, package_id, path)): Path<(String, String, String, String)>,
+) -> Response {
+    if !gateway_path_token_authorized(&state, &token) {
+        return unauthorized();
+    }
+    package_file_response(&state, &package_id, &path)
+}
+
+fn package_file_response(state: &ObsGatewayState, package_id: &str, path: &str) -> Response {
+    match state.plugin_host.read_package_file(package_id, path) {
         Ok(bytes) => {
             let content_type = content_type_for_path(&path);
             ([(axum::http::header::CONTENT_TYPE, content_type)], bytes).into_response()
@@ -159,9 +233,14 @@ async fn read_package_file(
 
 async fn read_component_export_source(
     State(state): State<ObsGatewayState>,
+    Query(auth): Query<AuthQuery>,
+    headers: HeaderMap,
     Path(package_id): Path<String>,
     Json(request): Json<ComponentSourceRequest>,
 ) -> Response {
+    if !gateway_authorized(&state, &headers, &auth) {
+        return unauthorized();
+    }
     json_result(
         state
             .plugin_host
@@ -171,9 +250,14 @@ async fn read_component_export_source(
 
 async fn call_service_export(
     State(state): State<ObsGatewayState>,
+    Query(auth): Query<AuthQuery>,
+    headers: HeaderMap,
     Path(package_id): Path<String>,
     Json(request): Json<ServiceCallRequest>,
 ) -> Response {
+    if !gateway_authorized(&state, &headers, &auth) {
+        return unauthorized();
+    }
     json_result(
         state
             .plugin_host
@@ -189,15 +273,25 @@ async fn call_service_export(
 
 async fn get_package_settings(
     State(state): State<ObsGatewayState>,
+    Query(auth): Query<AuthQuery>,
+    headers: HeaderMap,
     Path(package_id): Path<String>,
 ) -> Response {
+    if !gateway_authorized(&state, &headers, &auth) {
+        return unauthorized();
+    }
     json_result(state.plugin_host.get_package_settings(&package_id))
 }
 
 async fn plugin_registry_get(
     State(state): State<ObsGatewayState>,
+    Query(auth): Query<AuthQuery>,
+    headers: HeaderMap,
     Path((package_id, key)): Path<(String, String)>,
 ) -> Response {
+    if !gateway_authorized(&state, &headers, &auth) {
+        return unauthorized();
+    }
     json_result(
         state
             .plugin_host
@@ -206,14 +300,27 @@ async fn plugin_registry_get(
     )
 }
 
-async fn registry_get(State(state): State<ObsGatewayState>, Path(key): Path<String>) -> Response {
+async fn registry_get(
+    State(state): State<ObsGatewayState>,
+    Query(auth): Query<AuthQuery>,
+    headers: HeaderMap,
+    Path(key): Path<String>,
+) -> Response {
+    if !gateway_authorized(&state, &headers, &auth) {
+        return unauthorized();
+    }
     json_result(Ok(state.registry.get(&key)))
 }
 
 async fn ws_telemetry(
     State(state): State<ObsGatewayState>,
+    Query(auth): Query<AuthQuery>,
+    headers: HeaderMap,
     ws: WebSocketUpgrade,
-) -> impl IntoResponse {
+) -> Response {
+    if !gateway_authorized(&state, &headers, &auth) {
+        return unauthorized();
+    }
     ws.on_upgrade(move |socket| async move {
         let (mut sender, _) = socket.split();
         let mut rx = state.bus.subscribe();
@@ -230,6 +337,7 @@ async fn ws_telemetry(
             }
         }
     })
+    .into_response()
 }
 
 async fn spa_index(State(state): State<ObsGatewayState>) -> Response {
@@ -266,6 +374,32 @@ fn text_result(result: Result<String, String>) -> Response {
             .into_response(),
         Err(err) => (axum::http::StatusCode::BAD_REQUEST, err).into_response(),
     }
+}
+
+fn gateway_authorized(state: &ObsGatewayState, headers: &HeaderMap, auth: &AuthQuery) -> bool {
+    if state.access_token.trim().is_empty() {
+        return true;
+    }
+    if auth.token.as_deref() == Some(state.access_token.as_str()) {
+        return true;
+    }
+    headers
+        .get(AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .is_some_and(|token| token == state.access_token)
+}
+
+fn gateway_path_token_authorized(state: &ObsGatewayState, token: &str) -> bool {
+    state.access_token.trim().is_empty() || token == state.access_token
+}
+
+fn unauthorized() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        "OBS gateway token is missing or invalid.",
+    )
+        .into_response()
 }
 
 fn content_type_for_path(path: &str) -> &'static str {

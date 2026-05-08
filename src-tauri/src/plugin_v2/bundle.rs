@@ -52,10 +52,9 @@ struct BundleSignatureFile {
 }
 
 pub fn inspect_bundle(path: &Path) -> Result<BundleInspection, String> {
-    let bytes = fs::read(path).map_err(|e| format!("Unable to read bundle: {e}"))?;
-    let sha256 = hex::encode(Sha256::digest(&bytes));
-    let cursor = std::io::Cursor::new(bytes);
-    let mut archive = ZipArchive::new(cursor).map_err(|e| format!("Invalid .brlp archive: {e}"))?;
+    let sha256 = sha256_file(path)?;
+    let file = File::open(path).map_err(|e| format!("Unable to open bundle: {e}"))?;
+    let mut archive = ZipArchive::new(file).map_err(|e| format!("Invalid .brlp archive: {e}"))?;
     inspect_archive(&mut archive, sha256)
 }
 
@@ -171,6 +170,22 @@ fn inspect_archive<R: Read + Seek>(
         uncompressed_size,
         sha256,
     })
+}
+
+fn sha256_file(path: &Path) -> Result<String, String> {
+    let mut file = File::open(path).map_err(|e| format!("Unable to open bundle: {e}"))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|e| format!("Unable to read bundle: {e}"))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hex::encode(hasher.finalize()))
 }
 
 fn read_hashes<R: Read + Seek>(

@@ -113,42 +113,8 @@
     obs: {
       host: string;
       port: number;
+      access_token: string;
     };
-  };
-
-  type VisualModule = {
-    default?: VisualExport;
-    mount?: VisualExport["mount"];
-  };
-
-  type ComponentModule = {
-    default?: ComponentExport;
-    mount?: ComponentExport["mount"];
-  };
-
-  type VisualExport = {
-    mount(context: VisualContext): void | (() => void) | Promise<void | (() => void)>;
-  };
-
-  type ComponentExport = {
-    mount(
-      context: ComponentContext,
-      props: Record<string, unknown>
-    ): void | (() => void) | Promise<void | (() => void)>;
-  };
-
-  type ComponentContext = {
-    root: HTMLElement;
-    providerPackageId: string;
-    exportName: string;
-    assets: {
-      url(ref: string): string;
-    };
-    diagnostics: VisualContext["diagnostics"];
-  };
-
-  type ComponentHandle = {
-    mount(root: HTMLElement, props?: Record<string, unknown>): Promise<void | (() => void)>;
   };
 
   type ComponentExportSource = {
@@ -159,6 +125,35 @@
     props_schema: any | null;
   };
 
+  type Diagnostics = {
+    log(message: string, data?: unknown): void;
+    warn(message: string, data?: unknown): void;
+    error(message: string, data?: unknown): void;
+  };
+
+  type ComponentContext = {
+    root: HTMLElement;
+    providerPackageId: string;
+    exportName: string;
+    assets: {
+      url(ref: string): string;
+    };
+    diagnostics: Diagnostics;
+  };
+
+  type ComponentHandle = {
+    mount(root: HTMLElement, props?: Record<string, unknown>): Promise<void | (() => void)>;
+  };
+
+  type ComponentExport = {
+    mount(context: ComponentContext, props: Record<string, unknown>): void | (() => void) | Promise<void | (() => void)>;
+  };
+
+  type ComponentModule = {
+    default?: ComponentExport;
+    mount?: ComponentExport["mount"];
+  };
+
   type VisualContext = {
     root: HTMLElement;
     package: PackageDescriptor;
@@ -167,7 +162,7 @@
     settings: Record<string, unknown>;
     setActive(active: boolean): void;
     bus: {
-      subscribe(eventName: string, callback: (event: any) => void): () => void;
+      subscribe(eventName: string, callback: (event: unknown) => void): () => void;
     };
     registry: {
       get(key: string): Promise<unknown>;
@@ -181,11 +176,16 @@
     assets: {
       url(ref: string): string;
     };
-    diagnostics: {
-      log(message: string, data?: unknown): void;
-      warn(message: string, data?: unknown): void;
-      error(message: string, data?: unknown): void;
-    };
+    diagnostics: Diagnostics;
+  };
+
+  type VisualExport = {
+    mount(context: VisualContext): void | (() => void) | Promise<void | (() => void)>;
+  };
+
+  type VisualModule = {
+    default?: VisualExport;
+    mount?: VisualExport["mount"];
   };
 
   let host: HTMLElement;
@@ -364,8 +364,34 @@
     return value.replace(/"/g, "%22");
   }
 
+  function moduleUrl(packageId: string, entry: string) {
+    return adapter.packageModuleUrl(packageId, entry, moduleVersion);
+  }
+
+  function packageAssetUrl(packageId: string, ref: string) {
+    const value = String(ref ?? "");
+    if (/^(https?:|data:|blob:|\/)/.test(value)) return value;
+    return adapter.packageFileUrl(packageId, value);
+  }
+
   function settingsObject(item: OverlayItem) {
     return item.settings && typeof item.settings === "object" && !Array.isArray(item.settings) ? item.settings : {};
+  }
+
+  function validateProps(schema: any | null, props: Record<string, unknown>) {
+    if (!schema || typeof schema !== "object") return;
+    const required = Array.isArray(schema.required) ? schema.required : [];
+    for (const key of required) {
+      if (!(key in props)) throw new Error(`Missing required component prop '${key}'.`);
+    }
+    const properties = schema.properties && typeof schema.properties === "object" ? schema.properties : {};
+    for (const [key, value] of Object.entries(props)) {
+      const expected = properties[key]?.type;
+      if (!expected || value == null) continue;
+      if (expected === "number" && typeof value !== "number") throw new Error(`Component prop '${key}' must be a number.`);
+      if (expected === "string" && typeof value !== "string") throw new Error(`Component prop '${key}' must be a string.`);
+      if (expected === "boolean" && typeof value !== "boolean") throw new Error(`Component prop '${key}' must be a boolean.`);
+    }
   }
 
   function visualMountSignature(item: OverlayItem) {
@@ -394,37 +420,6 @@
     });
     componentSourceCache.set(key, source);
     return source;
-  }
-
-  function packageAssetUrl(packageId: string, ref: string) {
-    if (/^(https?:|data:|blob:|\/)/.test(ref)) return ref;
-    return adapter.packageFileUrl(packageId, ref);
-  }
-
-  function moduleUrl(packageId: string, entry: string) {
-    return `${adapter.packageFileUrl(packageId, entry)}?v=${moduleVersion}`;
-  }
-
-  function validateProps(schema: any, props: Record<string, unknown>) {
-    if (!schema || typeof schema !== "object") return;
-    const required = Array.isArray(schema.required) ? schema.required : [];
-    for (const key of required) {
-      if (!(key in props)) throw new Error(`Missing required component prop '${key}'.`);
-    }
-    const properties = schema.properties && typeof schema.properties === "object" ? schema.properties : {};
-    for (const [key, value] of Object.entries(props)) {
-      const expected = properties[key]?.type;
-      if (!expected || value == null) continue;
-      if (expected === "number" && typeof value !== "number") {
-        throw new Error(`Component prop '${key}' must be a number.`);
-      }
-      if (expected === "string" && typeof value !== "string") {
-        throw new Error(`Component prop '${key}' must be a string.`);
-      }
-      if (expected === "boolean" && typeof value !== "boolean") {
-        throw new Error(`Component prop '${key}' must be a boolean.`);
-      }
-    }
   }
 
   function renderNativeItem(root: HTMLElement, item: OverlayItem) {
@@ -502,6 +497,8 @@
     const pkg = packageForItem(item);
     const visual = visualForItem(item);
     if (!pkg || !visual || !item.package_id || !item.export_name) return;
+    const mountedPackage = pkg;
+    const mountedVisual = visual;
 
     const root = document.createElement("div");
     root.className = "visual-export";
@@ -514,21 +511,49 @@
     applyItemStyle(root, layer, item, layout);
     host.appendChild(root);
 
+    let disposed = false;
+    let visualCleanup: void | (() => void);
+    const busCleanups = new Set<() => void>();
+    mountedItems.set(item.id, () => {
+      disposed = true;
+      if (typeof visualCleanup === "function") visualCleanup();
+      for (const cleanup of busCleanups) cleanup();
+      busCleanups.clear();
+      const nextActiveItems = new Set(eventActiveItems);
+      nextActiveItems.delete(item.id);
+      eventActiveItems = nextActiveItems;
+      root.remove();
+    });
+
     try {
       const packageSettings = await getPackageSettings(item.package_id);
-      const settings = { ...packageSettings, ...(item.settings ?? {}) };
-      const mod = (await import(/* @vite-ignore */ moduleUrl(item.package_id, visual.entry))) as VisualModule;
-      const visualModule = mod.default ?? mod;
-      if (!visualModule.mount) {
-        throw new Error(`Visual export '${item.package_id}/${item.export_name}' does not export mount().`);
+      const settings = { ...packageSettings, ...settingsObject(item) };
+      const visualMod = (await import(/* @vite-ignore */ moduleUrl(mountedPackage.id, mountedVisual.entry))) as VisualModule;
+      const visualModule = visualMod.default ?? visualMod;
+      const mountVisual = visualModule.mount;
+      if (!mountVisual) {
+        throw new Error(`Visual export '${mountedPackage.id}/${item.export_name}' does not export mount().`);
       }
-      const cleanup = await visualModule.mount({
+
+      const diagnostics: Diagnostics = {
+        log(message, data) {
+          data === undefined ? console.log(message) : console.log(message, data);
+        },
+        warn(message, data) {
+          data === undefined ? console.warn(message) : console.warn(message, data);
+        },
+        error(message, data) {
+          data === undefined ? console.error(message) : console.error(message, data);
+        }
+      };
+
+      const mountResult = await mountVisual({
         root,
-        package: pkg,
+        package: mountedPackage,
         exportName: item.export_name,
         item,
         settings,
-        setActive(active: boolean) {
+        setActive(active) {
           if (layer.kind !== "event") return;
           const nextActiveItems = new Set(eventActiveItems);
           if (active) {
@@ -540,51 +565,56 @@
         },
         bus: {
           subscribe(eventName, callback) {
-            const allowedReads = pkg.effective_permissions?.bus?.read;
-            if (!matchesPattern(allowedReads, eventName)) {
-              throw new Error(`Package '${pkg.id}' cannot subscribe to '${eventName}'.`);
+            const requestedEventName = String(eventName ?? "");
+            const allowedReads = mountedPackage.effective_permissions?.bus?.read;
+            if (!matchesPattern(allowedReads, requestedEventName)) {
+              throw new Error(`Package '${mountedPackage.id}' cannot subscribe to '${requestedEventName}'.`);
             }
-            return subscribe((event: any) => {
+            const cleanup = subscribe((event: any) => {
               const actualEventName = eventNameFor(event);
               if (
                 matchesPattern(allowedReads, actualEventName) &&
-                (eventName === "*" || actualEventName === eventName)
+                (requestedEventName === "*" || actualEventName === requestedEventName)
               ) {
                 callback(event);
               }
             });
+            busCleanups.add(cleanup);
+            return () => {
+              cleanup();
+              busCleanups.delete(cleanup);
+            };
           }
         },
         registry: {
-          get(key: string) {
-            return adapter.invoke("plugin_registry_get", { packageId: pkg.id, key });
+          get(key) {
+            return adapter.invoke("plugin_registry_get", { packageId: mountedPackage.id, key: String(key) });
           }
         },
         components: {
-          async load(ref: string) {
-            const component = await getComponentSource(pkg.id, ref);
-            const mod = (await import(
-              /* @vite-ignore */ moduleUrl(component.package_id, component.entry)
-            )) as ComponentModule;
-            const componentModule = mod.default ?? mod;
-            if (!componentModule.mount) {
-              throw new Error(`Component export '${ref}' does not export mount().`);
-            }
+          async load(ref) {
+            const componentRef = String(ref ?? "");
+            const component = await getComponentSource(mountedPackage.id, componentRef);
+            const componentMod = (await import(/* @vite-ignore */ moduleUrl(component.package_id, component.entry))) as ComponentModule;
+            const componentModule = componentMod.default ?? componentMod;
             const mountComponent = componentModule.mount;
+            if (!mountComponent) {
+              throw new Error(`Component export '${componentRef}' does not export mount().`);
+            }
             return {
-              async mount(root: HTMLElement, props: Record<string, unknown> = {}) {
+              async mount(componentRoot, props = {}) {
                 validateProps(component.props_schema, props);
                 return mountComponent(
                   {
-                    root,
+                    root: componentRoot,
                     providerPackageId: component.package_id,
                     exportName: component.export_name,
                     assets: {
-                      url(assetRef: string) {
+                      url(assetRef) {
                         return packageAssetUrl(component.package_id, assetRef);
                       }
                     },
-                    diagnostics: console
+                    diagnostics
                   },
                   props
                 );
@@ -593,34 +623,33 @@
           }
         },
         services: {
-          async call(ref: string, method: string, input?: unknown) {
+          call(ref, method, input) {
             return adapter.invoke("call_service_export", {
-              callerPackageId: pkg.id,
-              serviceRef: ref,
-              method,
+              callerPackageId: mountedPackage.id,
+              serviceRef: String(ref ?? ""),
+              method: String(method ?? ""),
               input: input ?? null
             });
           }
         },
         assets: {
-          url(ref: string) {
-            return packageAssetUrl(pkg.id, ref);
+          url(ref) {
+            return packageAssetUrl(mountedPackage.id, ref);
           }
         },
-        diagnostics: console
+        diagnostics
       });
-      mountedItems.set(item.id, () => {
-        if (cleanup) cleanup();
-        const nextActiveItems = new Set(eventActiveItems);
-        nextActiveItems.delete(item.id);
-        eventActiveItems = nextActiveItems;
-        root.remove();
-      });
+
+      if (disposed) {
+        if (typeof mountResult === "function") mountResult();
+        return;
+      }
+      visualCleanup = mountResult;
     } catch (error) {
+      if (disposed) return;
       const message = error instanceof Error ? error.message : String(error);
       root.classList.add("visual-export-error");
       root.textContent = message;
-      mountedItems.set(item.id, () => root.remove());
     }
   }
 
@@ -659,7 +688,7 @@
   async function refreshState() {
     if (adapter.isTauri) {
       const settings = await adapter.invoke<AppSettings>("get_app_settings");
-      adapter.configureGateway(settings.obs.host, settings.obs.port);
+      adapter.configureGateway(settings.obs.host, settings.obs.port, settings.obs.access_token);
     }
     packages = await adapter.invoke<PackageDescriptor[]>("list_packages");
     if (source === "page") {

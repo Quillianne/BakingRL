@@ -8,6 +8,7 @@
   import InstanceSettingsForm from "$lib/InstanceSettingsForm.svelte";
   import OverlayRenderer from "$lib/OverlayRenderer.svelte";
   import { emptySnapGuides, snapGuideStyle, snapItemPosition, type SnapGuides } from "$lib/editor/snapping";
+  import { createLayoutThumbnail } from "$lib/layoutThumbnail";
   import VisualLibrary from "$lib/editor/VisualLibrary.svelte";
   import {
     captureRouteReturnState,
@@ -79,6 +80,7 @@
     };
     layers: PageLayer[];
     template_source?: string | null;
+    thumbnail?: string | null;
   };
 
   type PagesFile = {
@@ -160,6 +162,12 @@
     layoutRevision += 1;
     message = "Saved.";
     setTimeout(() => (message = ""), 1500);
+  }
+
+  async function saveThumbnail() {
+    if (!page) return;
+    page.thumbnail = createLayoutThumbnail(page, { kind: "page" });
+    await save(page);
   }
 
   function sortedLayers(page: PageLayout) {
@@ -476,14 +484,16 @@
     void save();
   }
 
-  function openPage() {
+  async function openPage() {
     if (!page) return;
+    await saveThumbnail();
     const returnState = captureRouteReturnState();
     storePendingRouteReturn(returnState);
     window.location.href = `/page/${encodeURIComponent(page.id)}${returnStateQuery(returnState)}`;
   }
 
   async function closeEditor() {
+    await saveThumbnail();
     const returnState = routeReturnFromParams(data.returnTo, data.scrollY, "/pages");
     storeRouteScrollRestore(returnState);
     await goto(returnState.returnTo);

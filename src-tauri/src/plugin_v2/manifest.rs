@@ -356,6 +356,12 @@ fn validate_non_empty(field: &str, value: &str) -> Result<(), String> {
 
 fn validate_package_id(value: &str) -> Result<(), String> {
     validate_non_empty("id", value)?;
+    if value == "." || value == ".." || value.starts_with('.') || value.ends_with('.') {
+        return Err("id must not contain empty or dot-only path segments".to_string());
+    }
+    if value.split('.').any(|segment| segment.is_empty()) {
+        return Err("id must not contain empty dot-separated segments".to_string());
+    }
     if value.starts_with("plugin.") {
         return Err("id must not include the reserved 'plugin.' runtime prefix".to_string());
     }
@@ -528,5 +534,25 @@ mod tests {
         .unwrap();
 
         assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_path_like_package_ids() {
+        for id in [".", "..", ".com.example", "com.example.", "com..example"] {
+            let manifest: PluginPackageManifestV2 = serde_json::from_value(serde_json::json!({
+                "schema": "bakingrl.plugin/2",
+                "id": id,
+                "name": "Bad",
+                "version": "1.0.0",
+                "exports": {
+                    "services": {
+                        "bad": { "entry": "dist/services/bad.js" }
+                    }
+                }
+            }))
+            .unwrap();
+
+            assert!(manifest.validate().is_err(), "{id} should be rejected");
+        }
     }
 }

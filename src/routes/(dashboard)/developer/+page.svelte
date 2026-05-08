@@ -284,11 +284,6 @@
               <small>{dashboard.t("developer.registryDesc")}</small>
             </span>
           </button>
-          {#if activeToolPanel === "registry"}
-            <button class="btn-secondary" onclick={() => void dashboard.refreshRegistryEntries()} disabled={dashboard.busy}>
-              {dashboard.t("common.refresh")}
-            </button>
-          {/if}
         </div>
 
         {#if activeToolPanel === "registry"}

@@ -1,8 +1,8 @@
 <script lang="ts">
   import { getDashboardContext } from "$lib/dashboard/context";
   import LayoutCard from "$lib/dashboard/LayoutCard.svelte";
+  import LayoutThumbnail from "$lib/dashboard/LayoutThumbnail.svelte";
   import type { PageLayout } from "$lib/dashboard/types";
-  import OverlayRenderer from "$lib/OverlayRenderer.svelte";
 
   const dashboard = getDashboardContext();
   let createDialogOpen = $state(false);
@@ -51,7 +51,6 @@
     const badges: CardBadge[] = [
       { label: page.settings.open_target === "window" ? dashboard.t("pages.window") : dashboard.t("pages.inApp"), tone: "route" }
     ];
-    if (page.favorite) badges.push({ label: dashboard.t("pages.favoriteBadge"), tone: "stream" });
     if (page.template_source) badges.push({ label: dashboard.t("common.imported"), tone: "muted" });
     return badges;
   }
@@ -87,7 +86,7 @@
             deleteTitle={dashboard.t("confirm.deletePageTitle")}
           >
             {#snippet preview()}
-              <OverlayRenderer source="page" layoutOverride={page} mode="page" preview={true} />
+              <LayoutThumbnail thumbnail={page.thumbnail} name={page.name} />
             {/snippet}
 
             {#snippet tools()}
@@ -104,11 +103,11 @@
             {/snippet}
 
             {#snippet actions()}
-              <button class="btn-primary" onclick={() => void dashboard.openPage(page.id)} disabled={dashboard.busy}>
-                {dashboard.t("common.open")}
-              </button>
-              <button class="btn-outline" onclick={() => void dashboard.openPageEditor(page.id)}>
+              <button class="btn-primary" onclick={() => void dashboard.openPageEditor(page.id)}>
                 {dashboard.t("common.edit")}
+              </button>
+              <button class="btn-outline" onclick={() => void dashboard.openPage(page.id)} disabled={dashboard.busy}>
+                {dashboard.t("common.open")}
               </button>
               <button class="btn-outline" onclick={() => void dashboard.duplicatePage(page.id)} disabled={dashboard.busy}>
                 {dashboard.t("common.duplicate")}

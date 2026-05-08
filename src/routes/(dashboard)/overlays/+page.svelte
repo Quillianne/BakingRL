@@ -1,8 +1,8 @@
 <script lang="ts">
   import { getDashboardContext } from "$lib/dashboard/context";
   import LayoutCard from "$lib/dashboard/LayoutCard.svelte";
+  import LayoutThumbnail from "$lib/dashboard/LayoutThumbnail.svelte";
   import type { OverlayLayout } from "$lib/dashboard/types";
-  import OverlayRenderer from "$lib/OverlayRenderer.svelte";
 
   const dashboard = getDashboardContext();
   let createDialogOpen = $state(false);
@@ -78,14 +78,13 @@
         <p>{dashboard.t("overlays.obsDesc")}</p>
       </div>
     </div>
-    <div class="copy-url-row">
-      <code class="mono">{dashboard.streamUrl()}</code>
-      <button class="btn-outline copy-url-button" onclick={() => void dashboard.copyText(dashboard.streamUrl(), dashboard.t("overlays.generalUrl"))} disabled={!dashboard.obsBaseUrl}>
+    <div class="card-actions obs-copy-actions">
+      <button class="btn-outline" onclick={() => void dashboard.copyText(dashboard.streamUrl(), dashboard.t("overlays.generalUrl"))} disabled={!dashboard.obsBaseUrl}>
         <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
           <rect x="9" y="9" width="13" height="13" rx="2"></rect>
           <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
         </svg>
-        {dashboard.t("common.copyUrl")}
+        {dashboard.t("overlays.copyGeneralUrl")}
       </button>
     </div>
   </section>
@@ -129,7 +128,7 @@
           deleteTitle={dashboard.t("confirm.deleteLayoutTitle")}
         >
           {#snippet preview()}
-            <OverlayRenderer layoutOverride={layout} mode="editor" preview={true} />
+            <LayoutThumbnail thumbnail={layout.thumbnail} name={layout.name} />
           {/snippet}
 
           {#snippet actions()}

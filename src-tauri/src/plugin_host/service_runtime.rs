@@ -5,16 +5,27 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use deno_core::{op2, FsModuleLoader, JsRuntime, OpState, RuntimeOptions};
+use deno_core::{op2, JsRuntime, OpState, RuntimeOptions};
 use deno_error::JsErrorBox;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{mpsc, oneshot};
 use tracing::{error, info, warn};
 
+use super::runtime_module_loader::PackageModuleLoader;
 use crate::bus::{BusEvent, EventBus};
 use crate::models::GameEvent;
 use crate::plugin_v2::permissions::EffectivePackagePermissionsV2;
 use crate::registry::Registry;
+
+const RUNTIME_COMMAND_QUEUE: usize = 128;
+const RUNTIME_EVENT_QUEUE: usize = 256;
+const RUNTIME_CALL_QUEUE: usize = 128;
+
+#[derive(Debug, Clone)]
+pub struct ServiceRuntimeModuleSpec {
+    pub service_name: String,
+    pub entry_path: PathBuf,
+}
 
 #[derive(Debug, Clone)]
 pub struct ServiceRuntimeSpec {
@@ -25,16 +36,42 @@ pub struct ServiceRuntimeSpec {
     pub service_imports: Vec<String>,
     pub service_methods: HashMap<String, Vec<String>>,
     pub permissions: EffectivePackagePermissionsV2,
+    pub additional_modules: Vec<ServiceRuntimeModuleSpec>,
 }
 
 impl ServiceRuntimeSpec {
     fn service_ref(&self) -> String {
         format!("{}/{}", self.package_id, self.service_name)
     }
+
+    fn runtime_key(&self) -> String {
+        if self.additional_modules.is_empty() {
+            self.service_ref()
+        } else {
+            format!("{}/__package__", self.package_id)
+        }
+    }
+
+    fn module_specs(&self) -> Vec<ServiceRuntimeModuleSpec> {
+        let mut modules = vec![ServiceRuntimeModuleSpec {
+            service_name: self.service_name.clone(),
+            entry_path: self.entry_path.clone(),
+        }];
+        modules.extend(self.additional_modules.clone());
+        modules
+    }
+
+    fn service_refs(&self) -> Vec<String> {
+        self.module_specs()
+            .into_iter()
+            .map(|module| format!("{}/{}", self.package_id, module.service_name))
+            .collect()
+    }
 }
 
 enum ServiceRuntimeCommand {
     Call {
+        service_ref: String,
         method: String,
         input: serde_json::Value,
         response: oneshot::Sender<Result<serde_json::Value, String>>,
@@ -43,6 +80,8 @@ enum ServiceRuntimeCommand {
 
 struct ServiceRuntimeHandle {
     client: ServiceRuntimeClient,
+    service_refs: Vec<String>,
+    fingerprint: String,
     shutdown: Option<oneshot::Sender<()>>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -77,32 +116,64 @@ impl ServiceRuntimeManager {
         self.router.clone()
     }
 
+    #[cfg(test)]
     pub fn reload(
+        &self,
+        specs: Vec<ServiceRuntimeSpec>,
+        bus: Arc<EventBus>,
+        registry: Arc<Registry>,
+    ) {
+        self.reload_with_optional_app_handle(specs, bus, registry, None);
+    }
+
+    pub fn reload_with_app_handle(
         &self,
         specs: Vec<ServiceRuntimeSpec>,
         bus: Arc<EventBus>,
         registry: Arc<Registry>,
         app_handle: AppHandle,
     ) {
+        self.reload_with_optional_app_handle(specs, bus, registry, Some(app_handle));
+    }
+
+    fn reload_with_optional_app_handle(
+        &self,
+        specs: Vec<ServiceRuntimeSpec>,
+        bus: Arc<EventBus>,
+        registry: Arc<Registry>,
+        app_handle: Option<AppHandle>,
+    ) {
         let mut handles = self.handles.lock().unwrap();
-        let desired: HashSet<String> = specs.iter().map(ServiceRuntimeSpec::service_ref).collect();
+        let desired: HashSet<String> = specs.iter().map(ServiceRuntimeSpec::runtime_key).collect();
 
         let stale: Vec<_> = handles
             .keys()
-            .filter(|service_ref| !desired.contains(*service_ref))
+            .filter(|runtime_key| !desired.contains(*runtime_key))
             .cloned()
             .collect();
-        for service_ref in stale {
-            if let Some(handle) = handles.remove(&service_ref) {
-                self.router.remove(&service_ref);
+        for runtime_key in stale {
+            if let Some(handle) = handles.remove(&runtime_key) {
+                for service_ref in &handle.service_refs {
+                    self.router.remove(service_ref);
+                }
                 handle.shutdown();
             }
         }
 
         for spec in specs {
-            let service_ref = spec.service_ref();
-            if handles.contains_key(&service_ref) {
+            let runtime_key = spec.runtime_key();
+            let fingerprint = format!("{spec:?}");
+            if handles
+                .get(&runtime_key)
+                .is_some_and(|handle| handle.fingerprint == fingerprint)
+            {
                 continue;
+            }
+            if let Some(handle) = handles.remove(&runtime_key) {
+                for service_ref in &handle.service_refs {
+                    self.router.remove(service_ref);
+                }
+                handle.shutdown();
             }
             match spawn_service_runtime(
                 spec,
@@ -112,13 +183,22 @@ impl ServiceRuntimeManager {
                 app_handle.clone(),
             ) {
                 Ok(handle) => {
-                    self.router
-                        .insert(service_ref.clone(), handle.client.clone());
-                    handles.insert(service_ref, handle);
+                    for service_ref in &handle.service_refs {
+                        self.router.insert(
+                            service_ref.clone(),
+                            ServiceRuntimeClient {
+                                service_ref: service_ref.clone(),
+                                tx: handle.client.tx.clone(),
+                            },
+                        );
+                    }
+                    handles.insert(runtime_key, handle);
                 }
                 Err(err) => {
                     warn!("Unable to start service runtime: {}", err);
-                    emit_runtime_error(&app_handle, "service", &service_ref, &err);
+                    if let Some(app_handle) = app_handle.as_ref() {
+                        emit_runtime_error(app_handle, "service", &runtime_key, &err);
+                    }
                 }
             }
         }
@@ -130,17 +210,7 @@ impl ServiceRuntimeManager {
         method: String,
         input: serde_json::Value,
     ) -> Result<serde_json::Value, String> {
-        let rx = {
-            let handles = self.handles.lock().unwrap();
-            let handle = handles
-                .get(service_ref)
-                .ok_or_else(|| format!("Service runtime '{service_ref}' is not running."))?;
-            let (response_tx, response_rx) = oneshot::channel();
-            handle.client.call(method, input, response_tx)?;
-            response_rx
-        };
-        rx.await
-            .map_err(|_| format!("Service runtime '{service_ref}' did not answer."))?
+        self.router.call(service_ref, method, input).await
     }
 }
 
@@ -166,7 +236,7 @@ struct ServiceRuntimeContext {
 #[derive(Clone)]
 pub(crate) struct ServiceRuntimeClient {
     service_ref: String,
-    tx: mpsc::UnboundedSender<ServiceRuntimeCommand>,
+    tx: mpsc::Sender<ServiceRuntimeCommand>,
 }
 
 impl ServiceRuntimeClient {
@@ -177,12 +247,18 @@ impl ServiceRuntimeClient {
         response: oneshot::Sender<Result<serde_json::Value, String>>,
     ) -> Result<(), String> {
         self.tx
-            .send(ServiceRuntimeCommand::Call {
+            .try_send(ServiceRuntimeCommand::Call {
+                service_ref: self.service_ref.clone(),
                 method,
                 input,
                 response,
             })
-            .map_err(|_| format!("Service runtime '{}' is stopped.", self.service_ref))
+            .map_err(|_| {
+                format!(
+                    "Service runtime '{}' is overloaded or stopped.",
+                    self.service_ref
+                )
+            })
     }
 }
 
@@ -224,26 +300,38 @@ impl ServiceCallRouter {
 
 struct PendingCall {
     id: u32,
+    service_ref: String,
     method: String,
     input: serde_json::Value,
     response: oneshot::Sender<Result<serde_json::Value, String>>,
 }
 
-type EventReceiver = Rc<tokio::sync::Mutex<mpsc::UnboundedReceiver<serde_json::Value>>>;
-type CallReceiver = Rc<tokio::sync::Mutex<mpsc::UnboundedReceiver<PendingCall>>>;
+type EventReceiver = Rc<tokio::sync::Mutex<mpsc::Receiver<serde_json::Value>>>;
+type CallReceiver = Rc<tokio::sync::Mutex<mpsc::Receiver<PendingCall>>>;
 type PendingResponses =
     Rc<RefCell<HashMap<u32, oneshot::Sender<Result<serde_json::Value, String>>>>>;
 type Subscriptions = Arc<Mutex<HashSet<String>>>;
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ServiceBootstrapModule {
+    service_ref: String,
+    entry_url: String,
+    methods: Vec<String>,
+}
 
 fn spawn_service_runtime(
     spec: ServiceRuntimeSpec,
     bus: Arc<EventBus>,
     registry: Arc<Registry>,
     router: ServiceCallRouter,
-    app_handle: AppHandle,
+    app_handle: Option<AppHandle>,
 ) -> Result<ServiceRuntimeHandle, String> {
-    let (command_tx, command_rx) = mpsc::unbounded_channel::<ServiceRuntimeCommand>();
+    let (command_tx, command_rx) = mpsc::channel::<ServiceRuntimeCommand>(RUNTIME_COMMAND_QUEUE);
+    let runtime_key = spec.runtime_key();
     let service_ref = spec.service_ref();
+    let service_refs = spec.service_refs();
+    let fingerprint = format!("{spec:?}");
     let client = ServiceRuntimeClient {
         service_ref: service_ref.clone(),
         tx: command_tx,
@@ -252,7 +340,7 @@ fn spawn_service_runtime(
     let error_service_ref = service_ref.clone();
 
     let thread = std::thread::Builder::new()
-        .name(format!("bakingrl-service-{service_ref}"))
+        .name(format!("bakingrl-service-{runtime_key}"))
         .spawn(move || {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -264,7 +352,9 @@ fn spawn_service_runtime(
                     run_service_runtime(spec, bus, registry, router, command_rx, shutdown_rx).await
                 {
                     error!("Service runtime failed: {}", err);
-                    emit_runtime_error(&app_handle, "service", &error_service_ref, &err);
+                    if let Some(app_handle) = app_handle.as_ref() {
+                        emit_runtime_error(app_handle, "service", &error_service_ref, &err);
+                    }
                 }
             });
         })
@@ -272,6 +362,8 @@ fn spawn_service_runtime(
 
     Ok(ServiceRuntimeHandle {
         client,
+        service_refs,
+        fingerprint,
         shutdown: Some(shutdown_tx),
         thread: Some(thread),
     })
@@ -296,12 +388,12 @@ async fn run_service_runtime(
     bus: Arc<EventBus>,
     registry: Arc<Registry>,
     router: ServiceCallRouter,
-    mut command_rx: mpsc::UnboundedReceiver<ServiceRuntimeCommand>,
+    mut command_rx: mpsc::Receiver<ServiceRuntimeCommand>,
     shutdown_rx: oneshot::Receiver<()>,
 ) -> Result<(), String> {
     let service_ref = spec.service_ref();
-    let (event_tx, event_rx) = mpsc::unbounded_channel::<serde_json::Value>();
-    let (call_tx, call_rx) = mpsc::unbounded_channel::<PendingCall>();
+    let (event_tx, event_rx) = mpsc::channel::<serde_json::Value>(RUNTIME_EVENT_QUEUE);
+    let (call_tx, call_rx) = mpsc::channel::<PendingCall>(RUNTIME_CALL_QUEUE);
     let event_rx = Rc::new(tokio::sync::Mutex::new(event_rx));
     let call_rx = Rc::new(tokio::sync::Mutex::new(call_rx));
     let pending_responses: PendingResponses = Rc::new(RefCell::new(HashMap::new()));
@@ -324,8 +416,41 @@ async fn run_service_runtime(
     );
     forward_service_commands(&service_ref, &mut command_rx, call_tx);
 
+    let module_specs = spec.module_specs();
+    let service_methods = spec.service_methods.clone();
+    let modules = module_specs
+        .iter()
+        .map(|module| {
+            let service_ref = format!("{}/{}", spec.package_id, module.service_name);
+            let entry_url = url::Url::from_file_path(&module.entry_path).map_err(|_| {
+                format!(
+                    "Unable to convert service entry to file URL: {:?}",
+                    module.entry_path
+                )
+            })?;
+            Ok(ServiceBootstrapModule {
+                methods: service_methods
+                    .get(&service_ref)
+                    .cloned()
+                    .unwrap_or_default(),
+                service_ref,
+                entry_url: entry_url.to_string(),
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let bootstrap = service_bootstrap(&modules)?;
+    let bootstrap_url = deno_core::resolve_path(
+        &format!("./bakingrl-service-{}.js", spec.service_name),
+        &std::env::current_dir().map_err(|e| format!("Unable to resolve cwd: {e}"))?,
+    )
+    .map_err(|e| format!("Unable to resolve service bootstrap module: {e}"))?;
+    let module_loader = PackageModuleLoader::from_entry_paths(
+        module_specs.iter().map(|module| module.entry_path.clone()),
+        &spec.storage_root,
+    )
+    .with_virtual_module(&bootstrap_url, bootstrap.clone());
     let mut js_runtime = JsRuntime::new(RuntimeOptions {
-        module_loader: Some(Rc::new(FsModuleLoader)),
+        module_loader: Some(Rc::new(module_loader)),
         extensions: vec![bakingrl_service::init()],
         ..Default::default()
     });
@@ -343,18 +468,6 @@ async fn run_service_runtime(
         state.put::<Subscriptions>(subscriptions);
     }
 
-    let entry_url = url::Url::from_file_path(&spec.entry_path).map_err(|_| {
-        format!(
-            "Unable to convert service entry to file URL: {:?}",
-            spec.entry_path
-        )
-    })?;
-    let bootstrap = service_bootstrap(entry_url.as_str());
-    let bootstrap_url = deno_core::resolve_path(
-        &format!("./bakingrl-service-{}.js", spec.service_name),
-        &std::env::current_dir().map_err(|e| format!("Unable to resolve cwd: {e}"))?,
-    )
-    .map_err(|e| format!("Unable to resolve service bootstrap module: {e}"))?;
     let mod_id = js_runtime
         .load_main_es_module_from_code(&bootstrap_url, bootstrap)
         .await
@@ -373,16 +486,18 @@ async fn run_service_runtime(
 
 fn forward_service_commands(
     service_ref: &str,
-    command_rx: &mut mpsc::UnboundedReceiver<ServiceRuntimeCommand>,
-    call_tx: mpsc::UnboundedSender<PendingCall>,
+    command_rx: &mut mpsc::Receiver<ServiceRuntimeCommand>,
+    call_tx: mpsc::Sender<PendingCall>,
 ) {
     let service_ref = service_ref.to_string();
-    let mut command_rx = std::mem::replace(command_rx, mpsc::unbounded_channel().1);
+    let (_replacement_tx, replacement_rx) = mpsc::channel(1);
+    let mut command_rx = std::mem::replace(command_rx, replacement_rx);
     tokio::task::spawn_local(async move {
         let mut next_id = 1u32;
         while let Some(command) = command_rx.recv().await {
             match command {
                 ServiceRuntimeCommand::Call {
+                    service_ref: target_service_ref,
                     method,
                     input,
                     response,
@@ -392,10 +507,12 @@ fn forward_service_commands(
                     if call_tx
                         .send(PendingCall {
                             id,
+                            service_ref: target_service_ref,
                             method,
                             input,
                             response,
                         })
+                        .await
                         .is_err()
                     {
                         warn!("Service runtime '{}' dropped a call request.", service_ref);
@@ -409,7 +526,7 @@ fn forward_service_commands(
 fn forward_bus_events(
     context: ServiceRuntimeContext,
     bus: Arc<EventBus>,
-    event_tx: mpsc::UnboundedSender<serde_json::Value>,
+    event_tx: mpsc::Sender<serde_json::Value>,
     subscriptions: Subscriptions,
     mut shutdown_rx: oneshot::Receiver<()>,
 ) {
@@ -438,7 +555,7 @@ fn forward_bus_events(
                         BusEvent::GameData(event) => serde_json::to_value(&*event).unwrap_or(serde_json::Value::Null),
                         BusEvent::RawJson(raw) => serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null),
                     };
-                    if event_tx.send(value).is_err() {
+                    if event_tx.send(value).await.is_err() {
                         break;
                     }
                 }
@@ -447,16 +564,43 @@ fn forward_bus_events(
     });
 }
 
-fn service_bootstrap(entry_url: &str) -> String {
-    let entry_url = serde_json::to_string(entry_url).unwrap();
-    format!(
+fn service_bootstrap(modules: &[ServiceBootstrapModule]) -> Result<String, String> {
+    let modules_json = serde_json::to_string(modules)
+        .map_err(|e| format!("Unable to serialize service bootstrap modules: {e}"))?;
+    Ok(format!(
         r#"
-const serviceModule = await import({entry_url});
-const service = serviceModule.default ?? serviceModule;
-if (!service || typeof service !== "object") {{
-  throw new Error("Service module must export an object.");
+const serviceEntries = {modules_json};
+const services = new Map();
+const allowedMethods = new Map();
+for (const entry of serviceEntries) {{
+  const serviceModule = await import(entry.entryUrl);
+  const service = serviceModule.default ?? serviceModule;
+  if (!service || typeof service !== "object") {{
+    throw new Error(`Service module '${{entry.serviceRef}}' must export an object.`);
+  }}
+  services.set(entry.serviceRef, service);
+  allowedMethods.set(entry.serviceRef, new Set(entry.methods ?? []));
 }}
 const listeners = new Map();
+const callStack = [];
+async function invokeService(serviceRef, methodName, input) {{
+  if (callStack[callStack.length - 1] === serviceRef) {{
+    throw new Error("A service cannot synchronously call itself.");
+  }}
+  const service = services.get(serviceRef);
+  if (!service) throw new Error(`Unknown service '${{serviceRef}}'.`);
+  if (!allowedMethods.get(serviceRef)?.has(methodName)) {{
+    throw new Error(`Service '${{serviceRef}}' does not expose method '${{methodName}}'.`);
+  }}
+  const method = service.methods?.[methodName];
+  if (typeof method !== "function") throw new Error(`Unknown service method '${{methodName}}'.`);
+  callStack.push(serviceRef);
+  try {{
+    return await method(input, context);
+  }} finally {{
+    callStack.pop();
+  }}
+}}
 const context = {{
   bus: {{
     subscribe(eventName, callback) {{
@@ -488,7 +632,12 @@ const context = {{
   }},
   services: {{
     async call(ref, method, input) {{
-      return await globalThis.Deno.core.ops.op_service_call(String(ref), String(method), input ?? null);
+      const serviceRef = String(ref);
+      const methodName = String(method);
+      if (services.has(serviceRef)) {{
+        return await invokeService(serviceRef, methodName, input ?? null);
+      }}
+      return await globalThis.Deno.core.ops.op_service_call(serviceRef, methodName, input ?? null);
     }}
   }},
   settings: {{
@@ -497,7 +646,9 @@ const context = {{
   }},
   diagnostics: console
 }};
-await service.mount?.(context);
+for (const service of services.values()) {{
+  await service.mount?.(context);
+}}
 async function dispatchEvents() {{
   while (true) {{
     let event;
@@ -525,9 +676,7 @@ async function dispatchCalls() {{
       throw error;
     }}
     try {{
-      const method = service.methods?.[call.method];
-      if (typeof method !== "function") throw new Error(`Unknown service method '${{call.method}}'.`);
-      const output = await method(call.input, context);
+      const output = await invokeService(call.serviceRef, call.method, call.input);
       globalThis.Deno.core.ops.op_service_complete_call(call.id, true, output ?? null);
     }} catch (error) {{
       globalThis.Deno.core.ops.op_service_complete_call(call.id, false, error instanceof Error ? error.message : String(error));
@@ -536,7 +685,7 @@ async function dispatchCalls() {{
 }}
 await Promise.race([dispatchEvents(), dispatchCalls()]);
 "#
-    )
+    ))
 }
 
 #[op2(fast)]
@@ -597,6 +746,7 @@ pub async fn op_service_next_call(
     }
     Ok(serde_json::json!({
         "id": pending.id,
+        "serviceRef": pending.service_ref,
         "method": pending.method,
         "input": pending.input
     }))
@@ -876,6 +1026,7 @@ export default {
                         write: vec![],
                     },
                 },
+                additional_modules: Vec::new(),
             }],
             Arc::new(EventBus::new(16)),
             Arc::new(Registry::new()),
@@ -943,6 +1094,7 @@ export default {
                         write: vec!["plugin://self/*".to_string()],
                     },
                 },
+                additional_modules: Vec::new(),
             }],
             Arc::new(EventBus::new(16)),
             Arc::new(Registry::new()),
@@ -1042,6 +1194,7 @@ export default {
                     service_imports: vec![],
                     service_methods: service_methods.clone(),
                     permissions: permissions.clone(),
+                    additional_modules: Vec::new(),
                 },
                 ServiceRuntimeSpec {
                     package_id: "com.example.caller".to_string(),
@@ -1051,6 +1204,7 @@ export default {
                     service_imports: vec!["com.example.provider/math".to_string()],
                     service_methods,
                     permissions,
+                    additional_modules: Vec::new(),
                 },
             ],
             Arc::new(EventBus::new(16)),
@@ -1066,5 +1220,103 @@ export default {
             .await
             .unwrap();
         assert_eq!(output, 41);
+    }
+
+    #[tokio::test]
+    async fn package_runtime_dispatches_multiple_services() {
+        let dir = tempfile::tempdir().unwrap();
+        let caller_entry = dir.path().join("caller.js");
+        let helper_entry = dir.path().join("helper.js");
+        std::fs::write(
+            &caller_entry,
+            r#"
+export default {
+  methods: {
+    async calculate(input, context) {
+      const doubled = await context.services.call("com.example.package/helper", "double", input);
+      return doubled + 1;
+    }
+  }
+};
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            &helper_entry,
+            r#"
+export default {
+  methods: {
+    double(input) {
+      return input.value * 2;
+    }
+  }
+};
+"#,
+        )
+        .unwrap();
+
+        let permissions = EffectivePackagePermissionsV2 {
+            bus: EffectiveBusPermissionsV2 {
+                read: vec![],
+                publish: vec![],
+            },
+            registry: EffectiveRegistryPermissionsV2 {
+                read: vec![],
+                write: vec![],
+            },
+            network: Default::default(),
+            storage: EffectiveStoragePermissionsV2 {
+                read: vec![],
+                write: vec![],
+            },
+        };
+        let service_methods = HashMap::from([
+            (
+                "com.example.package/calc".to_string(),
+                vec!["calculate".to_string()],
+            ),
+            (
+                "com.example.package/helper".to_string(),
+                vec!["double".to_string()],
+            ),
+        ]);
+        let manager = ServiceRuntimeManager::default();
+        manager.reload(
+            vec![ServiceRuntimeSpec {
+                package_id: "com.example.package".to_string(),
+                service_name: "calc".to_string(),
+                entry_path: caller_entry,
+                storage_root: dir.path().join("storage"),
+                service_imports: vec![],
+                service_methods,
+                permissions,
+                additional_modules: vec![ServiceRuntimeModuleSpec {
+                    service_name: "helper".to_string(),
+                    entry_path: helper_entry,
+                }],
+            }],
+            Arc::new(EventBus::new(16)),
+            Arc::new(Registry::new()),
+        );
+
+        let output = manager
+            .call(
+                "com.example.package/calc",
+                "calculate".to_string(),
+                serde_json::json!({ "value": 20 }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(output, 41);
+
+        let output = manager
+            .call(
+                "com.example.package/helper",
+                "double".to_string(),
+                serde_json::json!({ "value": 21 }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(output, 42);
     }
 }

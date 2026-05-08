@@ -5,7 +5,7 @@
 
   const dashboard = getDashboardContext();
 
-  let section = $state<"general" | "appearance" | "telemetry" | "overlay">("general");
+  let section = $state<"general" | "security" | "appearance" | "telemetry" | "overlay">("general");
 </script>
 
 <div class="page-title">
@@ -20,6 +20,9 @@
     <nav class="studio-panel settings-nav" aria-label={dashboard.t("nav.settings")}>
       <button class="btn-outline" class:active={section === "general"} onclick={() => (section = "general")}>
         {dashboard.t("settings.general")}
+      </button>
+      <button class="btn-outline" class:active={section === "security"} onclick={() => (section = "security")}>
+        {dashboard.t("settings.security")}
       </button>
       <button class="btn-outline" class:active={section === "appearance"} onclick={() => (section = "appearance")}>
         {dashboard.t("settings.appearance")}
@@ -56,6 +59,35 @@
             <input type="checkbox" bind:checked={dashboard.appSettings.behavior.launch_at_startup} />
             <span></span>
             {dashboard.t("settings.launchAtStartup")}
+          </label>
+
+          <div class="card-actions">
+            <button class="btn-primary" onclick={() => void dashboard.saveAppSettings()} disabled={dashboard.busy}>
+              {dashboard.t("common.saveSettings")}
+            </button>
+          </div>
+        </div>
+      {:else if section === "security"}
+        <div class="panel-heading">
+          <div>
+            <h2>{dashboard.t("settings.security")}</h2>
+            <p>{dashboard.t("settings.securityDesc")}</p>
+          </div>
+        </div>
+
+        <div class="section-stack">
+          <div class="input-group">
+            <label for="runtimeIsolation">{dashboard.t("settings.runtimeIsolation")}</label>
+            <select id="runtimeIsolation" bind:value={dashboard.appSettings.security.plugin_runtime_isolation}>
+              <option value="export">{dashboard.t("settings.runtimeIsolationExport")}</option>
+              <option value="package">{dashboard.t("settings.runtimeIsolationPackage")}</option>
+            </select>
+          </div>
+
+          <label class="check-row">
+            <input type="checkbox" bind:checked={dashboard.appSettings.security.require_trusted_remote_packages} />
+            <span></span>
+            {dashboard.t("settings.requireTrustedRemotePackages")}
           </label>
 
           <div class="card-actions">

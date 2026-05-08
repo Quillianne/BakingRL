@@ -308,6 +308,8 @@ impl Default for AppBehaviorSettings {
 pub struct ObsSettings {
     pub host: String,
     pub port: u16,
+    #[serde(default)]
+    pub access_token: String,
 }
 
 impl Default for ObsSettings {
@@ -315,6 +317,44 @@ impl Default for ObsSettings {
         Self {
             host: "127.0.0.1".to_string(),
             port: 8080,
+            access_token: String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginRuntimeIsolation {
+    Export,
+    Package,
+}
+
+impl Default for PluginRuntimeIsolation {
+    fn default() -> Self {
+        Self::Export
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SecuritySettings {
+    #[serde(default)]
+    pub plugin_runtime_isolation: PluginRuntimeIsolation,
+    #[serde(default = "default_require_trusted_remote_packages")]
+    pub require_trusted_remote_packages: bool,
+    #[serde(default)]
+    pub trusted_package_public_keys: Vec<String>,
+}
+
+fn default_require_trusted_remote_packages() -> bool {
+    true
+}
+
+impl Default for SecuritySettings {
+    fn default() -> Self {
+        Self {
+            plugin_runtime_isolation: PluginRuntimeIsolation::default(),
+            require_trusted_remote_packages: default_require_trusted_remote_packages(),
+            trusted_package_public_keys: Vec::new(),
         }
     }
 }
@@ -406,6 +446,8 @@ pub struct AppSettings {
     #[serde(default)]
     pub behavior: AppBehaviorSettings,
     #[serde(default)]
+    pub security: SecuritySettings,
+    #[serde(default)]
     pub obs: ObsSettings,
     #[serde(default)]
     pub overlay: OverlaySettings,
@@ -481,6 +523,8 @@ pub struct OverlayLayout {
     pub updated_at_ms: u64,
     #[serde(default)]
     pub template_source: Option<String>,
+    #[serde(default)]
+    pub thumbnail: Option<String>,
 }
 
 /// Persisted catalog of overlay layouts and their runtime routing.
@@ -596,6 +640,8 @@ pub struct PageLayout {
     pub updated_at_ms: u64,
     #[serde(default)]
     pub template_source: Option<String>,
+    #[serde(default)]
+    pub thumbnail: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]

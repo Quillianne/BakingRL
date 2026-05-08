@@ -172,6 +172,7 @@ export type OverlayLayout = {
   created_at_ms: number;
   updated_at_ms: number;
   template_source?: string | null;
+  thumbnail?: string | null;
 };
 
 export type OverlayLayoutCatalog = {
@@ -240,6 +241,7 @@ export type PageLayout = {
   created_at_ms: number;
   updated_at_ms: number;
   template_source?: string | null;
+  thumbnail?: string | null;
 };
 
 export type PagesFile = {
@@ -252,9 +254,15 @@ export type AppSettings = {
     close_will_hide: boolean;
     start_minimized: boolean;
   };
+  security: {
+    plugin_runtime_isolation: "export" | "package";
+    require_trusted_remote_packages: boolean;
+    trusted_package_public_keys: string[];
+  };
   obs: {
     host: string;
     port: number;
+    access_token: string;
   };
   overlay: {
     hide_when_game_unfocused: boolean;

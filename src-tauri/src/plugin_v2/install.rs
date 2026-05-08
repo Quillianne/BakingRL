@@ -2,9 +2,13 @@ use std::fs;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use futures_util::StreamExt;
 use reqwest::Url;
+use tokio::io::AsyncWriteExt;
 
 use super::bundle::{extract_bundle, inspect_bundle, BundleInspection};
+
+const MAX_BUNDLE_DOWNLOAD_BYTES: u64 = 100 * 1024 * 1024;
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct InstallReceipt {
@@ -84,15 +88,36 @@ pub async fn download_bundle_to_file(url: &str, target: &Path) -> Result<(), Str
             response.status()
         ));
     }
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| format!("Unable to read plugin bundle response: {e}"))?;
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_BUNDLE_DOWNLOAD_BYTES)
+    {
+        return Err("Downloaded plugin bundle is too large".to_string());
+    }
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent)
             .map_err(|e| format!("Unable to create download directory: {e}"))?;
     }
-    fs::write(target, bytes).map_err(|e| format!("Unable to write downloaded bundle: {e}"))
+    let mut file = tokio::fs::File::create(target)
+        .await
+        .map_err(|e| format!("Unable to write downloaded bundle: {e}"))?;
+    let mut downloaded = 0u64;
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("Unable to read plugin bundle response: {e}"))?;
+        downloaded = downloaded
+            .checked_add(chunk.len() as u64)
+            .ok_or_else(|| "Downloaded plugin bundle size overflow".to_string())?;
+        if downloaded > MAX_BUNDLE_DOWNLOAD_BYTES {
+            return Err("Downloaded plugin bundle is too large".to_string());
+        }
+        file.write_all(&chunk)
+            .await
+            .map_err(|e| format!("Unable to write downloaded bundle: {e}"))?;
+    }
+    file.flush()
+        .await
+        .map_err(|e| format!("Unable to write downloaded bundle: {e}"))
 }
 
 pub fn install_bundle_from_file(
@@ -105,13 +130,14 @@ pub fn install_bundle_from_file(
     let package_id = inspection.manifest.id.clone();
     let version = inspection.manifest.version.clone();
     let staging_dir = staging_root.join(format!("{}-{}", sanitize_id(&package_id), unique_stamp()));
-    let installed_dir = packages_dir.join(&package_id);
-
-    extract_bundle(bundle_path, &staging_dir)?;
     fs::create_dir_all(packages_dir)
         .map_err(|e| format!("Unable to create package directory: {e}"))?;
+    let installed_dir = safe_install_dir(packages_dir, &package_id)?;
+
+    extract_bundle(bundle_path, &staging_dir)?;
 
     if installed_dir.exists() {
+        ensure_existing_install_dir_is_safe(packages_dir, &installed_dir)?;
         fs::remove_dir_all(&installed_dir)
             .map_err(|e| format!("Unable to replace previous package: {e}"))?;
     }
@@ -137,6 +163,32 @@ fn sanitize_id(value: &str) -> String {
         .chars()
         .filter(|ch| ch.is_ascii_alphanumeric() || *ch == '-' || *ch == '_' || *ch == '.')
         .collect()
+}
+
+fn safe_install_dir(packages_dir: &Path, package_id: &str) -> Result<std::path::PathBuf, String> {
+    let packages_dir = fs::canonicalize(packages_dir)
+        .map_err(|e| format!("Unable to resolve package directory: {e}"))?;
+    let candidate = packages_dir.join(package_id);
+    if candidate.parent() != Some(packages_dir.as_path()) {
+        return Err(format!(
+            "Package id '{package_id}' escapes the package directory"
+        ));
+    }
+    Ok(candidate)
+}
+
+fn ensure_existing_install_dir_is_safe(
+    packages_dir: &Path,
+    installed_dir: &Path,
+) -> Result<(), String> {
+    let packages_dir = fs::canonicalize(packages_dir)
+        .map_err(|e| format!("Unable to resolve package directory: {e}"))?;
+    let resolved = fs::canonicalize(installed_dir)
+        .map_err(|e| format!("Unable to resolve installed package directory: {e}"))?;
+    if resolved.parent() != Some(packages_dir.as_path()) {
+        return Err("Installed package path escapes the package directory".to_string());
+    }
+    Ok(())
 }
 
 fn unique_stamp() -> u128 {

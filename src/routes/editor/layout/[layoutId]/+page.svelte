@@ -7,6 +7,7 @@
   import OverlayRenderer from "$lib/OverlayRenderer.svelte";
   import { adapter } from "$lib/adapter/index";
   import { emptySnapGuides, snapGuideStyle, snapItemPosition, type SnapGuides } from "$lib/editor/snapping";
+  import { createLayoutThumbnail } from "$lib/layoutThumbnail";
   import VisualLibrary from "$lib/editor/VisualLibrary.svelte";
   import { routeReturnFromParams, storeRouteScrollRestore } from "$lib/returnState";
   import { RL_TELEMETRY_EVENT_NAMES, telemetryFrameTemplate, type RlTelemetryEventName } from "$lib/rlTelemetry";
@@ -62,6 +63,7 @@
     height: number;
     layers: OverlayLayer[];
     items?: OverlayItem[];
+    thumbnail?: string | null;
   };
 
   type OverlayLayoutCatalog = {
@@ -177,6 +179,12 @@
     } catch (error) {
       message = error instanceof Error ? error.message : String(error);
     }
+  }
+
+  async function saveThumbnail() {
+    if (!layout) return;
+    layout.thumbnail = createLayoutThumbnail(layout, { kind: "overlay" });
+    await save(layout);
   }
 
   function sortedLayers(layout: OverlayLayout) {
@@ -357,6 +365,7 @@
   }
 
   async function closeEditor() {
+    await saveThumbnail();
     try {
       await adapter.invoke("close_overlay_editor");
     } catch (error) {

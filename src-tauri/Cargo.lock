@@ -352,6 +352,7 @@ dependencies = [
  "deno_error",
  "ed25519-dalek",
  "futures-util",
+ "getrandom 0.3.4",
  "hex",
  "notify",
  "reqwest",

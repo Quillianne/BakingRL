@@ -9,7 +9,7 @@
   let isMainWindow = $state(detectMainWindow());
 
   const dragZoneHeight = 36;
-  const showWindowFrame = $derived(isMainWindow && !$page.url.pathname.startsWith("/overlay"));
+  const showWindowFrame = $derived(isMainWindow && !isOverlayRuntimeRoute($page.url.pathname));
   const showWindowControls = $derived(showWindowFrame && !$page.url.pathname.startsWith("/editor"));
 
   onMount(() => {
@@ -23,6 +23,10 @@
     } catch {
       return false;
     }
+  }
+
+  function isOverlayRuntimeRoute(pathname: string) {
+    return pathname === "/overlay" || pathname.startsWith("/overlay/");
   }
 
   type AppWindow = ReturnType<typeof getCurrentWindow>;

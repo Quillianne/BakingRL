@@ -98,6 +98,11 @@ export class DashboardState {
     return this.appSettings ? `http://${this.appSettings.obs.host}:${this.appSettings.obs.port}` : "";
   }
 
+  get obsAccessTokenQuery() {
+    const token = this.appSettings?.obs.access_token;
+    return token ? `?token=${encodeURIComponent(token)}` : "";
+  }
+
   get telemetryConnected() {
     return this.telemetryStatus?.state === "connected";
   }
@@ -613,11 +618,11 @@ export class DashboardState {
   }
 
   layoutUrl(layoutId: string) {
-    return `${this.obsBaseUrl}/overlay/layout/${encodeURIComponent(layoutId)}`;
+    return `${this.obsBaseUrl}/overlay/layout/${encodeURIComponent(layoutId)}${this.obsAccessTokenQuery}`;
   }
 
   streamUrl() {
-    return `${this.obsBaseUrl}/overlay/stream`;
+    return `${this.obsBaseUrl}/overlay/stream${this.obsAccessTokenQuery}`;
   }
 
   async copyText(value: string, label: string) {
@@ -958,14 +963,6 @@ export class DashboardState {
 
   clearDeveloperErrors() {
     this.developerErrors = [];
-  }
-
-  async refreshRegistryEntries() {
-    try {
-      this.registryEntries = await invoke<RegistryEntry[]>("registry_entries");
-    } catch (error) {
-      this.notifyError(error);
-    }
   }
 
   async sendDeveloperFrame() {
