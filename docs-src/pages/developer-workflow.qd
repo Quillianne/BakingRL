@@ -37,11 +37,8 @@ The generated site is written to `docs-site/` and should not be committed.
 Host contributors often need a local plugin to test runtime behavior:
 
 ```sh
-cd ../BakingRLSDK
-npm install
-npm install -g . --force
-
 cd ../BakingRLPlugins
+npm install
 npm run create -- test-plugin
 cd test-plugin
 npm install

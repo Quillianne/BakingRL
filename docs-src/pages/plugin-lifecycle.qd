@@ -19,9 +19,9 @@ npm install
 npm run build
 ```
 
-The source package depends on `@bakingrl/plugin-sdk`. During local development,
-that dependency can point to the sibling `BakingRLSDK` checkout through a
-relative `file:` dependency.
+The source package depends on the published `@bakingrl/plugin-sdk` package.
+When testing unreleased SDK changes, plugin authors can temporarily use a local
+SDK checkout, but published npm packages are the default development path.
 
 ## Validate
 

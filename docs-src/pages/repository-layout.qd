@@ -23,25 +23,35 @@ telemetry ingestion, native windows, local storage, and frontend editors.
 The SDK repository contains:
 
 - `@bakingrl/plugin-sdk` TypeScript contracts and helper functions.
-- `create-bakingrl-plugin` scaffolder.
+- `@bakingrl/create-plugin` scaffolder and helper CLI package.
+- `create-bakingrl-plugin` scaffolder command.
 - `bakingrl-plugin` helper CLI.
 - Plugin author documentation.
 
-Before npm publication, install the SDK globally from the local checkout:
+For normal plugin authoring, install the published helper package:
+
+```sh
+npm install -g @bakingrl/create-plugin
+```
+
+When developing unreleased SDK or generator changes, install the local SDK
+checkout globally:
 
 ```sh
 cd ../BakingRLSDK
 npm install
+npm run build
 npm install -g . --force
 ```
 
 ## BakingRLPlugins
 
 The plugin repository contains first-party and experimental plugin packages.
-Its root scripts rely on the globally installed SDK helper commands:
+Its root dependencies install the published SDK and helper CLI packages:
 
 ```sh
 cd ../BakingRLPlugins
+npm install
 npm run create -- my-plugin
 npm run build
 npm run validate
