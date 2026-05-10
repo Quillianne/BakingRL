@@ -1,10 +1,15 @@
 mod connector_runtime;
+mod descriptors;
+mod json_store;
+mod layout_documents;
+mod package_files;
 mod runtime_module_loader;
+mod runtime_specs;
 mod service_runtime;
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -17,9 +22,8 @@ use tracing::{info, warn};
 
 use crate::bus::EventBus;
 use crate::models::{
-    AppSettings, OverlayItem, OverlayLayer, OverlayLayout, OverlayLayoutsFile, PackageSettingsFile,
-    PackageStateFile, PageBackground, PageItem, PageLayer, PageLayout, PageSettings, PagesFile,
-    PluginRuntimeIsolation,
+    AppSettings, OverlayLayout, OverlayLayoutsFile, PackageSettingsFile, PackageStateFile,
+    PageLayout, PagesFile,
 };
 use crate::plugin_v2::bundle::BundleInspection;
 use crate::plugin_v2::install::{
@@ -29,106 +33,25 @@ use crate::plugin_v2::install::{
 use crate::plugin_v2::manifest::PluginPackageManifestV2;
 use crate::plugin_v2::permissions::EffectivePackagePermissionsV2;
 use crate::registry::Registry;
-use connector_runtime::{
-    ConnectorRuntimeManager, ConnectorRuntimeModuleSpec, ConnectorRuntimeSpec,
+use connector_runtime::ConnectorRuntimeManager;
+use descriptors::{apply_graph_diagnostics, descriptor_for_manifest};
+pub use descriptors::{
+    ComponentExportSource, PackageDescriptor, PackageExportsDescriptor, PackageImportsDescriptor,
+    PackageStatus, PreparedPackageInstall,
 };
-use service_runtime::{ServiceRuntimeManager, ServiceRuntimeModuleSpec, ServiceRuntimeSpec};
-use walkdir::WalkDir;
-
-const MAX_GATEWAY_PACKAGE_FILE_BYTES: u64 = 25 * 1024 * 1024;
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct PackageDescriptor {
-    pub id: String,
-    pub name: String,
-    pub version: String,
-    pub author: Option<String>,
-    pub enabled: bool,
-    pub status: PackageStatus,
-    pub path: String,
-    pub exports: PackageExportsDescriptor,
-    pub imports: PackageImportsDescriptor,
-    pub effective_permissions: EffectivePackagePermissionsV2,
-    pub settings: Option<String>,
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum PackageStatus {
-    Installed,
-    Deleting,
-}
-
-#[derive(Debug, Clone, serde::Serialize, Default)]
-pub struct PackageExportsDescriptor {
-    pub visuals: Vec<VisualExportDescriptor>,
-    pub components: Vec<NamedExportDescriptor>,
-    pub services: Vec<ServiceExportDescriptor>,
-    pub connectors: Vec<NamedExportDescriptor>,
-    pub assets: Vec<NamedExportDescriptor>,
-    pub schemas: Vec<NamedExportDescriptor>,
-    pub pages: Vec<PageExportDescriptor>,
-    pub layouts: Vec<LayoutTemplateExportDescriptor>,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct VisualExportDescriptor {
-    pub name: String,
-    pub entry: String,
-    pub default_width: f64,
-    pub default_height: f64,
-    pub settings: Option<String>,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct NamedExportDescriptor {
-    pub name: String,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct ServiceExportDescriptor {
-    pub name: String,
-    pub methods: Vec<String>,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct PageExportDescriptor {
-    pub name: String,
-    pub path: String,
-    pub title: Option<String>,
-    pub description: Option<String>,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct LayoutTemplateExportDescriptor {
-    pub name: String,
-    pub path: String,
-    pub title: Option<String>,
-    pub description: Option<String>,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct ComponentExportSource {
-    pub package_id: String,
-    pub export_name: String,
-    pub entry: String,
-    pub source: String,
-    pub props_schema: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct PreparedPackageInstall {
-    pub path: String,
-    pub source: String,
-    pub inspection: BundleInspection,
-}
-
-#[derive(Debug, Clone, serde::Serialize, Default)]
-pub struct PackageImportsDescriptor {
-    pub components: Vec<String>,
-    pub services: Vec<String>,
-}
+use json_store::{read_json_or_default, write_json};
+use layout_documents::{
+    default_overlay_layouts, ensure_active_layout_ids, new_overlay_layout, new_page_layout,
+    normalize_overlay_layout, normalize_overlay_layouts, normalize_page, normalize_pages,
+    rekey_overlay_layout_contents,
+};
+use package_files::{
+    find_first_bundle, format_command_error, is_remote_package_source, parse_export_ref,
+    read_binary_package_file, read_json_package_file, read_package_file,
+    safe_installed_package_dir, safe_package_relative_path,
+};
+use runtime_specs::{connector_specs_for_records, service_specs_for_records};
+use service_runtime::ServiceRuntimeManager;
 
 #[derive(Debug)]
 struct PackageRecord {
@@ -932,22 +855,8 @@ impl PluginHost {
         let mut file = self.load_overlay_layouts();
         let id = unique_id("overlay");
         let now = now_ms();
-        file.layouts.push(OverlayLayout {
-            id: id.clone(),
-            name: if name.trim().is_empty() {
-                "Untitled Layout".to_string()
-            } else {
-                name
-            },
-            width: width.unwrap_or(1920.0).max(320.0),
-            height: height.unwrap_or(1080.0).max(240.0),
-            layers: default_layers(),
-            items: Vec::new(),
-            created_at_ms: now,
-            updated_at_ms: now,
-            template_source: None,
-            thumbnail: None,
-        });
+        file.layouts
+            .push(new_overlay_layout(id.clone(), name, width, height, now));
         file.active_layout_id = id;
         ensure_active_layout_ids(&mut file);
         self.save_overlay_layouts(&file)?;
@@ -1097,26 +1006,7 @@ impl PluginHost {
     ) -> Result<PagesFile, String> {
         let mut file = self.load_pages();
         let now = now_ms();
-        let mut page = PageLayout {
-            id: unique_id("page"),
-            name: if name.trim().is_empty() {
-                "Untitled Page".to_string()
-            } else {
-                name
-            },
-            favorite: false,
-            width: width.unwrap_or(1440.0).max(320.0),
-            height: height.unwrap_or(900.0).max(240.0),
-            background: PageBackground::default(),
-            settings: PageSettings {
-                open_target: open_target.unwrap_or_else(|| "app".to_string()),
-            },
-            layers: default_page_layers(),
-            created_at_ms: now,
-            updated_at_ms: now,
-            template_source: None,
-            thumbnail: None,
-        };
+        let mut page = new_page_layout(unique_id("page"), name, open_target, width, height, now);
         normalize_page(&mut page, false);
         file.pages.push(page);
         self.save_pages(&file)?;
@@ -1463,296 +1353,6 @@ fn monitor_matches_setting(monitor: &Monitor, setting: &str) -> bool {
     monitor_id(monitor) == setting || monitor.name().is_some_and(|name| name == setting)
 }
 
-fn descriptor_for_manifest(
-    manifest: &PluginPackageManifestV2,
-    path: String,
-    enabled: bool,
-    effective_permissions: EffectivePackagePermissionsV2,
-) -> PackageDescriptor {
-    PackageDescriptor {
-        id: manifest.id.clone(),
-        name: manifest.name.clone(),
-        version: manifest.version.clone(),
-        author: manifest.author.clone(),
-        enabled,
-        status: PackageStatus::Installed,
-        path,
-        exports: PackageExportsDescriptor {
-            visuals: manifest
-                .exports
-                .visuals
-                .iter()
-                .map(|(name, export)| {
-                    let [default_width, default_height] =
-                        export.default_size.unwrap_or([320.0, 120.0]);
-                    VisualExportDescriptor {
-                        name: name.clone(),
-                        entry: export.entry.clone(),
-                        default_width,
-                        default_height,
-                        settings: export.settings.clone(),
-                    }
-                })
-                .collect(),
-            components: manifest
-                .exports
-                .components
-                .keys()
-                .map(|name| NamedExportDescriptor { name: name.clone() })
-                .collect(),
-            services: manifest
-                .exports
-                .services
-                .iter()
-                .map(|(name, export)| ServiceExportDescriptor {
-                    name: name.clone(),
-                    methods: export.methods.clone(),
-                })
-                .collect(),
-            connectors: manifest
-                .exports
-                .connectors
-                .keys()
-                .map(|name| NamedExportDescriptor { name: name.clone() })
-                .collect(),
-            assets: manifest
-                .exports
-                .assets
-                .keys()
-                .map(|name| NamedExportDescriptor { name: name.clone() })
-                .collect(),
-            schemas: manifest
-                .exports
-                .schemas
-                .keys()
-                .map(|name| NamedExportDescriptor { name: name.clone() })
-                .collect(),
-            pages: manifest
-                .exports
-                .pages
-                .iter()
-                .map(|(name, export)| PageExportDescriptor {
-                    name: name.clone(),
-                    path: export.path.clone(),
-                    title: export.title.clone(),
-                    description: export.description.clone(),
-                })
-                .collect(),
-            layouts: manifest
-                .exports
-                .layouts
-                .iter()
-                .map(|(name, export)| LayoutTemplateExportDescriptor {
-                    name: name.clone(),
-                    path: export.path.clone(),
-                    title: export.title.clone(),
-                    description: export.description.clone(),
-                })
-                .collect(),
-        },
-        imports: PackageImportsDescriptor {
-            components: manifest.imports.components.clone(),
-            services: manifest.imports.services.clone(),
-        },
-        effective_permissions,
-        settings: manifest.settings.clone(),
-        error: None,
-    }
-}
-
-fn apply_graph_diagnostics(records: &mut HashMap<String, PackageRecord>) {
-    let component_exports: std::collections::HashSet<String> = records
-        .values()
-        .flat_map(|record| {
-            record
-                .manifest
-                .exports
-                .components
-                .keys()
-                .map(|name| format!("{}/{}", record.manifest.id, name))
-                .collect::<Vec<_>>()
-        })
-        .collect();
-    let service_exports: std::collections::HashSet<String> = records
-        .values()
-        .flat_map(|record| {
-            record
-                .manifest
-                .exports
-                .services
-                .keys()
-                .map(|name| format!("{}/{}", record.manifest.id, name))
-                .collect::<Vec<_>>()
-        })
-        .collect();
-
-    for record in records.values_mut() {
-        let mut missing = Vec::new();
-        for import in &record.manifest.imports.components {
-            if !component_exports.contains(import) {
-                missing.push(format!("component {import}"));
-            }
-        }
-        for import in &record.manifest.imports.services {
-            if !service_exports.contains(import) {
-                missing.push(format!("service {import}"));
-            }
-        }
-        record.descriptor.error = if missing.is_empty() {
-            None
-        } else {
-            Some(format!("Missing imports: {}", missing.join(", ")))
-        };
-    }
-}
-
-fn service_specs_for_records(
-    records: &HashMap<String, PackageRecord>,
-    runtime_isolation: &PluginRuntimeIsolation,
-) -> Vec<ServiceRuntimeSpec> {
-    let service_methods: HashMap<String, Vec<String>> = records
-        .values()
-        .flat_map(|record| {
-            record
-                .manifest
-                .exports
-                .services
-                .iter()
-                .map(|(name, export)| {
-                    (
-                        format!("{}/{}", record.manifest.id, name),
-                        export.methods.clone(),
-                    )
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect();
-
-    let mut specs = Vec::new();
-    for record in records
-        .values()
-        .filter(|record| record.descriptor.enabled && record.descriptor.error.is_none())
-    {
-        let storage_root = Path::new(&record.descriptor.path)
-            .join(".bakingrl")
-            .join("storage");
-        match runtime_isolation {
-            PluginRuntimeIsolation::Export => {
-                for (name, export) in &record.manifest.exports.services {
-                    specs.push(ServiceRuntimeSpec {
-                        package_id: record.manifest.id.clone(),
-                        service_name: name.clone(),
-                        entry_path: Path::new(&record.descriptor.path).join(&export.entry),
-                        storage_root: storage_root.clone(),
-                        service_imports: record.manifest.imports.services.clone(),
-                        service_methods: service_methods.clone(),
-                        permissions: record.descriptor.effective_permissions.clone(),
-                        additional_modules: Vec::new(),
-                    });
-                }
-            }
-            PluginRuntimeIsolation::Package => {
-                let mut services = record.manifest.exports.services.iter();
-                let Some((name, export)) = services.next() else {
-                    continue;
-                };
-                let additional_modules = services
-                    .map(|(service_name, service_export)| ServiceRuntimeModuleSpec {
-                        service_name: service_name.clone(),
-                        entry_path: Path::new(&record.descriptor.path).join(&service_export.entry),
-                    })
-                    .collect();
-                specs.push(ServiceRuntimeSpec {
-                    package_id: record.manifest.id.clone(),
-                    service_name: name.clone(),
-                    entry_path: Path::new(&record.descriptor.path).join(&export.entry),
-                    storage_root,
-                    service_imports: record.manifest.imports.services.clone(),
-                    service_methods: service_methods.clone(),
-                    permissions: record.descriptor.effective_permissions.clone(),
-                    additional_modules,
-                });
-            }
-        }
-    }
-    specs
-}
-
-fn connector_specs_for_records(
-    records: &HashMap<String, PackageRecord>,
-    runtime_isolation: &PluginRuntimeIsolation,
-) -> Vec<ConnectorRuntimeSpec> {
-    let service_methods: HashMap<String, Vec<String>> = records
-        .values()
-        .flat_map(|record| {
-            record
-                .manifest
-                .exports
-                .services
-                .iter()
-                .map(|(name, export)| {
-                    (
-                        format!("{}/{}", record.manifest.id, name),
-                        export.methods.clone(),
-                    )
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect();
-
-    let mut specs = Vec::new();
-    for record in records
-        .values()
-        .filter(|record| record.descriptor.enabled && record.descriptor.error.is_none())
-    {
-        let storage_root = Path::new(&record.descriptor.path)
-            .join(".bakingrl")
-            .join("storage");
-        match runtime_isolation {
-            PluginRuntimeIsolation::Export => {
-                for (name, export) in &record.manifest.exports.connectors {
-                    specs.push(ConnectorRuntimeSpec {
-                        package_id: record.manifest.id.clone(),
-                        connector_name: name.clone(),
-                        entry_path: Path::new(&record.descriptor.path).join(&export.entry),
-                        storage_root: storage_root.clone(),
-                        service_imports: record.manifest.imports.services.clone(),
-                        service_methods: service_methods.clone(),
-                        permissions: record.descriptor.effective_permissions.clone(),
-                        additional_modules: Vec::new(),
-                    });
-                }
-            }
-            PluginRuntimeIsolation::Package => {
-                let mut connectors = record.manifest.exports.connectors.iter();
-                let Some((name, export)) = connectors.next() else {
-                    continue;
-                };
-                let additional_modules = connectors
-                    .map(
-                        |(connector_name, connector_export)| ConnectorRuntimeModuleSpec {
-                            connector_name: connector_name.clone(),
-                            entry_path: Path::new(&record.descriptor.path)
-                                .join(&connector_export.entry),
-                        },
-                    )
-                    .collect();
-                specs.push(ConnectorRuntimeSpec {
-                    package_id: record.manifest.id.clone(),
-                    connector_name: name.clone(),
-                    entry_path: Path::new(&record.descriptor.path).join(&export.entry),
-                    storage_root,
-                    service_imports: record.manifest.imports.services.clone(),
-                    service_methods: service_methods.clone(),
-                    permissions: record.descriptor.effective_permissions.clone(),
-                    additional_modules,
-                });
-            }
-        }
-    }
-    specs
-}
-
 fn merge_settings(
     schema_path: Option<&str>,
     package_root: &Path,
@@ -1789,458 +1389,6 @@ fn merge_settings(
     serde_json::Value::Object(merged)
 }
 
-fn parse_export_ref(value: &str) -> Result<(&str, &str), String> {
-    let Some((package_id, export_name)) = value.split_once('/') else {
-        return Err(format!(
-            "Export ref '{value}' must use '<package-id>/<export>'."
-        ));
-    };
-    if package_id.trim().is_empty() || export_name.trim().is_empty() {
-        return Err(format!(
-            "Export ref '{value}' must use '<package-id>/<export>'."
-        ));
-    }
-    Ok((package_id, export_name))
-}
-
-fn safe_package_relative_path(relative_path: &str) -> Result<PathBuf, String> {
-    let mut path = PathBuf::new();
-    for component in Path::new(relative_path).components() {
-        match component {
-            Component::Normal(part) => path.push(part),
-            Component::CurDir => {}
-            _ => {
-                return Err(format!(
-                    "Package file '{relative_path}' escapes the package root."
-                ));
-            }
-        }
-    }
-    if path.as_os_str().is_empty() {
-        return Err("Package file path cannot be empty.".to_string());
-    }
-    Ok(path)
-}
-
-fn safe_installed_package_dir(packages_dir: &Path, package_id: &str) -> Result<PathBuf, String> {
-    if package_id == "."
-        || package_id == ".."
-        || package_id.contains('/')
-        || package_id.contains('\\')
-        || package_id.trim().is_empty()
-    {
-        return Err(format!(
-            "Package id '{package_id}' is not a safe package directory name."
-        ));
-    }
-    let packages_dir = packages_dir
-        .canonicalize()
-        .map_err(|e| format!("Unable to resolve package directory: {e}"))?;
-    let target = packages_dir.join(package_id);
-    if target.parent() != Some(packages_dir.as_path()) {
-        return Err(format!(
-            "Package id '{package_id}' escapes the package directory."
-        ));
-    }
-    Ok(target)
-}
-
-fn read_binary_package_file(package_root: &Path, relative_path: &Path) -> Result<Vec<u8>, String> {
-    let root = package_root
-        .canonicalize()
-        .map_err(|e| format!("Unable to resolve package root: {e}"))?;
-    let path = root.join(relative_path);
-    let resolved = path.canonicalize().map_err(|e| {
-        format!(
-            "Unable to resolve package file '{}': {e}",
-            relative_path.display()
-        )
-    })?;
-    if !resolved.starts_with(&root) {
-        return Err(format!(
-            "Package file '{}' escapes the package root.",
-            relative_path.display()
-        ));
-    }
-    let metadata = resolved.metadata().map_err(|e| {
-        format!(
-            "Unable to inspect package file '{}': {e}",
-            relative_path.display()
-        )
-    })?;
-    if metadata.len() > MAX_GATEWAY_PACKAGE_FILE_BYTES {
-        return Err(format!(
-            "Package file '{}' exceeds the read limit.",
-            relative_path.display()
-        ));
-    }
-    fs::read(resolved).map_err(|e| {
-        format!(
-            "Unable to read package file '{}': {e}",
-            relative_path.display()
-        )
-    })
-}
-
-fn read_package_file(package_root: &Path, relative_path: &str) -> Result<String, String> {
-    let root = package_root
-        .canonicalize()
-        .map_err(|e| format!("Unable to resolve package root: {e}"))?;
-    let path = root.join(relative_path);
-    let resolved = path
-        .canonicalize()
-        .map_err(|e| format!("Unable to resolve package file '{relative_path}': {e}"))?;
-    if !resolved.starts_with(&root) {
-        return Err(format!(
-            "Package file '{relative_path}' escapes the package root."
-        ));
-    }
-    let metadata = resolved
-        .metadata()
-        .map_err(|e| format!("Unable to inspect package file '{relative_path}': {e}"))?;
-    if metadata.len() > MAX_GATEWAY_PACKAGE_FILE_BYTES {
-        return Err(format!(
-            "Package file '{relative_path}' exceeds the read limit."
-        ));
-    }
-    fs::read_to_string(resolved)
-        .map_err(|e| format!("Unable to read package file '{relative_path}': {e}"))
-}
-
-fn read_json_package_file(
-    package_root: &Path,
-    relative_path: &str,
-) -> Result<serde_json::Value, String> {
-    let raw = read_package_file(package_root, relative_path)?;
-    serde_json::from_str(&raw)
-        .map_err(|e| format!("Package JSON file '{relative_path}' is invalid: {e}"))
-}
-
-fn read_json_or_default<T>(path: &Path) -> T
-where
-    T: serde::de::DeserializeOwned + Default,
-{
-    fs::read_to_string(path)
-        .ok()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default()
-}
-
-fn write_json<T>(path: &Path, value: &T) -> Result<(), String>
-where
-    T: serde::Serialize,
-{
-    let raw = serde_json::to_string_pretty(value)
-        .map_err(|e| format!("Failed to serialize JSON: {e}"))?;
-    fs::write(path, raw).map_err(|e| format!("Failed to write JSON: {e}"))
-}
-
-fn ensure_active_layout_ids(file: &mut OverlayLayoutsFile) {
-    if !file
-        .layouts
-        .iter()
-        .any(|layout| layout.id == file.active_layout_id)
-    {
-        file.active_layout_id = file
-            .layouts
-            .first()
-            .map(|layout| layout.id.clone())
-            .unwrap_or_default();
-    }
-    if !file
-        .layouts
-        .iter()
-        .any(|layout| layout.id == file.stream_layout_id)
-    {
-        file.stream_layout_id = file
-            .layouts
-            .first()
-            .map(|layout| layout.id.clone())
-            .unwrap_or_default();
-    }
-}
-
-fn normalize_overlay_layouts(file: &mut OverlayLayoutsFile) {
-    for layout in &mut file.layouts {
-        normalize_overlay_layout(layout, false);
-    }
-}
-
-fn normalize_overlay_layout(layout: &mut OverlayLayout, touch_updated: bool) {
-    let now = now_ms();
-    if layout.id.trim().is_empty() {
-        layout.id = unique_id("overlay");
-    }
-    if layout.name.trim().is_empty() {
-        layout.name = "Untitled Layout".to_string();
-    }
-    if layout.width <= 0.0 {
-        layout.width = 1920.0;
-    }
-    if layout.height <= 0.0 {
-        layout.height = 1080.0;
-    }
-    if layout.created_at_ms == 0 {
-        layout.created_at_ms = now;
-    }
-    if layout.updated_at_ms == 0 || touch_updated {
-        layout.updated_at_ms = now;
-    }
-    if layout.layers.is_empty() {
-        let mut layers = default_layers();
-        if !layout.items.is_empty() {
-            layers[0].items = std::mem::take(&mut layout.items);
-        }
-        layout.layers = layers;
-    } else if !layout.items.is_empty() {
-        let legacy_items = std::mem::take(&mut layout.items);
-        match layout
-            .layers
-            .iter_mut()
-            .find(|layer| layer.kind == "normal")
-        {
-            Some(layer) => layer.items.extend(legacy_items),
-            None => layout.layers.push(OverlayLayer {
-                id: unique_id("layer"),
-                name: "Main".to_string(),
-                kind: "normal".to_string(),
-                visible: true,
-                locked: false,
-                order: 0,
-                items: legacy_items,
-            }),
-        }
-    }
-
-    layout.layers.sort_by(|a, b| {
-        if a.kind == "event" && b.kind != "event" {
-            std::cmp::Ordering::Greater
-        } else if a.kind != "event" && b.kind == "event" {
-            std::cmp::Ordering::Less
-        } else {
-            a.order.cmp(&b.order)
-        }
-    });
-
-    let mut event_seen = false;
-    for (index, layer) in layout.layers.iter_mut().enumerate() {
-        if layer.id.trim().is_empty() {
-            layer.id = unique_id("layer");
-        }
-        if layer.name.trim().is_empty() {
-            layer.name = if layer.kind == "event" {
-                "Events".to_string()
-            } else {
-                "Layer".to_string()
-            };
-        }
-        if layer.kind != "event" {
-            layer.kind = "normal".to_string();
-        } else if event_seen {
-            layer.kind = "normal".to_string();
-        } else {
-            event_seen = true;
-        }
-        layer.order = index as i32;
-        for item in &mut layer.items {
-            normalize_overlay_item(item);
-        }
-    }
-
-    if !event_seen {
-        layout.layers.push(OverlayLayer {
-            id: unique_id("layer"),
-            name: "Events".to_string(),
-            kind: "event".to_string(),
-            visible: true,
-            locked: false,
-            order: layout.layers.len() as i32,
-            items: Vec::new(),
-        });
-    }
-}
-
-fn normalize_overlay_item(item: &mut OverlayItem) {
-    if item.name.trim().is_empty() {
-        item.name = item.export_name.clone();
-    }
-    if item.opacity < 0.0 {
-        item.opacity = 0.0;
-    } else if item.opacity > 1.0 {
-        item.opacity = 1.0;
-    }
-}
-
-fn rekey_overlay_layout_contents(layout: &mut OverlayLayout) {
-    let stamp = now_ms();
-    for (layer_index, layer) in layout.layers.iter_mut().enumerate() {
-        layer.id = format!("layer-{stamp}-{layer_index}");
-        for (item_index, item) in layer.items.iter_mut().enumerate() {
-            item.id = format!("item-{stamp}-{layer_index}-{item_index}");
-        }
-    }
-    for (item_index, item) in layout.items.iter_mut().enumerate() {
-        item.id = format!("item-{stamp}-legacy-{item_index}");
-    }
-}
-
-fn normalize_pages(file: &mut PagesFile) {
-    for page in &mut file.pages {
-        normalize_page(page, false);
-    }
-    file.pages.sort_by(|a, b| {
-        b.updated_at_ms
-            .cmp(&a.updated_at_ms)
-            .then_with(|| a.name.cmp(&b.name))
-    });
-}
-
-fn normalize_page(page: &mut PageLayout, touch_updated: bool) {
-    let now = now_ms();
-    if page.id.trim().is_empty() {
-        page.id = unique_id("page");
-    }
-    if page.name.trim().is_empty() {
-        page.name = "Untitled Page".to_string();
-    }
-    if page.width <= 0.0 {
-        page.width = 1440.0;
-    }
-    if page.height <= 0.0 {
-        page.height = 900.0;
-    }
-    if page.background.kind != "image" {
-        page.background.kind = "color".to_string();
-    }
-    if page.background.color.trim().is_empty() {
-        page.background.color = "#0f172a".to_string();
-    }
-    if page.background.fit != "contain" && page.background.fit != "stretch" {
-        page.background.fit = "cover".to_string();
-    }
-    if page.settings.open_target != "window" {
-        page.settings.open_target = "app".to_string();
-    }
-    if page.created_at_ms == 0 {
-        page.created_at_ms = now;
-    }
-    if page.updated_at_ms == 0 || touch_updated {
-        page.updated_at_ms = now;
-    }
-    if page.layers.is_empty() {
-        page.layers = default_page_layers();
-    }
-    page.layers.sort_by(|a, b| a.order.cmp(&b.order));
-    for (index, layer) in page.layers.iter_mut().enumerate() {
-        if layer.id.trim().is_empty() {
-            layer.id = unique_id("layer");
-        }
-        if layer.name.trim().is_empty() {
-            layer.name = "Layer".to_string();
-        }
-        layer.kind = "normal".to_string();
-        layer.order = index as i32;
-        for item in &mut layer.items {
-            normalize_page_item(item);
-        }
-    }
-}
-
-fn normalize_page_item(item: &mut PageItem) {
-    if item.kind.trim().is_empty() {
-        item.kind = if item
-            .package_id
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
-            && item
-                .export_name
-                .as_deref()
-                .is_some_and(|value| !value.trim().is_empty())
-        {
-            "visual".to_string()
-        } else {
-            "text".to_string()
-        };
-    }
-    if item.kind != "visual" && item.kind != "text" && item.kind != "image" && item.kind != "shape"
-    {
-        item.kind = "visual".to_string();
-    }
-    if item.kind == "visual" {
-        item.package_id = item
-            .package_id
-            .as_ref()
-            .map(|value| value.trim().to_string());
-        item.export_name = item
-            .export_name
-            .as_ref()
-            .map(|value| value.trim().to_string());
-    } else {
-        item.package_id = None;
-        item.export_name = None;
-    }
-    if item.name.trim().is_empty() {
-        item.name = match item.kind.as_str() {
-            "text" => "Text".to_string(),
-            "image" => "Image".to_string(),
-            "shape" => "Shape".to_string(),
-            _ => item
-                .export_name
-                .clone()
-                .unwrap_or_else(|| "Visual".to_string()),
-        };
-    }
-    if item.width <= 0.0 {
-        item.width = 320.0;
-    }
-    if item.height <= 0.0 {
-        item.height = 120.0;
-    }
-    if item.opacity < 0.0 {
-        item.opacity = 0.0;
-    } else if item.opacity > 1.0 {
-        item.opacity = 1.0;
-    }
-    if !item.settings.is_object() {
-        item.settings = serde_json::json!({});
-    }
-}
-
-fn default_layers() -> Vec<OverlayLayer> {
-    vec![
-        OverlayLayer {
-            id: "main".to_string(),
-            name: "Main".to_string(),
-            kind: "normal".to_string(),
-            visible: true,
-            locked: false,
-            order: 0,
-            items: Vec::new(),
-        },
-        OverlayLayer {
-            id: "events".to_string(),
-            name: "Events".to_string(),
-            kind: "event".to_string(),
-            visible: true,
-            locked: false,
-            order: 1,
-            items: Vec::new(),
-        },
-    ]
-}
-
-fn default_page_layers() -> Vec<PageLayer> {
-    vec![PageLayer {
-        id: "content".to_string(),
-        name: "Content".to_string(),
-        kind: "normal".to_string(),
-        visible: true,
-        locked: false,
-        order: 0,
-        items: Vec::new(),
-    }]
-}
-
 fn unique_id(prefix: &str) -> String {
     let millis = now_ms();
     format!("{prefix}-{millis}")
@@ -2267,68 +1415,12 @@ fn page_window_label(page_id: &str) -> String {
     format!("page-{safe_id}")
 }
 
-fn find_first_bundle(root: &Path) -> Result<PathBuf, String> {
-    let mut bundles = Vec::new();
-    for entry in WalkDir::new(root)
-        .into_iter()
-        .filter_entry(|entry| {
-            let name = entry.file_name().to_string_lossy();
-            name != ".git" && name != "node_modules"
-        })
-        .flatten()
-    {
-        if entry.file_type().is_file() && entry.path().extension().is_some_and(|ext| ext == "brlp")
-        {
-            bundles.push(entry.path().to_path_buf());
-        }
-    }
-    bundles.sort();
-    bundles
-        .into_iter()
-        .next()
-        .ok_or_else(|| "Git repository does not contain a .brlp bundle".to_string())
-}
-
-fn format_command_error(command: &str, stderr: &[u8]) -> String {
-    let stderr = String::from_utf8_lossy(stderr);
-    let stderr = stderr.trim();
-    if stderr.is_empty() {
-        format!("{command} failed")
-    } else {
-        format!("{command} failed: {stderr}")
-    }
-}
-
-fn is_remote_package_source(source: &str) -> bool {
-    source.starts_with("url:") || source.starts_with("deeplink:") || source.starts_with("git:")
-}
-
 fn generate_access_token() -> String {
     let mut bytes = [0_u8; 32];
     if getrandom::fill(&mut bytes).is_ok() {
         return hex::encode(bytes);
     }
     format!("fallback-{}", unique_id("obs"))
-}
-
-fn default_overlay_layouts() -> OverlayLayoutsFile {
-    let now = now_ms();
-    OverlayLayoutsFile {
-        active_layout_id: "default".to_string(),
-        stream_layout_id: "default".to_string(),
-        layouts: vec![OverlayLayout {
-            id: "default".to_string(),
-            name: "Default".to_string(),
-            width: 1920.0,
-            height: 1080.0,
-            layers: default_layers(),
-            items: Vec::<OverlayItem>::new(),
-            created_at_ms: now,
-            updated_at_ms: now,
-            template_source: None,
-            thumbnail: None,
-        }],
-    }
 }
 
 #[tauri::command]
@@ -2408,7 +1500,9 @@ pub fn packages_dir(host: State<'_, Arc<PluginHost>>) -> String {
 }
 
 #[tauri::command]
-pub async fn reload_packages(host: State<'_, Arc<PluginHost>>) -> Result<Vec<PackageDescriptor>, String> {
+pub async fn reload_packages(
+    host: State<'_, Arc<PluginHost>>,
+) -> Result<Vec<PackageDescriptor>, String> {
     let host = host.inner().clone();
     tauri::async_runtime::spawn_blocking(move || host.reload_packages())
         .await

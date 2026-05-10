@@ -349,10 +349,18 @@
     root.style.pointerEvents = mode === "editor" ? "none" : "auto";
   }
 
+  function itemRoot(itemId: string) {
+    if (!host) return null;
+    for (const element of host.querySelectorAll<HTMLElement>("[data-item-id]")) {
+      if (element.dataset.itemId === itemId) return element;
+    }
+    return null;
+  }
+
   function applyLayerVisibility() {
     if (!activeLayout || !host) return;
     for (const { layer, item } of layoutItems(activeLayout)) {
-      const root = host.querySelector<HTMLElement>(`[data-item-id="${item.id}"]`);
+      const root = itemRoot(item.id);
       if (root) applyItemStyle(root, layer, item, activeLayout);
     }
   }
@@ -691,7 +699,7 @@
     }
 
     for (const { layer, item } of itemEntries) {
-      const root = host?.querySelector<HTMLElement>(`[data-item-id="${item.id}"]`);
+      const root = itemRoot(item.id);
       if (root) {
         if (itemKind(item) === "visual" && root.dataset.mountSignature !== visualMountSignature(item)) {
           mountedItems.get(item.id)?.();
@@ -752,7 +760,7 @@
     void adapter.listen<string>("bakingrl-package-settings-changed", (packageId) => {
       settingsCache.delete(packageId);
       for (const [itemId, cleanup] of mountedItems) {
-        const root = host?.querySelector<HTMLElement>(`[data-item-id="${itemId}"]`);
+        const root = itemRoot(itemId);
         if (root?.dataset.packageId === packageId) {
           cleanup();
           mountedItems.delete(itemId);
