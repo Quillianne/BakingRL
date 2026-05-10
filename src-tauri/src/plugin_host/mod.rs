@@ -2408,8 +2408,11 @@ pub fn packages_dir(host: State<'_, Arc<PluginHost>>) -> String {
 }
 
 #[tauri::command]
-pub fn reload_packages(host: State<'_, Arc<PluginHost>>) -> Vec<PackageDescriptor> {
-    host.reload_packages()
+pub async fn reload_packages(host: State<'_, Arc<PluginHost>>) -> Result<Vec<PackageDescriptor>, String> {
+    let host = host.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || host.reload_packages())
+        .await
+        .map_err(|err| format!("Unable to reload packages: {err}"))
 }
 
 #[tauri::command]

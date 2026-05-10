@@ -6,6 +6,13 @@
   }: {
     state: DashboardState;
   } = $props();
+
+  const dragZoneHeight = 96;
+
+  function handleScrimClick(event: MouseEvent) {
+    if (event.detail !== 0 && event.clientY <= dragZoneHeight) return;
+    state.closeTelemetryHelp();
+  }
 </script>
 
 {#if state.telemetryHelpOpen}
@@ -14,7 +21,7 @@
       type="button"
       class="modal-scrim"
       aria-label={state.t("telemetry.helpClose")}
-      onclick={() => state.closeTelemetryHelp()}
+      onclick={handleScrimClick}
     ></button>
     <div
       class="studio-modal telemetry-modal"
@@ -35,6 +42,7 @@
         <li>{state.t("telemetry.stepPacket")}</li>
         <li>{state.t("telemetry.stepPort")} <code>{state.appSettings?.telemetry.rocket_league_port ?? state.telemetryStatus?.port ?? 49123}</code>.</li>
         <li>{state.t("telemetry.stepRestart")}</li>
+        <li>{state.t("telemetry.stepBorderless")}</li>
       </ol>
 
       <div class="callout">

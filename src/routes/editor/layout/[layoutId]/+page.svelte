@@ -8,6 +8,7 @@
   import { adapter } from "$lib/adapter/index";
   import { emptySnapGuides, snapGuideStyle, snapItemPosition, type SnapGuides } from "$lib/editor/snapping";
   import { createLayoutThumbnail } from "$lib/layoutThumbnail";
+  import { packageRuntime } from "$lib/packageRuntime.svelte";
   import VisualLibrary from "$lib/editor/VisualLibrary.svelte";
   import { routeReturnFromParams, storeRouteScrollRestore } from "$lib/returnState";
   import { RL_TELEMETRY_EVENT_NAMES, telemetryFrameTemplate, type RlTelemetryEventName } from "$lib/rlTelemetry";
@@ -606,7 +607,7 @@
       onClose={closeEditor}
     >
       {#snippet stageContent()}
-        <OverlayRenderer layoutId={layout.id} layoutOverride={layout} {layoutRevision} mode="editor" {mockEvent} />
+        <OverlayRenderer layoutId={layout.id} layoutOverride={layout} {layoutRevision} packageRevision={packageRuntime.revision} mode="editor" {mockEvent} />
         <div class="frames">
           {#each allItems() as entry}
             <div

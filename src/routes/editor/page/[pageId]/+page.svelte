@@ -9,6 +9,7 @@
   import OverlayRenderer from "$lib/OverlayRenderer.svelte";
   import { emptySnapGuides, snapGuideStyle, snapItemPosition, type SnapGuides } from "$lib/editor/snapping";
   import { createLayoutThumbnail } from "$lib/layoutThumbnail";
+  import { packageRuntime } from "$lib/packageRuntime.svelte";
   import VisualLibrary from "$lib/editor/VisualLibrary.svelte";
   import {
     captureRouteReturnState,
@@ -547,6 +548,7 @@
           layoutId={page.id}
           layoutOverride={page}
           {layoutRevision}
+          packageRevision={packageRuntime.revision}
           mode={previewMode ? "page" : "editor"}
         />
         {#if !previewMode}

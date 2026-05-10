@@ -24,12 +24,13 @@ use crate::plugin_host::{
 };
 use crate::registry::{registry_entries, registry_get, Registry};
 use crate::window_watcher::start_window_visibility_watcher;
+use std::env;
 use std::net::{TcpStream, ToSocketAddrs};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{
-    Manager, Monitor, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindow,
+    Emitter, Manager, Monitor, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder,
 };
 use tracing::{info, warn, Level};
@@ -37,6 +38,20 @@ use tracing_subscriber::FmtSubscriber;
 
 const INGAME_OVERLAY_LABEL: &str = "overlay-ingame";
 const EDITOR_OVERLAY_LABEL: &str = "overlay-editor";
+const PACKAGE_FILE_OPENED_EVENT: &str = "bakingrl-package-files-opened";
+#[cfg(desktop)]
+const TRAY_MENU_SHOW_ID: &str = "bakingrl-tray-show";
+#[cfg(desktop)]
+const TRAY_MENU_QUIT_ID: &str = "bakingrl-tray-quit";
+
+#[derive(Default)]
+struct PendingPackageFileOpens(Mutex<Vec<String>>);
+
+impl PendingPackageFileOpens {
+    fn new(paths: Vec<String>) -> Self {
+        Self(Mutex::new(paths))
+    }
+}
 
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -119,6 +134,162 @@ fn place_editor_like_overlay(
         settings.overlay.screen_width.max(1),
         settings.overlay.screen_height.max(1),
     ));
+}
+
+fn normalize_package_file_path(path: PathBuf) -> Option<String> {
+    if !path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("brlp"))
+    {
+        return None;
+    }
+
+    Some(
+        std::fs::canonicalize(&path)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .to_string(),
+    )
+}
+
+fn package_file_path_from_arg(value: &str, cwd: Option<&Path>) -> Option<String> {
+    let trimmed = value.trim().trim_matches('"');
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Ok(url) = url::Url::parse(trimmed) {
+        if url.scheme() == "file" {
+            return url
+                .to_file_path()
+                .ok()
+                .and_then(normalize_package_file_path);
+        }
+        return None;
+    }
+
+    let path = PathBuf::from(trimmed);
+    let path = if path.is_absolute() {
+        path
+    } else if let Some(cwd) = cwd {
+        cwd.join(path)
+    } else {
+        path
+    };
+    normalize_package_file_path(path)
+}
+
+fn collect_package_file_paths<'a>(
+    values: impl IntoIterator<Item = &'a str>,
+    cwd: Option<&Path>,
+) -> Vec<String> {
+    let mut paths = Vec::new();
+    for value in values {
+        if let Some(path) = package_file_path_from_arg(value, cwd) {
+            if !paths.contains(&path) {
+                paths.push(path);
+            }
+        }
+    }
+    paths
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
+fn collect_package_file_paths_from_urls(urls: &[url::Url]) -> Vec<String> {
+    let mut paths = Vec::new();
+    for url in urls {
+        if url.scheme() != "file" {
+            continue;
+        }
+        if let Ok(path) = url.to_file_path() {
+            if let Some(path) = normalize_package_file_path(path) {
+                if !paths.contains(&path) {
+                    paths.push(path);
+                }
+            }
+        }
+    }
+    paths
+}
+
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(main_window) = app.get_webview_window("main") {
+        let _ = main_window.show();
+        let _ = main_window.unminimize();
+        let _ = main_window.set_focus();
+    }
+}
+
+#[cfg(desktop)]
+fn create_system_tray(app: &tauri::App) -> tauri::Result<()> {
+    use tauri::menu::{Menu, MenuItem};
+    use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
+
+    let show = MenuItem::with_id(
+        app,
+        TRAY_MENU_SHOW_ID,
+        "Afficher BakingRL",
+        true,
+        None::<&str>,
+    )?;
+    let quit = MenuItem::with_id(
+        app,
+        TRAY_MENU_QUIT_ID,
+        "Quitter BakingRL",
+        true,
+        None::<&str>,
+    )?;
+    let menu = Menu::with_items(app, &[&show, &quit])?;
+    let mut tray = TrayIconBuilder::with_id("main")
+        .menu(&menu)
+        .tooltip("BakingRL")
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| {
+            if event.id() == TRAY_MENU_SHOW_ID {
+                show_main_window(app);
+            } else if event.id() == TRAY_MENU_QUIT_ID {
+                app.exit(0);
+            }
+        })
+        .on_tray_icon_event(|tray, event| match event {
+            TrayIconEvent::Click {
+                button: MouseButton::Left,
+                ..
+            }
+            | TrayIconEvent::DoubleClick {
+                button: MouseButton::Left,
+                ..
+            } => show_main_window(tray.app_handle()),
+            _ => {}
+        });
+
+    if let Some(icon) = app.default_window_icon().cloned() {
+        tray = tray.icon(icon);
+    }
+
+    tray.build(app)?;
+    Ok(())
+}
+
+fn enqueue_package_file_opens(app: &tauri::AppHandle, paths: Vec<String>) {
+    if paths.is_empty() {
+        return;
+    }
+
+    if let Some(pending) = app.try_state::<PendingPackageFileOpens>() {
+        let mut queued = pending.0.lock().unwrap();
+        for path in paths {
+            if !queued.contains(&path) {
+                queued.push(path);
+            }
+        }
+    }
+
+    show_main_window(app);
+    if let Err(err) = app.emit(PACKAGE_FILE_OPENED_EVENT, ()) {
+        warn!("Unable to emit package file open event: {}", err);
+    }
 }
 
 #[tauri::command]
@@ -290,6 +461,14 @@ fn emit_developer_telemetry(
     Ok(())
 }
 
+#[tauri::command]
+fn take_pending_package_file_opens(
+    pending: tauri::State<'_, PendingPackageFileOpens>,
+) -> Vec<String> {
+    let mut pending = pending.0.lock().unwrap();
+    std::mem::take(&mut *pending)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let subscriber = FmtSubscriber::builder()
@@ -299,14 +478,25 @@ pub fn run() {
         .expect("Erreur lors de l'initialisation de tracing");
 
     let mut builder = tauri::Builder::default();
+    let current_dir = env::current_dir().ok();
+    let launch_package_file_paths = collect_package_file_paths(
+        env::args().collect::<Vec<_>>().iter().map(String::as_str),
+        current_dir.as_deref(),
+    );
+    let launched_from_package_file = !launch_package_file_paths.is_empty();
 
     #[cfg(desktop)]
     {
-        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            if let Some(main_window) = app.get_webview_window("main") {
-                let _ = main_window.show();
-                let _ = main_window.set_focus();
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+            if let Some(deep_link) = app.try_state::<tauri_plugin_deep_link::DeepLink<tauri::Wry>>()
+            {
+                deep_link.handle_cli_arguments(argv.iter());
             }
+            let cwd = PathBuf::from(cwd);
+            let package_file_paths =
+                collect_package_file_paths(argv.iter().map(String::as_str), Some(cwd.as_path()));
+            enqueue_package_file_opens(app, package_file_paths);
+            show_main_window(app);
         }));
         builder = builder.plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -318,10 +508,15 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
-        .setup(|_app| {
+        .setup(move |_app| {
             info!("Démarrage du moteur Core de BakingRL...");
 
             let app_handle = _app.handle().clone();
+
+            #[cfg(desktop)]
+            if let Err(err) = create_system_tray(_app) {
+                warn!("Unable to create system tray icon: {}", err);
+            }
 
             #[cfg(any(windows, target_os = "linux"))]
             {
@@ -336,6 +531,7 @@ pub fn run() {
                 info!("Activation du mode Click-Through pour l'overlay...");
                 let _ = overlay_window.set_ignore_cursor_events(true);
                 let _ = overlay_window.set_shadow(false);
+                let _ = overlay_window.set_skip_taskbar(true);
 
                 // Start with the window hidden, the watcher will show it if RL is in focus
                 let _ = overlay_window.hide();
@@ -347,6 +543,7 @@ pub fn run() {
             let registry = Arc::new(Registry::new());
             _app.manage(bus.clone());
             _app.manage(registry.clone());
+            _app.manage(PendingPackageFileOpens::new(launch_package_file_paths));
 
             let plugin_host = Arc::new(
                 PluginHost::new(app_handle.clone(), bus.clone(), registry.clone())
@@ -376,6 +573,7 @@ pub fn run() {
                 .get_app_settings()
                 .behavior
                 .start_minimized
+                && !launched_from_package_file
             {
                 if let Some(main_window) = _app.get_webview_window("main") {
                     let _ = main_window.hide();
@@ -488,6 +686,7 @@ pub fn run() {
             get_obs_gateway_status,
             list_overlay_monitors,
             emit_developer_telemetry,
+            take_pending_package_file_opens,
         ])
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::CloseRequested { api, .. } => {
@@ -507,6 +706,12 @@ pub fn run() {
             }
             _ => {}
         })
-        .run(tauri::generate_context!())
-        .expect("Erreur lors de l'exécution de l'application Tauri");
+        .build(tauri::generate_context!())
+        .expect("Erreur lors de l'exécution de l'application Tauri")
+        .run(|app, event| {
+            #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
+            if let tauri::RunEvent::Opened { urls } = event {
+                enqueue_package_file_opens(app, collect_package_file_paths_from_urls(&urls));
+            }
+        });
 }

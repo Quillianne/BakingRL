@@ -1,4 +1,5 @@
 import { goto } from "$app/navigation";
+import { tick } from "svelte";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -50,6 +51,8 @@ import type {
 const TELEMETRY_HELP_DISMISSED_KEY = "bakingrl.telemetryHelp.dismissed";
 const TELEMETRY_HELP_LAUNCH_SHOWN_KEY = "bakingrl.telemetryHelp.launchShown";
 const PACKAGE_TOGGLE_ROLLBACK_MS = 5000;
+const PACKAGE_RELOAD_MIN_SPIN_MS = 450;
+const PACKAGE_FILE_OPENED_EVENT = "bakingrl-package-files-opened";
 
 type PendingPackageToggle = {
   enabled: boolean;
@@ -58,6 +61,16 @@ type PendingPackageToggle = {
 
 function isTauriRuntime() {
   return typeof window !== "undefined" && ("__TAURI_INTERNALS__" in window || "__TAURI__" in window);
+}
+
+async function waitForNextPaint() {
+  await tick();
+  if (typeof window === "undefined") return;
+  await new Promise<void>((resolve) => {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => resolve());
+    });
+  });
 }
 
 function permissionValueList(value: unknown): string[] {
@@ -75,6 +88,7 @@ export class DashboardState {
   gitRepo = $state("");
   gitRev = $state("");
   busy = $state(false);
+  packagesReloading = $state(false);
   pendingPackageToggles = $state<Record<string, PendingPackageToggle>>({});
   packageToggleRollbackTimers = new Map<string, ReturnType<typeof setTimeout>>();
   pendingInstall = $state<PendingInstall | null>(null);
@@ -321,13 +335,21 @@ export class DashboardState {
   }
 
   async reloadPackages() {
+    const startedAtMs = Date.now();
     this.busy = true;
+    this.packagesReloading = true;
+    await waitForNextPaint();
     try {
       this.setPackagesFromBackend(await invoke<PackageDescriptor[]>("reload_packages"));
       this.notify(this.t("msg.packagesReloaded"), "success");
     } catch (error) {
       this.notifyError(error);
     } finally {
+      const remainingMs = PACKAGE_RELOAD_MIN_SPIN_MS - (Date.now() - startedAtMs);
+      if (remainingMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, remainingMs));
+      }
+      this.packagesReloading = false;
       this.busy = false;
     }
   }
@@ -413,16 +435,46 @@ export class DashboardState {
 
   async inspectInstallFile() {
     if (!this.bundlePath.trim()) return;
+    await this.preparePackageFileInstall(this.bundlePath.trim(), false);
+  }
+
+  async preparePackageFileInstall(path: string, navigateToPlugins = true) {
+    const normalizedPath = path.trim();
+    if (!normalizedPath) return;
     this.busy = true;
     try {
-      const path = this.bundlePath.trim();
-      const inspection = await invoke<BundleInspection>("inspect_package_bundle", { path });
-      await this.setPendingInstall({ kind: "file", label: path, path, source: `file:${path}`, inspection });
+      if (navigateToPlugins) {
+        await this.navigate("/plugins");
+      }
+      this.bundlePath = normalizedPath;
+      const inspection = await invoke<BundleInspection>("inspect_package_bundle", { path: normalizedPath });
+      await this.setPendingInstall({
+        kind: "file",
+        label: normalizedPath,
+        path: normalizedPath,
+        source: `file:${normalizedPath}`,
+        inspection
+      });
     } catch (error) {
       this.notifyError(error);
     } finally {
       this.busy = false;
     }
+  }
+
+  async takePendingPackageFileOpens() {
+    try {
+      const paths = await invoke<string[]>("take_pending_package_file_opens");
+      await this.handlePackageFileOpenPaths(paths);
+    } catch (error) {
+      this.notifyError(error);
+    }
+  }
+
+  async handlePackageFileOpenPaths(paths: string[] | null) {
+    const path = paths?.find((entry) => typeof entry === "string" && entry.trim())?.trim();
+    if (!path) return;
+    await this.preparePackageFileInstall(path, true);
   }
 
   async chooseInstallFile() {
@@ -1073,6 +1125,7 @@ export class DashboardState {
     let unlistenOverlays: (() => void) | undefined;
     let unlistenPages: (() => void) | undefined;
     let unlistenDeepLinks: (() => void) | undefined;
+    let unlistenPackageFiles: (() => void) | undefined;
     let unlistenTelemetryStatus: (() => void) | undefined;
     let unlistenTelemetry: (() => void) | undefined;
     let unlistenRuntimeErrors: (() => void) | undefined;
@@ -1091,6 +1144,16 @@ export class DashboardState {
         })
         .catch((error) => {
           this.notify(`${this.t("msg.deepLinkListenerUnavailable")}: ${String(error)}`, "warning", 6400);
+        });
+      void listen(PACKAGE_FILE_OPENED_EVENT, () => {
+        void this.takePendingPackageFileOpens();
+      })
+        .then((unlisten) => {
+          unlistenPackageFiles = unlisten;
+          void this.takePendingPackageFileOpens();
+        })
+        .catch((error) => {
+          this.notifyError(error);
         });
     }
 
@@ -1134,6 +1197,7 @@ export class DashboardState {
       unlistenOverlays?.();
       unlistenPages?.();
       unlistenDeepLinks?.();
+      unlistenPackageFiles?.();
       unlistenTelemetryStatus?.();
       unlistenTelemetry?.();
       unlistenRuntimeErrors?.();

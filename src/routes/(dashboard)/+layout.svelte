@@ -49,13 +49,13 @@
 
 <div class="studio-shell">
   <aside class="studio-rail" aria-label="BakingRL">
-    <a class="rail-brand" href="/">
+    <div class="rail-brand" aria-label="BakingRL">
       <span class="brand-mark">B</span>
       <div>
         <h1>BakingRL</h1>
         <p>Your RL Companion</p>
       </div>
-    </a>
+    </div>
 
     <nav class="rail-nav" aria-label="Primary">
       <a class="nav-link" class:active={$page.url.pathname === "/"} href="/">

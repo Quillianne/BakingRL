@@ -266,6 +266,9 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    flex-wrap: nowrap;
+    box-sizing: border-box;
+    width: 100%;
     height: 48px;
     min-height: 48px;
     padding: 0 112px 0 10px;
@@ -276,6 +279,7 @@
 
   .header-title {
     display: flex;
+    flex: 1 1 auto;
     min-width: 0;
     align-items: center;
     gap: 8px;
@@ -309,11 +313,14 @@
     display: flex;
     flex: none;
     align-items: center;
+    flex-direction: row;
+    flex-wrap: nowrap;
     gap: 8px;
     margin-left: 12px;
   }
 
   .status-msg {
+    flex: none;
     padding: 2px 6px;
     border-radius: 4px;
     background: var(--success-bg);
@@ -323,6 +330,7 @@
 
   .icon-btn {
     display: flex;
+    flex: none;
     align-items: center;
     justify-content: center;
     width: 24px;
@@ -342,6 +350,7 @@
   }
 
   .zoom-readout {
+    flex: none;
     min-width: 54px;
     height: 28px;
     padding: 0 8px;

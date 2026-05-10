@@ -1,19 +1,41 @@
 <script lang="ts">
   import "$lib/theme.css";
+  import { goto } from "$app/navigation";
   import { page } from "$app/stores";
   import { onMount } from "svelte";
+  import { listen } from "@tauri-apps/api/event";
   import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { packageRuntime } from "$lib/packageRuntime.svelte";
   import { applyTheme, getStoredTheme } from "$lib/themes";
 
   let { children } = $props();
   let windowLabel = $state(detectWindowLabel());
 
-  const dragZoneHeight = 36;
+  const dragZoneHeight = 96;
+  const packageFileOpenedEvent = "bakingrl-package-files-opened";
   const showWindowFrame = $derived(windowLabel !== null && !isOverlayRuntimeRoute($page.url.pathname));
 
   onMount(() => {
     applyTheme(getStoredTheme());
     windowLabel = detectWindowLabel();
+    let unlistenPackageFiles: (() => void) | undefined;
+    let unlistenPackages: (() => void) | undefined;
+    void listen("bakingrl-packages-changed", () => {
+      packageRuntime.markPackagesChanged();
+    }).then((unlisten) => {
+      unlistenPackages = unlisten;
+    });
+    if (windowLabel === "main") {
+      void listen(packageFileOpenedEvent, () => {
+        void navigateToPlugins();
+      }).then((unlisten) => {
+        unlistenPackageFiles = unlisten;
+      });
+    }
+    return () => {
+      unlistenPackageFiles?.();
+      unlistenPackages?.();
+    };
   });
 
   function detectWindowLabel() {
@@ -26,6 +48,14 @@
 
   function isOverlayRuntimeRoute(pathname: string) {
     return pathname === "/overlay" || pathname.startsWith("/overlay/");
+  }
+
+  async function navigateToPlugins() {
+    try {
+      await goto("/plugins");
+    } catch {
+      window.location.href = "/plugins";
+    }
   }
 
   type AppWindow = ReturnType<typeof getCurrentWindow>;
@@ -54,7 +84,8 @@
     if (event.button !== 0) return;
     if (event.clientY > dragZoneHeight) return;
     const target = event.target as HTMLElement | null;
-    if (target?.closest("button, a, input, textarea, select")) return;
+    const isDraggableScrim = Boolean(target?.closest(".modal-scrim"));
+    if (!isDraggableScrim && target?.closest("button, a, input, textarea, select")) return;
     runWindowAction((appWindow) => appWindow.startDragging());
   }
 </script>

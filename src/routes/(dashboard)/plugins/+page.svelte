@@ -90,7 +90,7 @@
     <p>{dashboard.t("packages.installDesc")}</p>
   </div>
   <button class="btn-secondary" onclick={() => void dashboard.reloadPackages()} disabled={dashboard.busy}>
-    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
+    <svg class="reload-icon" class:spinning={dashboard.packagesReloading} viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
       <path d="M21 12a9 9 0 0 1-15.5 6"></path>
       <path d="M3 12a9 9 0 0 1 15.5-6"></path>
       <path d="M18 3v6h-6"></path>

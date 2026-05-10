@@ -21,6 +21,7 @@
         "minWidth": 1024,
         "minHeight": 700,
         "center": true,
+        "acceptFirstMouse": true,
         "decorations": false
       },
       {
@@ -31,6 +32,9 @@
         "decorations": false,
         "shadow": false,
         "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "focus": false,
         "width": 1920,
         "height": 1080
       }
@@ -51,7 +55,21 @@
     ],
     "resources": {
       "../build": "build"
-    }
+    },
+    "fileAssociations": [
+      {
+        "ext": ["brlp"],
+        "name": "BakingRL Package",
+        "description": "BakingRL plugin package",
+        "role": "Viewer",
+        "mimeType": "application/vnd.bakingrl.package",
+        "rank": "Owner",
+        "exportedType": {
+          "identifier": "com.quillianne.bakingrl.package",
+          "conformsTo": ["public.data"]
+        }
+      }
+    ]
   },
   "plugins": {
     "deep-link": {

@@ -25,7 +25,9 @@
   padding: 16px;
   border-bottom: 1px solid var(--border-color);
   color: var(--text-primary);
+  cursor: default;
   text-decoration: none;
+  user-select: none;
 }
 
 .brand-mark,
@@ -882,6 +884,17 @@ pre {
 
 .package-actions button {
   flex: 1 1 110px;
+}
+
+.reload-icon.spinning {
+  animation: reload-spin 0.8s linear infinite;
+  transform-origin: center;
+}
+
+@keyframes reload-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .package-detail-modal {

@@ -12,6 +12,7 @@
     layoutId = null,
     layoutOverride = null,
     layoutRevision = 0,
+    packageRevision = 0,
     mode = "runtime",
     source = "overlay",
     mockEvent = null,
@@ -21,6 +22,7 @@
     layoutId?: string | null;
     layoutOverride?: LayoutModel | null;
     layoutRevision?: number;
+    packageRevision?: number;
     mode?: RendererMode;
     source?: LayoutSource;
     mockEvent?: MockEvent;
@@ -200,6 +202,7 @@
   let componentSourceCache = new Map<string, ComponentExportSource>();
   let settingsCache = new Map<string, Record<string, unknown>>();
   let moduleVersion = 0;
+  let observedPackageRevision: number | null = null;
   let previewScale = $state(1);
 
   const persistedActiveOverlay = $derived.by(() => {
@@ -255,6 +258,16 @@
     if (activeLayout) {
       void syncMountedItems(activeLayout);
     }
+  });
+
+  $effect(() => {
+    if (observedPackageRevision === null) {
+      observedPackageRevision = packageRevision;
+      return;
+    }
+    if (packageRevision === observedPackageRevision) return;
+    observedPackageRevision = packageRevision;
+    invalidateMountedModules();
   });
 
   $effect(() => {
@@ -365,7 +378,7 @@
   }
 
   function moduleUrl(packageId: string, entry: string) {
-    return adapter.packageModuleUrl(packageId, entry, moduleVersion);
+    return adapter.packageModuleUrl(packageId, entry, `${packageRevision}.${moduleVersion}`);
   }
 
   function packageAssetUrl(packageId: string, ref: string) {
@@ -420,6 +433,15 @@
     });
     componentSourceCache.set(key, source);
     return source;
+  }
+
+  function invalidateMountedModules() {
+    moduleVersion += 1;
+    componentSourceCache.clear();
+    settingsCache.clear();
+    for (const cleanup of mountedItems.values()) cleanup();
+    mountedItems.clear();
+    if (activeLayout) void syncMountedItems(activeLayout);
   }
 
   function renderNativeItem(root: HTMLElement, item: OverlayItem) {
@@ -713,11 +735,7 @@
     });
     void adapter.listen<PackageDescriptor[]>("bakingrl-packages-changed", (event) => {
       packages = event;
-      moduleVersion += 1;
-      componentSourceCache.clear();
-      for (const cleanup of mountedItems.values()) cleanup();
-      mountedItems.clear();
-      if (activeLayout) void syncMountedItems(activeLayout);
+      invalidateMountedModules();
     }).then((unlisten) => {
       unlistenPackages = unlisten;
     });
