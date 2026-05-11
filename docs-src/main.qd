@@ -1,37 +1,38 @@
-.docname {BakingRL Documentation}
+.docname {BakingRL Host Documentation}
 .docauthor {BakingRL}
 .include {docs}
 .doclang {en}
 
-BakingRL is a desktop host for Rocket League telemetry overlays. It connects to
-the local telemetry stream, normalizes match events, loads plugin packages, and
-renders plugin-powered visuals in Tauri windows and OBS browser sources.
+BakingRL is the desktop host for Rocket League telemetry overlays and plugin
+runtimes. It connects to local telemetry, manages packages, enforces runtime
+boundaries, renders pages and overlays, and exposes OBS browser-source output.
 
-The core idea is simple: the host is responsible for trust, lifecycle, and
-runtime integration; plugins are responsible for presentation, small services,
-connectors, and reusable page content.
+This documentation explains host behavior. Plugin authoring details belong in
+the `BakingRLSDK` documentation.
 
 ## Start Here
 
-- [Overview](pages/overview.qd): what BakingRL is and what problem it solves.
-- [Setup](pages/setup.qd): local development requirements and run commands.
+- [Overview](pages/overview.qd): what the host does and where responsibilities
+  are split.
+- [Setup](pages/setup.qd): local requirements and development commands.
+- [Repository Layout](pages/repository-layout.qd): how the sibling repositories
+  fit together.
 - [Architecture](pages/architecture.qd): host process, frontend, runtime, and
   data flow.
-- [Plugin System](pages/plugin-system.qd): the central model behind packages,
-  exports, permissions, and host APIs.
-- [Plugin Lifecycle](pages/plugin-lifecycle.qd): install, validate, enable,
-  load, mount, reload, and uninstall.
-- [Plugin Security](pages/plugin-security.qd): why plugin code is not trusted
-  and where enforcement happens.
+- [Plugin System](pages/plugin-system.qd): how packages are discovered,
+  described, enabled, and mounted by the host.
+- [Troubleshooting](pages/troubleshooting.qd): common runtime, telemetry, and
+  package-manager failures.
 
-## Repository Split
+## Source Of Truth
 
-The project is split across three sibling repositories:
+Use the split below when deciding where a behavior should be documented:
 
 ```txt
-BakingRL/         Host application
-BakingRLSDK/      SDK, generator, helper CLI, plugin-author documentation
-BakingRLPlugins/  First-party and experimental plugins
+BakingRL/         Host application and runtime behavior
+BakingRLSDK/      SDK contracts, generator, CLI, plugin-author docs
+BakingRLPlugins/  First-party and experimental plugin packages
 ```
 
-Keep them side by side during local development.
+The current host runtime API is `0.3.0`. Compatible packages declare
+`compatibility.runtimeApi` in the supported range `>=0.3.0 <0.4.0`.

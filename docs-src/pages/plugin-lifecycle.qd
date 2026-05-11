@@ -83,6 +83,7 @@ Host validation checks:
 
 - package path safety;
 - manifest schema;
+- runtime API compatibility;
 - entry references;
 - permissions;
 - hash metadata when present;
@@ -94,6 +95,10 @@ Host validation checks:
 Users enable packages explicitly. Enabled packages become available to overlay
 layouts, page layouts, services, and connectors according to their declared
 exports.
+
+Packages built against an unsupported `compatibility.runtimeApi` are visible
+for inspection, but disabled. The package detail view can show the declared
+runtime API so users know whether a package needs to be updated.
 
 Enabling or disabling a package updates the package list immediately. The host
 then reloads service and connector runtimes in the background so the UI does
@@ -109,6 +114,7 @@ The host loads only the exports it needs:
 - Connectors load when enabled and permitted.
 - Page templates load when imported into a page.
 - Layout templates load when imported into the host-owned overlay layout list.
+- Configuration pages load from the package detail configuration tab.
 
 If a service or connector fails to start, the host emits a runtime error event.
 The dashboard records it in Developer Tools and shows an error toast during the
@@ -127,6 +133,10 @@ layout item
   -> host creates DOM root
   -> visual module mounts with VisualContext
 ```
+
+Configuration page mounting follows the same host-owned page renderer, but it
+uses the package's private configuration page and private configuration visuals
+instead of public page templates.
 
 ## Reload
 

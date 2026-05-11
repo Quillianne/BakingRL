@@ -3,66 +3,53 @@
 .include {docs}
 .doclang {en}
 
-BakingRL is intentionally split into focused repositories.
+BakingRL is intentionally split across sibling repositories. The split keeps
+host code, SDK contracts, and plugin packages independently understandable.
 
 ## BakingRL
 
-The host application:
+This repository contains the desktop host:
 
-```txt
-src/              Svelte frontend
-src-tauri/        Rust/Tauri backend
-docs-src/         Quarkdown source documentation
-```
+- Rust/Tauri backend;
+- Svelte dashboard and editors;
+- telemetry ingestion and OBS gateway;
+- package installation and state;
+- service and connector runtime management;
+- host documentation.
 
-The host owns package discovery, package validation, runtime permissions,
-telemetry ingestion, native windows, local storage, and frontend editors.
+Host code should not import plugin source directly. Plugins are installed as
+packages and accessed through host APIs.
 
 ## BakingRLSDK
 
 The SDK repository contains:
 
-- `@bakingrl/plugin-sdk` TypeScript contracts and helper functions.
-- `@bakingrl/create-plugin` scaffolder and helper CLI package.
-- `create-bakingrl-plugin` scaffolder command.
-- `bakingrl-plugin` helper CLI.
-- Plugin author documentation.
+- `@bakingrl/plugin-sdk` TypeScript contracts and helpers;
+- `@bakingrl/create-plugin` generator and helper CLI;
+- plugin manifest and bundle documentation;
+- plugin-author guides and examples.
 
-For normal plugin authoring, install the published helper package:
-
-```sh
-npm install -g @bakingrl/create-plugin
-```
-
-When developing unreleased SDK or generator changes, install the local SDK
-checkout globally:
-
-```sh
-cd ../BakingRLSDK
-npm install
-npm run build
-npm install -g . --force
-```
+When host behavior changes a public plugin contract, update the SDK docs and
+types in the same feature branch.
 
 ## BakingRLPlugins
 
-The plugin repository contains first-party and experimental plugin packages.
-Its root dependencies install the published SDK and helper CLI packages:
+The plugin repository contains first-party and experimental packages. These are
+normal plugin packages, not host source. They should be built, validated, and
+installed locally through the package helper.
 
-```sh
-cd ../BakingRLPlugins
-npm install
-npm run create -- my-plugin
-npm run build
-npm run validate
+Generated bundles, build outputs, hashes, signatures, and signing keys should
+not be committed unless a release process explicitly calls for them.
+
+## Local Development Flow
+
+Typical runtime testing uses all three repositories:
+
+```txt
+BakingRLSDK      update SDK contracts or helper CLI
+BakingRLPlugins  rebuild and install packages
+BakingRL         reload packages and test host behavior
 ```
 
-Plugin packages should not be copied back into the host repository. They are
-installed into BakingRL as local app-data packages or `.brlp` bundles.
-
-## Why Split The Repositories
-
-- Host releases do not need to include plugin source.
-- SDK documentation can target plugin authors directly.
-- First-party plugins can be versioned, tested, and distributed separately.
-- The host can enforce clear package boundaries at runtime.
+Keep commits separate per repository so host, SDK, and plugin changes remain
+reviewable.

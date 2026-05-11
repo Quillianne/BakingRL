@@ -3,8 +3,9 @@
 .include {docs}
 .doclang {en}
 
-This Quarkdown documentation is the maintained public source going forward.
-Historical drafts and loose planning notes live outside the repository.
+This Quarkdown documentation is the maintained public source for the host
+application. Historical drafts, loose planning notes, and audit notes live
+outside the repository.
 
 ## Current Direction
 
@@ -15,14 +16,17 @@ BakingRL is moving toward a clean v2 architecture:
 - first-party plugins in `BakingRLPlugins`;
 - Quarkdown documentation for generated public docs;
 - package-based plugin distribution.
+- runtime API compatibility checks before package activation.
+- private fixed-size package configuration pages.
 
 ## Documentation Direction
 
 The active documentation source is `docs-src/`. The generated site should be
 used for GitHub Pages or another static hosting target.
 
-The archived Markdown files are kept only for reference and migration history.
-Do not update them as the primary documentation source.
+Future French documentation should use separate source pages or a separate
+build target with the same stable slugs. Do not mix French and English content
+inside one generated page.
 
 ## Near-Term Priorities
 
@@ -32,6 +36,7 @@ Do not update them as the primary documentation source.
 - Make local plugin development frictionless.
 - Extend plugin API documentation as the SDK evolves.
 - Add more examples in `BakingRLPlugins`.
+- Keep runtime API versioning visible in developer and about surfaces.
 
 ## Open Documentation Work
 

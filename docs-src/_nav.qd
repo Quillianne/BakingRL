@@ -2,14 +2,14 @@
   - [Overview](pages/overview.qd)
   - [Setup](pages/setup.qd)
   - [Repository Layout](pages/repository-layout.qd)
-- Host
+- Host Runtime
   - [Architecture](pages/architecture.qd)
   - [Telemetry Runtime](pages/telemetry.qd)
   - [Developer Workflow](pages/developer-workflow.qd)
-- Plugins
+- Plugin Host
   - [Plugin System](pages/plugin-system.qd)
   - [Plugin Lifecycle](pages/plugin-lifecycle.qd)
-  - [Plugin Package Format](pages/plugin-package-format.qd)
+  - [Host Package Behavior](pages/plugin-package-format.qd)
   - [Plugin Security](pages/plugin-security.qd)
 - Operations
   - [Troubleshooting](pages/troubleshooting.qd)

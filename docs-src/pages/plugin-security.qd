@@ -57,6 +57,17 @@ Archive extraction must be defensive:
 - verify hashes when provided;
 - verify signatures when required.
 
+## Trust And Signatures
+
+Local packages and direct imports remain inspectable even before the future
+marketplace trust model is finalized. Hashes and signatures are recorded and
+displayed when present, but remote trust policy is intentionally still a host
+and marketplace concern.
+
+Do not treat a package as trusted only because it installed successfully.
+Runtime API compatibility, permissions, hash state, signature state, and user
+enablement are separate decisions.
+
 ## Runtime Safety
 
 Plugin runtime contexts should be revocable. When a package is disabled or

@@ -1,14 +1,41 @@
 # BakingRL
 
-BakingRL is a desktop host for Rocket League overlays and plugin-powered
-visuals. The application ingests Rocket League telemetry, enforces package
-permissions, and renders overlays through Tauri windows and OBS browser sources.
+BakingRL is the desktop host application for Rocket League telemetry overlays,
+pages, and plugin runtimes. It owns telemetry ingestion, package discovery,
+permissions, runtime lifecycle, overlay windows, OBS browser output, and the
+dashboard UI.
 
-This repository contains only the host application. The SDK and first-party
-plugins live in sibling repositories:
+Plugin authoring tools and public plugin contracts live in the sibling
+`BakingRLSDK` repository. First-party plugin source lives in `BakingRLPlugins`.
+
+## Repository Role
+
+Use this repository when working on:
+
+- the Tauri host and Rust backend;
+- the Svelte dashboard, page editor, overlay editor, and package manager;
+- package installation, runtime compatibility, permissions, settings, and
+  diagnostics;
+- OBS gateway routes and in-game overlay windows;
+- host-facing documentation.
+
+Do not copy plugin source into this repository. Install plugins through local
+app data or `.brlp` bundles instead.
+
+## Local Development
+
+```sh
+npm install
+npm run check
+npm run build
+cargo check --manifest-path src-tauri/Cargo.toml
+npm run tauri dev
+```
+
+Recommended sibling layout:
 
 ```txt
-perso/
+bakingproject/
   BakingRL/
   BakingRLSDK/
   BakingRLPlugins/
@@ -16,42 +43,24 @@ perso/
 
 ## Documentation
 
-The public documentation is authored with Quarkdown in
-[docs-src](docs-src). Historical drafts and working notes are kept outside the
-repository; `docs-src` is the maintained documentation source.
-
-Build the documentation site:
+Host documentation source lives in `docs-src/`.
 
 ```sh
 npm run docs:build
-```
-
-Live preview:
-
-```sh
 npm run docs:dev
 ```
 
-## Run The App
+The host docs explain application behavior. Plugin package formats, SDK APIs,
+generator usage, and authoring workflows are documented in `BakingRLSDK`.
 
-```sh
-npm install
-npm run check
-npm run build
-npm run tauri dev
+## Current Runtime Contract
+
+The current host runtime API is `0.3.0`. The host supports packages declaring:
+
+```txt
+>=0.3.0 <0.4.0
 ```
 
-On Ubuntu, install the Tauri native dependencies first:
-
-```sh
-sudo apt install -y \
-  build-essential \
-  curl \
-  git \
-  pkg-config \
-  libdbus-1-dev \
-  libwebkit2gtk-4.1-dev \
-  libgtk-3-dev \
-  libayatana-appindicator3-dev \
-  librsvg2-dev
-```
+Packages without a compatible `compatibility.runtimeApi` field can be installed
+for inspection, but BakingRL disables them and refuses activation until they
+are rebuilt with a compatible SDK.

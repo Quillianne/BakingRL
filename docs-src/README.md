@@ -1,8 +1,14 @@
-# Quarkdown Documentation Source
+# Host Documentation Source
 
-`main.qd` is the landing page for BakingRL host documentation. Each page under
-`pages/` is linked as a Quarkdown subdocument and becomes a separate HTML page
-in the generated site.
+`docs-src/` contains the English source for the BakingRL host documentation.
+It documents the application, not the plugin SDK. Public plugin authoring
+contracts live in the sibling `BakingRLSDK` documentation.
+
+The future French documentation should be a separate source tree or build
+target, not mixed into these English pages. Keep page slugs stable so links can
+be shared across languages later.
+
+## Structure
 
 ```txt
 main.qd
@@ -13,28 +19,30 @@ pages/
   setup.qd
   repository-layout.qd
   architecture.qd
+  telemetry.qd
+  developer-workflow.qd
   plugin-system.qd
   plugin-lifecycle.qd
   plugin-package-format.qd
   plugin-security.qd
-  telemetry.qd
-  developer-workflow.qd
   troubleshooting.qd
   status.qd
 ```
 
-Build:
+## Build
 
 ```sh
 npm run docs:build
-```
-
-Live preview:
-
-```sh
 npm run docs:dev
 ```
 
-The build script uses `--subdoc-naming file-name` so generated URLs are stable.
-Each page defines `.docname`; do not repeat that title as the first Markdown
-heading, otherwise Quarkdown renders a duplicate visible title.
+The build uses `--subdoc-naming file-name`, so generated URLs are based on file
+names. Avoid renaming pages unless the redirect story is explicit.
+
+## Writing Conventions
+
+- Each page starts with `.docname`, `.docauthor`, `.include`, and `.doclang`.
+- Do not repeat `.docname` as the first visible Markdown heading.
+- Prefer short guide sections followed by precise reference sections.
+- Keep host behavior here and SDK/package authoring details in `BakingRLSDK`.
+- Document current stable behavior only. Loose planning belongs in Obsidian.

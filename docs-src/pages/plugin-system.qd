@@ -50,6 +50,7 @@ Exports are named capabilities. BakingRL supports these categories:
 - `connectors`: backend modules with explicit network permissions.
 - `pages`: importable page templates.
 - `layouts`: importable overlay layout templates.
+- `configuration`: one private fixed-size package configuration page.
 
 An export is always loaded by the host. Plugins do not directly load each other.
 
@@ -106,6 +107,17 @@ items, text, images, and shapes.
 
 Pages can open inside the main app window or in a separate Tauri window. This
 open target is user-owned page state, not a package routing privilege.
+
+## Configuration Pages
+
+Packages can declare one private configuration page. It is exposed from the
+package detail view in a Configuration tab. It is not listed in the public page
+template importer, and its private visuals are not available from normal page
+or overlay editors.
+
+The host fixes every package configuration page to `1200x740`. Package authors
+can design custom controls and visuals for that page, but they cannot change
+the canvas size or use the configuration export as a public route.
 
 ## Overlay Layouts
 

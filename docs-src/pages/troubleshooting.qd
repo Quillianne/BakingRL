@@ -60,6 +60,30 @@ its runtime channel during reload.
 If the package was just edited locally, rebuild it, run the plugin repository
 validation command, reinstall it locally, then reload packages in BakingRL.
 
+## Incompatible Plugin Package
+
+If a package is installed but disabled, inspect its package details. Packages
+must declare `compatibility.runtimeApi` and the current host supports
+`>=0.3.0 <0.4.0`.
+
+When the declared version is outside that range, rebuild the package with a
+compatible SDK and helper CLI. The host keeps the package visible so users can
+identify the package ID, package version, and declared runtime API before
+removing or updating it.
+
+## Missing Configuration Tab
+
+The package detail Configuration tab appears only when the manifest declares
+`exports.configuration`. The export must include a valid page template path.
+Private configuration visuals must declare built `.js` entries under
+`exports.configuration.visuals`.
+
+Run the package helper validation command after changing the manifest:
+
+```sh
+npm run validate
+```
+
 ## Deep-Link Registration Warning
 
 Deep-link registration may fail in development builds depending on desktop
