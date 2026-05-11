@@ -65,6 +65,16 @@
           <span class="status-dot"></span>
           {state.t("packages.signature")} {state.signatureStatus(state.pendingInstall.inspection)}
         </div>
+        <div
+          class="security-item"
+          class:good={state.inspectionCompatibilityClass(state.pendingInstall.inspection) === "good"}
+          class:warn={state.inspectionCompatibilityClass(state.pendingInstall.inspection) === "warn"}
+          class:danger={state.inspectionCompatibilityClass(state.pendingInstall.inspection) === "danger"}
+          title={state.inspectionCompatibilityMessage(state.pendingInstall.inspection)}
+        >
+          <span class="status-dot"></span>
+          {state.t("packages.compatibility")} {state.inspectionCompatibilityLabel(state.pendingInstall.inspection)}
+        </div>
       </div>
 
       <div class="permissions-view">

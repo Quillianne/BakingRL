@@ -3,6 +3,8 @@ use std::collections::BTreeMap;
 use std::path::{Component, Path};
 
 pub const PLUGIN_SCHEMA_V2: &str = "bakingrl.plugin/2";
+pub const HOST_RUNTIME_API_VERSION: &str = "0.3.0";
+pub const HOST_RUNTIME_API_RANGE: &str = ">=0.3.0 <0.4.0";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -18,6 +20,7 @@ pub struct PluginPackageManifestV2 {
     pub imports: PluginImportsV2,
     #[serde(default)]
     pub permissions: PluginPermissionsV2,
+    pub compatibility: Option<PluginCompatibilityV2>,
     pub settings: Option<String>,
 }
 
@@ -35,6 +38,9 @@ impl PluginPackageManifestV2 {
         self.exports.validate()?;
         self.imports.validate()?;
         self.permissions.validate(&self.id)?;
+        if let Some(compatibility) = &self.compatibility {
+            compatibility.validate()?;
+        }
         if let Some(settings) = &self.settings {
             validate_relative_plugin_path("settings", settings)?;
         }
@@ -48,6 +54,26 @@ impl PluginPackageManifestV2 {
             + self.exports.connectors.len()
             + self.exports.pages.len()
             + self.exports.layouts.len()
+            + usize::from(self.exports.configuration.is_some())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginCompatibilityV2 {
+    pub runtime_api: Option<String>,
+    pub sdk: Option<String>,
+}
+
+impl PluginCompatibilityV2 {
+    fn validate(&self) -> Result<(), String> {
+        if let Some(runtime_api) = &self.runtime_api {
+            validate_semver("compatibility.runtimeApi", runtime_api)?;
+        }
+        if let Some(sdk) = &self.sdk {
+            validate_semver("compatibility.sdk", sdk)?;
+        }
+        Ok(())
     }
 }
 
@@ -69,6 +95,7 @@ pub struct PluginExportsV2 {
     pub pages: BTreeMap<String, PageExportV2>,
     #[serde(default, alias = "overlays")]
     pub layouts: BTreeMap<String, LayoutTemplateExportV2>,
+    pub configuration: Option<ConfigurationExportV2>,
 }
 
 impl PluginExportsV2 {
@@ -81,6 +108,7 @@ impl PluginExportsV2 {
             && self.schemas.is_empty()
             && self.pages.is_empty()
             && self.layouts.is_empty()
+            && self.configuration.is_none()
         {
             return Err("plugin must export at least one capability".to_string());
         }
@@ -115,6 +143,9 @@ impl PluginExportsV2 {
         for (name, export) in &self.layouts {
             validate_export_name("layout", name)?;
             export.validate()?;
+        }
+        if let Some(configuration) = &self.configuration {
+            configuration.validate()?;
         }
         Ok(())
     }
@@ -240,6 +271,26 @@ impl LayoutTemplateExportV2 {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ConfigurationExportV2 {
+    pub path: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    #[serde(default)]
+    pub visuals: BTreeMap<String, VisualExportV2>,
+}
+
+impl ConfigurationExportV2 {
+    fn validate(&self) -> Result<(), String> {
+        validate_relative_plugin_path("configuration.path", &self.path)?;
+        for (name, export) in &self.visuals {
+            validate_export_name("configuration visual", name)?;
+            export.validate()?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct PluginImportsV2 {
     #[serde(default)]
@@ -352,6 +403,24 @@ fn validate_non_empty(field: &str, value: &str) -> Result<(), String> {
     } else {
         Ok(())
     }
+}
+
+pub fn parse_runtime_api_version(value: &str) -> Option<(u64, u64, u64)> {
+    let mut parts = value.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = parts.next()?.parse().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((major, minor, patch))
+}
+
+fn validate_semver(field: &str, value: &str) -> Result<(), String> {
+    if parse_runtime_api_version(value).is_none() {
+        return Err(format!("{field} must be a semver version like 0.3.0"));
+    }
+    Ok(())
 }
 
 fn validate_package_id(value: &str) -> Result<(), String> {

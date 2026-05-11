@@ -5,7 +5,7 @@
 
   const dashboard = getDashboardContext();
 
-  let section = $state<"general" | "security" | "appearance" | "telemetry" | "overlay">("general");
+  let section = $state<"general" | "security" | "appearance" | "telemetry" | "overlay" | "about">("general");
 </script>
 
 <div class="page-title">
@@ -32,6 +32,9 @@
       </button>
       <button class="btn-outline" class:active={section === "overlay"} onclick={() => (section = "overlay")}>
         {dashboard.t("settings.overlay")}
+      </button>
+      <button class="btn-outline" class:active={section === "about"} onclick={() => (section = "about")}>
+        {dashboard.t("settings.about")}
       </button>
     </nav>
 
@@ -172,7 +175,7 @@
             </button>
           </div>
         </div>
-      {:else}
+      {:else if section === "overlay"}
         <div class="panel-heading">
           <div>
             <h2>{dashboard.t("settings.overlay")}</h2>
@@ -225,6 +228,24 @@
             <button class="btn-primary" onclick={() => void dashboard.saveAppSettings()} disabled={dashboard.busy}>
               {dashboard.t("common.saveSettings")}
             </button>
+          </div>
+        </div>
+      {:else}
+        <div class="panel-heading">
+          <div>
+            <h2>{dashboard.t("settings.about")}</h2>
+            <p>{dashboard.t("settings.aboutDesc")}</p>
+          </div>
+        </div>
+
+        <div class="package-detail-summary">
+          <div class="package-detail-stat">
+            <strong>{dashboard.runtimeInfo?.runtimeApiVersion ?? "n/a"}</strong>
+            <span>{dashboard.t("developer.runtimeApiVersion")}</span>
+          </div>
+          <div class="package-detail-stat">
+            <strong>{dashboard.runtimeInfo?.supportedRuntimeApi ?? "n/a"}</strong>
+            <span>{dashboard.t("developer.runtimeApiRange")}</span>
           </div>
         </div>
       {/if}

@@ -31,6 +31,28 @@ export type LayoutTemplateExportDescriptor = {
   description: string | null;
 };
 
+export type ConfigurationExportDescriptor = {
+  title: string | null;
+  description: string | null;
+  path: string;
+  visuals: VisualExportDescriptor[];
+};
+
+export type PackageCompatibilityStatus =
+  | "compatible"
+  | "incompatible"
+  | "requires_newer_host"
+  | "unknown_runtime_api";
+
+export type PackageCompatibilityDescriptor = {
+  status: PackageCompatibilityStatus;
+  runtimeApi: string | null;
+  sdk: string | null;
+  hostRuntimeApi: string;
+  supportedRuntimeApi: string;
+  message: string | null;
+};
+
 export type PermissionShape = {
   bus?: {
     read?: string[];
@@ -78,12 +100,14 @@ export type PackageDescriptor = {
     schemas: NamedExportDescriptor[];
     pages: PageExportDescriptor[];
     layouts: LayoutTemplateExportDescriptor[];
+    configuration: ConfigurationExportDescriptor | null;
   };
   imports: {
     components: string[];
     services: string[];
   };
   effective_permissions: PermissionShape;
+  compatibility: PackageCompatibilityDescriptor;
   settings: string | null;
   error: string | null;
 };
@@ -97,6 +121,7 @@ export type ManifestExports = {
   schemas?: Record<string, unknown>;
   pages?: Record<string, unknown>;
   layouts?: Record<string, unknown>;
+  configuration?: unknown;
 };
 
 export type BundleInspection = {
@@ -105,6 +130,10 @@ export type BundleInspection = {
     name: string;
     version: string;
     author: string | null;
+    compatibility?: {
+      runtimeApi?: string | null;
+      sdk?: string | null;
+    } | null;
     exports: ManifestExports;
     imports?: PackageDescriptor["imports"];
     permissions?: PermissionShape;
@@ -116,6 +145,11 @@ export type BundleInspection = {
   file_count: number;
   uncompressed_size: number;
   sha256: string;
+};
+
+export type RuntimeInfo = {
+  runtimeApiVersion: string;
+  supportedRuntimeApi: string;
 };
 
 export type PreparedPackageInstall = {

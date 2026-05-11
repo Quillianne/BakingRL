@@ -4,7 +4,7 @@
 
   type RendererMode = "runtime" | "editor" | "page";
   type LayoutType = "ingame" | "stream";
-  type LayoutSource = "overlay" | "page";
+  type LayoutSource = "overlay" | "page" | "configuration";
   type MockEvent = { id: number; event: unknown } | null;
 
   const {
@@ -51,6 +51,9 @@
     };
     exports: {
       visuals: VisualExportDescriptor[];
+      configuration?: {
+        visuals: VisualExportDescriptor[];
+      } | null;
     };
   };
 
@@ -183,11 +186,20 @@
 
   type VisualExport = {
     mount(context: VisualContext): void | (() => void) | Promise<void | (() => void)>;
+    update?(context: VisualContext): void | Promise<void>;
+    unmount?(): void | Promise<void>;
   };
 
   type VisualModule = {
     default?: VisualExport;
     mount?: VisualExport["mount"];
+    update?: VisualExport["update"];
+    unmount?: VisualExport["unmount"];
+  };
+
+  type MountedItem = {
+    cleanup: () => void;
+    update?: (layer: OverlayLayer, item: OverlayItem, layout: LayoutModel) => void | Promise<void>;
   };
 
   let host: HTMLElement;
@@ -197,7 +209,7 @@
   let overlayLayouts = $state<OverlayLayoutCatalog | null>(null);
   let pages = $state<PagesFile | null>(null);
   let eventActiveItems = $state(new Set<string>());
-  let mountedItems = new Map<string, () => void>();
+  let mountedItems = new Map<string, MountedItem>();
   let telemetrySubscribers = new Set<(event: unknown) => void>();
   let componentSourceCache = new Map<string, ComponentExportSource>();
   let settingsCache = new Map<string, Record<string, unknown>>();
@@ -374,7 +386,10 @@
   function visualForItem(item: OverlayItem) {
     const exportName = item.export_name;
     if (!exportName || itemKind(item) !== "visual") return null;
-    return packageForItem(item)?.exports.visuals.find((visual) => visual.name === exportName) ?? null;
+    const pkg = packageForItem(item);
+    if (!pkg) return null;
+    const visuals = source === "configuration" ? (pkg.exports.configuration?.visuals ?? []) : pkg.exports.visuals;
+    return visuals.find((visual) => visual.name === exportName) ?? null;
   }
 
   function itemKind(item: OverlayItem) {
@@ -447,7 +462,7 @@
     moduleVersion += 1;
     componentSourceCache.clear();
     settingsCache.clear();
-    for (const cleanup of mountedItems.values()) cleanup();
+    for (const mounted of mountedItems.values()) mounted.cleanup();
     mountedItems.clear();
     if (activeLayout) void syncMountedItems(activeLayout);
   }
@@ -513,7 +528,7 @@
     applyItemStyle(root, layer, item, layout);
     renderNativeItem(root, item);
     host.appendChild(root);
-    mountedItems.set(item.id, () => root.remove());
+    mountedItems.set(item.id, { cleanup: () => root.remove() });
   }
 
   async function mountItem(layer: OverlayLayer, item: OverlayItem, layout: LayoutModel) {
@@ -543,24 +558,31 @@
 
     let disposed = false;
     let visualCleanup: void | (() => void);
+    let visualModule: VisualExport | undefined;
     const busCleanups = new Set<() => void>();
-    mountedItems.set(item.id, () => {
+    const cleanupMountedVisual = () => {
       disposed = true;
       if (typeof visualCleanup === "function") visualCleanup();
+      void visualModule?.unmount?.();
       for (const cleanup of busCleanups) cleanup();
       busCleanups.clear();
       const nextActiveItems = new Set(eventActiveItems);
       nextActiveItems.delete(item.id);
       eventActiveItems = nextActiveItems;
       root.remove();
-    });
+    };
+    mountedItems.set(item.id, { cleanup: cleanupMountedVisual });
 
     try {
       const packageSettings = await getPackageSettings(item.package_id);
       const settings = { ...packageSettings, ...settingsObject(item) };
       const visualMod = (await import(/* @vite-ignore */ moduleUrl(mountedPackage.id, mountedVisual.entry))) as VisualModule;
-      const visualModule = visualMod.default ?? visualMod;
-      const mountVisual = visualModule.mount;
+      visualModule = visualMod.default ?? (visualMod.mount ? {
+        mount: visualMod.mount,
+        update: visualMod.update,
+        unmount: visualMod.unmount
+      } : undefined);
+      const mountVisual = visualModule?.mount;
       if (!mountVisual) {
         throw new Error(`Visual export '${mountedPackage.id}/${item.export_name}' does not export mount().`);
       }
@@ -577,19 +599,19 @@
         }
       };
 
-      const mountResult = await mountVisual({
+      const createContext = (nextLayer: OverlayLayer, nextItem: OverlayItem, nextSettings: Record<string, unknown>): VisualContext => ({
         root,
         package: mountedPackage,
-        exportName: item.export_name,
-        item,
-        settings,
+        exportName: nextItem.export_name ?? mountedVisual.name,
+        item: nextItem,
+        settings: nextSettings,
         setActive(active) {
-          if (layer.kind !== "event") return;
+          if (nextLayer.kind !== "event") return;
           const nextActiveItems = new Set(eventActiveItems);
           if (active) {
-            nextActiveItems.add(item.id);
+            nextActiveItems.add(nextItem.id);
           } else {
-            nextActiveItems.delete(item.id);
+            nextActiveItems.delete(nextItem.id);
           }
           eventActiveItems = nextActiveItems;
         },
@@ -670,11 +692,24 @@
         diagnostics
       });
 
+      const mountResult = await mountVisual(createContext(layer, item, settings));
+
       if (disposed) {
         if (typeof mountResult === "function") mountResult();
         return;
       }
       visualCleanup = mountResult;
+      mountedItems.set(item.id, {
+        cleanup: cleanupMountedVisual,
+        async update(nextLayer, nextItem, nextLayout) {
+          if (!visualModule?.update) return;
+          const nextPackageSettings = await getPackageSettings(mountedPackage.id);
+          const nextSettings = { ...nextPackageSettings, ...settingsObject(nextItem) };
+          root.dataset.mountSignature = visualMountSignature(nextItem);
+          applyItemStyle(root, nextLayer, nextItem, nextLayout);
+          await visualModule.update(createContext(nextLayer, nextItem, nextSettings));
+        }
+      });
     } catch (error) {
       if (disposed) return;
       const message = error instanceof Error ? error.message : String(error);
@@ -693,7 +728,7 @@
 
     for (const [itemId, cleanup] of mountedItems) {
       if (!activeIds.has(itemId)) {
-        cleanup();
+        cleanup.cleanup();
         mountedItems.delete(itemId);
       }
     }
@@ -702,7 +737,12 @@
       const root = itemRoot(item.id);
       if (root) {
         if (itemKind(item) === "visual" && root.dataset.mountSignature !== visualMountSignature(item)) {
-          mountedItems.get(item.id)?.();
+          const mounted = mountedItems.get(item.id);
+          if (mounted?.update) {
+            await mounted.update(layer, item, layout);
+            continue;
+          }
+          mounted?.cleanup();
           mountedItems.delete(item.id);
           await mountItem(layer, item, layout);
           continue;
@@ -762,7 +802,7 @@
       for (const [itemId, cleanup] of mountedItems) {
         const root = itemRoot(itemId);
         if (root?.dataset.packageId === packageId) {
-          cleanup();
+          cleanup.cleanup();
           mountedItems.delete(itemId);
         }
       }
@@ -780,7 +820,7 @@
       unlistenPages?.();
       unlistenSettings?.();
       if (pollInterval) clearInterval(pollInterval);
-      for (const cleanup of mountedItems.values()) cleanup();
+      for (const mounted of mountedItems.values()) mounted.cleanup();
       mountedItems.clear();
       telemetrySubscribers.clear();
       componentSourceCache.clear();

@@ -36,6 +36,7 @@ pub struct ServiceRuntimeSpec {
     pub service_imports: Vec<String>,
     pub service_methods: HashMap<String, Vec<String>>,
     pub permissions: EffectivePackagePermissionsV2,
+    pub settings: serde_json::Value,
     pub additional_modules: Vec<ServiceRuntimeModuleSpec>,
 }
 
@@ -438,7 +439,7 @@ async fn run_service_runtime(
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
-    let bootstrap = service_bootstrap(&modules)?;
+    let bootstrap = service_bootstrap(&modules, &spec.settings)?;
     let bootstrap_url = deno_core::resolve_path(
         &format!("./bakingrl-service-{}.js", spec.service_name),
         &std::env::current_dir().map_err(|e| format!("Unable to resolve cwd: {e}"))?,
@@ -564,12 +565,18 @@ fn forward_bus_events(
     });
 }
 
-fn service_bootstrap(modules: &[ServiceBootstrapModule]) -> Result<String, String> {
+fn service_bootstrap(
+    modules: &[ServiceBootstrapModule],
+    settings: &serde_json::Value,
+) -> Result<String, String> {
     let modules_json = serde_json::to_string(modules)
         .map_err(|e| format!("Unable to serialize service bootstrap modules: {e}"))?;
+    let settings_json = serde_json::to_string(settings)
+        .map_err(|e| format!("Unable to serialize service settings: {e}"))?;
     Ok(format!(
         r#"
 const serviceEntries = {modules_json};
+const packageSettings = {settings_json};
 const services = new Map();
 const allowedMethods = new Map();
 for (const entry of serviceEntries) {{
@@ -623,10 +630,10 @@ const context = {{
     }}
   }},
   storage: {{
-    readText(uri) {{
+    async readText(uri) {{
       return globalThis.Deno.core.ops.op_service_storage_read(uri);
     }},
-    writeText(uri, contents) {{
+    async writeText(uri, contents) {{
       globalThis.Deno.core.ops.op_service_storage_write(uri, String(contents ?? ""));
     }}
   }},
@@ -641,8 +648,8 @@ const context = {{
     }}
   }},
   settings: {{
-    get() {{ return undefined; }},
-    all() {{ return {{}}; }}
+    get(key) {{ return packageSettings?.[String(key)]; }},
+    all() {{ return JSON.parse(JSON.stringify(packageSettings ?? {{}})); }}
   }},
   diagnostics: console
 }};
@@ -683,7 +690,13 @@ async function dispatchCalls() {{
     }}
   }}
 }}
-await Promise.race([dispatchEvents(), dispatchCalls()]);
+try {{
+  await Promise.race([dispatchEvents(), dispatchCalls()]);
+}} finally {{
+  for (const service of services.values()) {{
+    await service.unmount?.();
+  }}
+}}
 "#
     ))
 }
@@ -1026,6 +1039,7 @@ export default {
                         write: vec![],
                     },
                 },
+                settings: serde_json::json!({}),
                 additional_modules: Vec::new(),
             }],
             Arc::new(EventBus::new(16)),
@@ -1094,6 +1108,7 @@ export default {
                         write: vec!["plugin://self/*".to_string()],
                     },
                 },
+                settings: serde_json::json!({}),
                 additional_modules: Vec::new(),
             }],
             Arc::new(EventBus::new(16)),
@@ -1194,6 +1209,7 @@ export default {
                     service_imports: vec![],
                     service_methods: service_methods.clone(),
                     permissions: permissions.clone(),
+                    settings: serde_json::json!({}),
                     additional_modules: Vec::new(),
                 },
                 ServiceRuntimeSpec {
@@ -1204,6 +1220,7 @@ export default {
                     service_imports: vec!["com.example.provider/math".to_string()],
                     service_methods,
                     permissions,
+                    settings: serde_json::json!({}),
                     additional_modules: Vec::new(),
                 },
             ],
@@ -1290,6 +1307,7 @@ export default {
                 service_imports: vec![],
                 service_methods,
                 permissions,
+                settings: serde_json::json!({}),
                 additional_modules: vec![ServiceRuntimeModuleSpec {
                     service_name: "helper".to_string(),
                     entry_path: helper_entry,

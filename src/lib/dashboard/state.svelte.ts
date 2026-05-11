@@ -42,6 +42,7 @@ import type {
   PreparedPackageInstall,
   RecentActivityEntry,
   RegistryEntry,
+  RuntimeInfo,
   RuntimeErrorEvent,
   TelemetryConnectionStatus,
   ToastMessage,
@@ -96,6 +97,7 @@ export class DashboardState {
   confirmRequest = $state<ConfirmRequest | null>(null);
   telemetryStatus = $state<TelemetryConnectionStatus | null>(null);
   obsGatewayStatus = $state<ObsGatewayStatus | null>(null);
+  runtimeInfo = $state<RuntimeInfo | null>(null);
   telemetryHelpOpen = $state(false);
   telemetryHelpDontShow = $state(false);
   overlayMonitors = $state<OverlayMonitor[]>([]);
@@ -324,6 +326,7 @@ export class DashboardState {
   }
 
   async refresh() {
+    this.runtimeInfo = await invoke<RuntimeInfo>("get_runtime_info");
     this.setPackagesFromBackend(await invoke<PackageDescriptor[]>("list_packages"));
     this.overlayLayouts = await invoke<OverlayLayoutCatalog>("get_overlay_layouts");
     this.pages = await invoke<PagesFile>("get_pages");
@@ -358,6 +361,10 @@ export class DashboardState {
     if (this.isPackageDeleting(pkg)) return;
     const previousEnabled = pkg.enabled;
     const nextEnabled = !previousEnabled;
+    if (nextEnabled && !this.isPackageCompatible(pkg)) {
+      this.notify(pkg.compatibility.message ?? this.t("packages.incompatiblePackage"), "warning", 6400);
+      return;
+    }
     this.pendingPackageToggles = {
       ...this.pendingPackageToggles,
       [pkg.id]: {
@@ -406,6 +413,62 @@ export class DashboardState {
 
   isPackageActionDisabled(pkg: PackageDescriptor) {
     return this.busy || this.isPackageDeleting(pkg);
+  }
+
+  isPackageToggleDisabled(pkg: PackageDescriptor) {
+    return this.isPackageActionDisabled(pkg) || (!pkg.enabled && !this.isPackageCompatible(pkg));
+  }
+
+  isPackageCompatible(pkg: PackageDescriptor) {
+    return pkg.compatibility.status === "compatible";
+  }
+
+  packageCompatibilityClass(pkg: PackageDescriptor) {
+    if (pkg.compatibility.status === "compatible") return "connected";
+    if (pkg.compatibility.status === "requires_newer_host") return "connecting";
+    return "disconnected";
+  }
+
+  packageCompatibilityLabel(pkg: PackageDescriptor) {
+    if (pkg.compatibility.status === "compatible") return this.t("packages.compatible");
+    if (pkg.compatibility.status === "requires_newer_host") return this.t("packages.requiresNewerHost");
+    if (pkg.compatibility.status === "unknown_runtime_api") return this.t("packages.unknownRuntimeApi");
+    return this.t("packages.incompatible");
+  }
+
+  runtimeApiCompatibility(runtimeApi: string | null | undefined) {
+    const parts = typeof runtimeApi === "string" ? runtimeApi.split(".").map((part) => Number(part)) : [];
+    if (parts.length !== 3 || parts.some((part) => !Number.isInteger(part) || part < 0)) {
+      return "unknown_runtime_api" as const;
+    }
+    const [major, minor] = parts;
+    if (major === 0 && minor === 3) return "compatible" as const;
+    if (major === 0 && minor < 3) return "incompatible" as const;
+    return "requires_newer_host" as const;
+  }
+
+  inspectionCompatibilityLabel(inspection: BundleInspection) {
+    const status = this.runtimeApiCompatibility(inspection.manifest.compatibility?.runtimeApi);
+    if (status === "compatible") return this.t("packages.compatible");
+    if (status === "requires_newer_host") return this.t("packages.requiresNewerHost");
+    if (status === "unknown_runtime_api") return this.t("packages.unknownRuntimeApi");
+    return this.t("packages.incompatible");
+  }
+
+  inspectionCompatibilityClass(inspection: BundleInspection) {
+    const status = this.runtimeApiCompatibility(inspection.manifest.compatibility?.runtimeApi);
+    if (status === "compatible") return "good";
+    if (status === "requires_newer_host") return "warn";
+    return "danger";
+  }
+
+  inspectionCompatibilityMessage(inspection: BundleInspection) {
+    const runtimeApi = inspection.manifest.compatibility?.runtimeApi;
+    const sdk = inspection.manifest.compatibility?.sdk;
+    const hostRange = this.runtimeInfo?.supportedRuntimeApi ?? ">=0.3.0 <0.4.0";
+    if (!runtimeApi) return this.t("packages.missingRuntimeApiMessage");
+    const sdkPart = sdk ? ` · SDK ${sdk}` : "";
+    return this.tx("packages.runtimeApiMessage", { runtimeApi, hostRange }) + sdkPart;
   }
 
   removePackage(pkg: PackageDescriptor) {
@@ -883,7 +946,8 @@ export class DashboardState {
       pkg.exports.assets.length +
       pkg.exports.schemas.length +
       pkg.exports.pages.length +
-      pkg.exports.layouts.length
+      pkg.exports.layouts.length +
+      (pkg.exports.configuration ? 1 : 0)
     );
   }
 
@@ -901,7 +965,8 @@ export class DashboardState {
       Object.keys(exports.assets ?? {}).length +
       Object.keys(exports.schemas ?? {}).length +
       Object.keys(exports.pages ?? {}).length +
-      Object.keys(exports.layouts ?? {}).length
+      Object.keys(exports.layouts ?? {}).length +
+      (exports.configuration ? 1 : 0)
     );
   }
 

@@ -41,6 +41,7 @@ pub struct ConnectorRuntimeSpec {
     pub service_imports: Vec<String>,
     pub service_methods: HashMap<String, Vec<String>>,
     pub permissions: EffectivePackagePermissionsV2,
+    pub settings: serde_json::Value,
     pub additional_modules: Vec<ConnectorRuntimeModuleSpec>,
 }
 
@@ -316,7 +317,7 @@ async fn run_connector_runtime(
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
-    let bootstrap = connector_bootstrap(&modules)?;
+    let bootstrap = connector_bootstrap(&modules, &spec.settings)?;
     let bootstrap_url = deno_core::resolve_path(
         &format!("./bakingrl-connector-{}.js", spec.connector_name),
         &std::env::current_dir().map_err(|e| format!("Unable to resolve cwd: {e}"))?,
@@ -407,12 +408,18 @@ fn forward_bus_events(
     });
 }
 
-fn connector_bootstrap(modules: &[ConnectorBootstrapModule]) -> Result<String, String> {
+fn connector_bootstrap(
+    modules: &[ConnectorBootstrapModule],
+    settings: &serde_json::Value,
+) -> Result<String, String> {
     let modules_json = serde_json::to_string(modules)
         .map_err(|e| format!("Unable to serialize connector bootstrap modules: {e}"))?;
+    let settings_json = serde_json::to_string(settings)
+        .map_err(|e| format!("Unable to serialize connector settings: {e}"))?;
     Ok(format!(
         r#"
 const connectorEntries = {modules_json};
+const packageSettings = {settings_json};
 const connectors = [];
 for (const entry of connectorEntries) {{
   const connectorModule = await import(entry.entryUrl);
@@ -445,10 +452,10 @@ const context = {{
     }}
   }},
   storage: {{
-    readText(uri) {{
+    async readText(uri) {{
       return globalThis.Deno.core.ops.op_connector_storage_read(uri);
     }},
-    writeText(uri, contents) {{
+    async writeText(uri, contents) {{
       globalThis.Deno.core.ops.op_connector_storage_write(uri, String(contents ?? ""));
     }}
   }},
@@ -458,8 +465,8 @@ const context = {{
     }}
   }},
   settings: {{
-    get() {{ return undefined; }},
-    all() {{ return {{}}; }}
+    get(key) {{ return packageSettings?.[String(key)]; }},
+    all() {{ return JSON.parse(JSON.stringify(packageSettings ?? {{}})); }}
   }},
   fetch(url, init) {{
     return globalThis.Deno.core.ops.op_connector_fetch(String(url), init ?? null);
@@ -503,7 +510,13 @@ async function dispatchEvents() {{
     }}
   }}
 }}
-await dispatchEvents();
+try {{
+  await dispatchEvents();
+}} finally {{
+  for (const entry of connectors) {{
+    await entry.connector.unmount?.();
+  }}
+}}
 "#
     ))
 }
@@ -1043,6 +1056,7 @@ export default {
                         write: vec![],
                     },
                 },
+                settings: serde_json::json!({}),
                 additional_modules: Vec::new(),
             }],
             Arc::new(EventBus::new(16)),
@@ -1110,6 +1124,7 @@ export default {
                         write: vec!["plugin://self/*".to_string()],
                     },
                 },
+                settings: serde_json::json!({}),
                 additional_modules: Vec::new(),
             }],
             Arc::new(EventBus::new(16)),
@@ -1179,6 +1194,7 @@ export default {
                 service_imports: vec![],
                 service_methods: service_methods.clone(),
                 permissions: empty_permissions(),
+                settings: serde_json::json!({}),
                 additional_modules: Vec::new(),
             }],
             Arc::new(EventBus::new(16)),
@@ -1210,6 +1226,7 @@ export default {
                         write: vec![],
                     },
                 },
+                settings: serde_json::json!({}),
                 additional_modules: Vec::new(),
             }],
             Arc::new(EventBus::new(16)),

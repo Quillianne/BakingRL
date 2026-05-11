@@ -1,5 +1,6 @@
 <script lang="ts">
   import { getDashboardContext } from "$lib/dashboard/context";
+  import PackageConfigurationPanel from "$lib/dashboard/PackageConfigurationPanel.svelte";
   import type { PackageDescriptor } from "$lib/dashboard/types";
 
   const dashboard = getDashboardContext();
@@ -15,19 +16,29 @@
     rows: PackageExportRow[];
   };
 
+  type PackageDetailTab = "exports" | "permissions" | "configuration";
+
   let detailPackageId = $state<string | null>(null);
+  let activeDetailTab = $state<PackageDetailTab>("exports");
   const detailPackage = $derived(dashboard.packages.find((pkg) => pkg.id === detailPackageId) ?? null);
 
   function openPackageDetails(pkg: PackageDescriptor) {
     detailPackageId = pkg.id;
+    activeDetailTab = "exports";
   }
 
   function closePackageDetails() {
     detailPackageId = null;
   }
 
+  $effect(() => {
+    if (activeDetailTab === "configuration" && !detailPackage?.exports.configuration) {
+      activeDetailTab = "exports";
+    }
+  });
+
   function packageExportSections(pkg: PackageDescriptor): PackageExportSection[] {
-    return [
+    const sections: PackageExportSection[] = [
       {
         title: dashboard.t("packages.visuals"),
         count: pkg.exports.visuals.length,
@@ -80,7 +91,24 @@
           meta: layoutTemplate.path
         }))
       }
-    ].filter((section) => section.count > 0);
+    ];
+    if (pkg.exports.configuration) {
+      sections.push({
+        title: dashboard.t("packages.configuration"),
+        count: 1,
+        rows: [
+          {
+            name: pkg.exports.configuration.title ?? dashboard.t("packages.configuration"),
+            meta: pkg.exports.configuration.path
+          },
+          {
+            name: dashboard.t("packages.privateConfigurationVisuals"),
+            meta: String(pkg.exports.configuration.visuals.length)
+          }
+        ]
+      });
+    }
+    return sections.filter((section) => section.count > 0);
   }
 </script>
 
@@ -139,6 +167,13 @@
                 </span>
               </div>
               <div class="package-summary-item">
+                <span class="package-summary-label">{dashboard.t("packages.compatibility")}</span>
+                <span class="status-pill {dashboard.packageCompatibilityClass(pkg)}" title={pkg.compatibility.message ?? ""}>
+                  <span class="status-dot"></span>
+                  {dashboard.packageCompatibilityLabel(pkg)}
+                </span>
+              </div>
+              <div class="package-summary-item">
                 <span class="package-summary-label">{dashboard.t("common.permissions")}</span>
                 <strong>{dashboard.permissionTotal(pkg.effective_permissions)}</strong>
               </div>
@@ -158,7 +193,7 @@
               <button
                 class={dashboard.isPackageToggleButtonEnabled(pkg) ? "btn-secondary" : "btn-primary"}
                 onclick={() => void dashboard.togglePackage(pkg)}
-                disabled={dashboard.isPackageActionDisabled(pkg) || dashboard.isPackageTogglePending(pkg)}
+                disabled={dashboard.isPackageToggleDisabled(pkg) || dashboard.isPackageTogglePending(pkg)}
               >
                 {dashboard.isPackageToggleButtonEnabled(pkg) ? dashboard.t("common.disable") : dashboard.t("common.enable")}
               </button>
@@ -249,6 +284,10 @@
               <span class="status-dot"></span>
               {dashboard.packageStateLabel(detailPackage)}
             </span>
+            <span class="status-pill {dashboard.packageCompatibilityClass(detailPackage)}" title={detailPackage.compatibility.message ?? ""}>
+              <span class="status-dot"></span>
+              {dashboard.packageCompatibilityLabel(detailPackage)}
+            </span>
           </div>
           <p>v{detailPackage.version} · {dashboard.t("packages.by")} {detailPackage.author ?? dashboard.t("packages.unknownAuthor")}</p>
         </div>
@@ -281,70 +320,98 @@
           <strong>{dashboard.exportCount(detailPackage)}</strong>
           <span>{dashboard.t("packages.elements")}</span>
         </div>
+        <div class="package-detail-stat">
+          <strong>{detailPackage.compatibility.runtimeApi ?? "n/a"}</strong>
+          <span>{dashboard.t("packages.runtimeApi")}</span>
+        </div>
       </div>
 
-      <section class="package-detail-section">
-        <div class="package-detail-section-head">
-          <h3>{dashboard.t("packages.exportsTitle")}</h3>
-          <span class="section-count">{dashboard.exportCount(detailPackage)}</span>
-        </div>
-        {#if dashboard.exportCount(detailPackage) > 0}
-          <div class="export-section-grid">
-            {#each packageExportSections(detailPackage) as section}
-              <section class="export-section-card">
-                <div class="export-section-head">
-                  <h4>{section.title}</h4>
-                  <span>{section.count}</span>
-                </div>
-                <ul class="export-items">
-                  {#each section.rows as row}
-                    <li class="export-item">
-                      <span class="export-name">{row.name}</span>
-                      {#if row.meta}
-                        <span class="export-meta">{row.meta}</span>
-                      {/if}
-                    </li>
-                  {/each}
-                </ul>
-              </section>
-            {/each}
-          </div>
-        {:else}
-          <p class="permission-none">{dashboard.t("packages.noExports")}</p>
+      <div class="package-detail-tabs" role="tablist" aria-label={dashboard.t("packages.details")}>
+        <button class="btn-outline" class:active={activeDetailTab === "exports"} onclick={() => (activeDetailTab = "exports")}>
+          {dashboard.t("common.exports")}
+        </button>
+        <button class="btn-outline" class:active={activeDetailTab === "permissions"} onclick={() => (activeDetailTab = "permissions")}>
+          {dashboard.t("common.permissions")}
+        </button>
+        {#if detailPackage.exports.configuration}
+          <button class="btn-outline" class:active={activeDetailTab === "configuration"} onclick={() => (activeDetailTab = "configuration")}>
+            {dashboard.t("packages.configuration")}
+          </button>
         {/if}
-      </section>
+      </div>
 
-      <section class="package-detail-section">
-        <div class="package-detail-section-head">
-          <h3>{dashboard.t("packages.effectivePermissions")}</h3>
-          <span class="section-count">{dashboard.permissionTotal(detailPackage.effective_permissions)}</span>
-        </div>
-        {#if dashboard.permissionTotal(detailPackage.effective_permissions) > 0}
-          <div class="permission-grid expanded">
-            {#each dashboard.permissionSections(detailPackage.effective_permissions) as section}
-              <section class="permission-card">
-                <h4>{section.title}</h4>
-                {#each section.rows as row}
-                  <div class="permission-row">
-                    <span class="permission-label">{row.label}</span>
-                    {#if row.values.length}
-                      <div class="permission-chips">
-                        {#each row.values as value}
-                          <span class="permission-chip">{value}</span>
-                        {/each}
-                      </div>
-                    {:else}
-                      <span class="permission-empty">{row.emptyLabel}</span>
-                    {/if}
-                  </div>
-                {/each}
-              </section>
-            {/each}
+      {#if activeDetailTab === "exports"}
+        <section class="package-detail-section">
+          <div class="package-detail-section-head">
+            <h3>{dashboard.t("packages.exportsTitle")}</h3>
+            <span class="section-count">{dashboard.exportCount(detailPackage)}</span>
           </div>
-        {:else}
-          <p class="permission-none">{dashboard.t("packages.noExtraPermissions")}</p>
-        {/if}
-      </section>
+          {#if dashboard.exportCount(detailPackage) > 0}
+            <div class="export-section-grid">
+              {#each packageExportSections(detailPackage) as section}
+                <section class="export-section-card">
+                  <div class="export-section-head">
+                    <h4>{section.title}</h4>
+                    <span>{section.count}</span>
+                  </div>
+                  <ul class="export-items">
+                    {#each section.rows as row}
+                      <li class="export-item">
+                        <span class="export-name">{row.name}</span>
+                        {#if row.meta}
+                          <span class="export-meta">{row.meta}</span>
+                        {/if}
+                      </li>
+                    {/each}
+                  </ul>
+                </section>
+              {/each}
+            </div>
+          {:else}
+            <p class="permission-none">{dashboard.t("packages.noExports")}</p>
+          {/if}
+        </section>
+      {:else if activeDetailTab === "permissions"}
+        <section class="package-detail-section">
+          <div class="package-detail-section-head">
+            <h3>{dashboard.t("packages.effectivePermissions")}</h3>
+            <span class="section-count">{dashboard.permissionTotal(detailPackage.effective_permissions)}</span>
+          </div>
+          {#if dashboard.permissionTotal(detailPackage.effective_permissions) > 0}
+            <div class="permission-grid expanded">
+              {#each dashboard.permissionSections(detailPackage.effective_permissions) as section}
+                <section class="permission-card">
+                  <h4>{section.title}</h4>
+                  {#each section.rows as row}
+                    <div class="permission-row">
+                      <span class="permission-label">{row.label}</span>
+                      {#if row.values.length}
+                        <div class="permission-chips">
+                          {#each row.values as value}
+                            <span class="permission-chip">{value}</span>
+                          {/each}
+                        </div>
+                      {:else}
+                        <span class="permission-empty">{row.emptyLabel}</span>
+                      {/if}
+                    </div>
+                  {/each}
+                </section>
+              {/each}
+            </div>
+          {:else}
+            <p class="permission-none">{dashboard.t("packages.noExtraPermissions")}</p>
+          {/if}
+        </section>
+      {:else}
+        <section class="package-detail-section">
+          <div class="package-detail-section-head">
+            <h3>{dashboard.t("packages.configuration")}</h3>
+            <span class="section-count">1200x740</span>
+          </div>
+          <PackageConfigurationPanel state={dashboard} pkg={detailPackage} />
+        </section>
+      {/if}
 
       </div>
 
@@ -356,7 +423,7 @@
           type="button"
           class={dashboard.isPackageToggleButtonEnabled(detailPackage) ? "btn-secondary" : "btn-primary"}
           onclick={() => void dashboard.togglePackage(detailPackage)}
-          disabled={dashboard.isPackageActionDisabled(detailPackage) || dashboard.isPackageTogglePending(detailPackage)}
+          disabled={dashboard.isPackageToggleDisabled(detailPackage) || dashboard.isPackageTogglePending(detailPackage)}
         >
           {dashboard.isPackageToggleButtonEnabled(detailPackage) ? dashboard.t("common.disable") : dashboard.t("common.enable")}
         </button>

@@ -5,7 +5,7 @@ use crate::models::PluginRuntimeIsolation;
 
 use super::connector_runtime::{ConnectorRuntimeModuleSpec, ConnectorRuntimeSpec};
 use super::service_runtime::{ServiceRuntimeModuleSpec, ServiceRuntimeSpec};
-use super::PackageRecord;
+use super::{merge_settings, PackageRecord};
 
 fn service_methods_for_records(
     records: &HashMap<String, PackageRecord>,
@@ -32,6 +32,7 @@ fn service_methods_for_records(
 pub(super) fn service_specs_for_records(
     records: &HashMap<String, PackageRecord>,
     runtime_isolation: &PluginRuntimeIsolation,
+    package_settings: &HashMap<String, serde_json::Value>,
 ) -> Vec<ServiceRuntimeSpec> {
     let service_methods = service_methods_for_records(records);
     let mut specs = Vec::new();
@@ -42,6 +43,14 @@ pub(super) fn service_specs_for_records(
         let storage_root = Path::new(&record.descriptor.path)
             .join(".bakingrl")
             .join("storage");
+        let settings = merge_settings(
+            record.descriptor.settings.as_deref(),
+            Path::new(&record.descriptor.path),
+            package_settings
+                .get(&record.manifest.id)
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({})),
+        );
         match runtime_isolation {
             PluginRuntimeIsolation::Export => {
                 for (name, export) in &record.manifest.exports.services {
@@ -53,6 +62,7 @@ pub(super) fn service_specs_for_records(
                         service_imports: record.manifest.imports.services.clone(),
                         service_methods: service_methods.clone(),
                         permissions: record.descriptor.effective_permissions.clone(),
+                        settings: settings.clone(),
                         additional_modules: Vec::new(),
                     });
                 }
@@ -76,6 +86,7 @@ pub(super) fn service_specs_for_records(
                     service_imports: record.manifest.imports.services.clone(),
                     service_methods: service_methods.clone(),
                     permissions: record.descriptor.effective_permissions.clone(),
+                    settings,
                     additional_modules,
                 });
             }
@@ -87,6 +98,7 @@ pub(super) fn service_specs_for_records(
 pub(super) fn connector_specs_for_records(
     records: &HashMap<String, PackageRecord>,
     runtime_isolation: &PluginRuntimeIsolation,
+    package_settings: &HashMap<String, serde_json::Value>,
 ) -> Vec<ConnectorRuntimeSpec> {
     let service_methods = service_methods_for_records(records);
     let mut specs = Vec::new();
@@ -97,6 +109,14 @@ pub(super) fn connector_specs_for_records(
         let storage_root = Path::new(&record.descriptor.path)
             .join(".bakingrl")
             .join("storage");
+        let settings = merge_settings(
+            record.descriptor.settings.as_deref(),
+            Path::new(&record.descriptor.path),
+            package_settings
+                .get(&record.manifest.id)
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({})),
+        );
         match runtime_isolation {
             PluginRuntimeIsolation::Export => {
                 for (name, export) in &record.manifest.exports.connectors {
@@ -108,6 +128,7 @@ pub(super) fn connector_specs_for_records(
                         service_imports: record.manifest.imports.services.clone(),
                         service_methods: service_methods.clone(),
                         permissions: record.descriptor.effective_permissions.clone(),
+                        settings: settings.clone(),
                         additional_modules: Vec::new(),
                     });
                 }
@@ -134,6 +155,7 @@ pub(super) fn connector_specs_for_records(
                     service_imports: record.manifest.imports.services.clone(),
                     service_methods: service_methods.clone(),
                     permissions: record.descriptor.effective_permissions.clone(),
+                    settings,
                     additional_modules,
                 });
             }

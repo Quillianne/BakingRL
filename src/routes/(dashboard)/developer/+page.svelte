@@ -268,6 +268,25 @@
 
   <div class="developer-layout">
     <div class="developer-column developer-tools-column">
+      <section class="studio-panel developer-panel developer-runtime-card">
+        <div class="panel-heading">
+          <div>
+            <h2>{dashboard.t("developer.runtimeTitle")}</h2>
+            <p>{dashboard.t("developer.runtimeDesc")}</p>
+          </div>
+        </div>
+        <div class="package-detail-summary">
+          <div class="package-detail-stat">
+            <strong>{dashboard.runtimeInfo?.runtimeApiVersion ?? "n/a"}</strong>
+            <span>{dashboard.t("developer.runtimeApiVersion")}</span>
+          </div>
+          <div class="package-detail-stat">
+            <strong>{dashboard.runtimeInfo?.supportedRuntimeApi ?? "n/a"}</strong>
+            <span>{dashboard.t("developer.runtimeApiRange")}</span>
+          </div>
+        </div>
+      </section>
+
       <section class="studio-panel developer-panel developer-tool-panel" class:active={activeToolPanel === "registry"}>
         <div class="panel-heading developer-tool-heading">
           <button

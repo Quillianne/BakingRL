@@ -13,6 +13,10 @@ BakingRL packages are described by `bakingrl.plugin.json`.
   "id": "com.example.my-package",
   "name": "My Package",
   "version": "1.0.0",
+  "compatibility": {
+    "runtimeApi": "0.3.0",
+    "sdk": "0.3.0"
+  },
   "exports": {
     "visuals": {
       "scoreboard": {
@@ -30,6 +34,13 @@ BakingRL packages are described by `bakingrl.plugin.json`.
   }
 }
 ```
+
+## Runtime Compatibility
+
+Current host runtime API support is `>=0.3.0 <0.4.0`. Packages must declare
+`compatibility.runtimeApi`; packages that omit it or target an unsupported API
+are visible in the package manager, but they are disabled and cannot be
+enabled until rebuilt.
 
 ## Package ID
 
@@ -70,6 +81,32 @@ is not an arbitrary SvelteKit route or a plugin-owned window.
 After import, users can edit the page like any other page. The host assigns a
 new page ID, clears favorite state, records template provenance, and normalizes
 timestamps and layer/item IDs.
+
+## Configuration Page
+
+`exports.configuration` declares one private fixed-size package configuration
+page. It is shown from the package detail configuration tab, not from the
+public page-template importer. Private configuration visuals are only
+available inside that page.
+
+BakingRL forces configuration pages to `1200x740`:
+
+```json
+{
+  "exports": {
+    "configuration": {
+      "path": "pages/configuration.json",
+      "title": "Package Settings",
+      "visuals": {
+        "settingsPanel": {
+          "entry": "dist/configuration/settings-panel.js",
+          "defaultSize": [1200, 740]
+        }
+      }
+    }
+  }
+}
+```
 
 ## Imported Template State
 

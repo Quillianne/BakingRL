@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 
 use crate::plugin_v2::bundle::BundleInspection;
-use crate::plugin_v2::manifest::PluginPackageManifestV2;
+use crate::plugin_v2::manifest::{
+    parse_runtime_api_version, PluginPackageManifestV2, HOST_RUNTIME_API_RANGE,
+    HOST_RUNTIME_API_VERSION,
+};
 use crate::plugin_v2::permissions::EffectivePackagePermissionsV2;
 
 use super::PackageRecord;
@@ -18,6 +21,7 @@ pub struct PackageDescriptor {
     pub exports: PackageExportsDescriptor,
     pub imports: PackageImportsDescriptor,
     pub effective_permissions: EffectivePackagePermissionsV2,
+    pub compatibility: PackageCompatibilityDescriptor,
     pub settings: Option<String>,
     pub error: Option<String>,
 }
@@ -39,6 +43,7 @@ pub struct PackageExportsDescriptor {
     pub schemas: Vec<NamedExportDescriptor>,
     pub pages: Vec<PageExportDescriptor>,
     pub layouts: Vec<LayoutTemplateExportDescriptor>,
+    pub configuration: Option<ConfigurationExportDescriptor>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -78,6 +83,40 @@ pub struct LayoutTemplateExportDescriptor {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
+pub struct ConfigurationExportDescriptor {
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub path: String,
+    pub visuals: Vec<VisualExportDescriptor>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PackageCompatibilityStatus {
+    Compatible,
+    Incompatible,
+    RequiresNewerHost,
+    UnknownRuntimeApi,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageCompatibilityDescriptor {
+    pub status: PackageCompatibilityStatus,
+    pub runtime_api: Option<String>,
+    pub sdk: Option<String>,
+    pub host_runtime_api: String,
+    pub supported_runtime_api: String,
+    pub message: Option<String>,
+}
+
+impl PackageCompatibilityDescriptor {
+    pub fn is_compatible(&self) -> bool {
+        self.status == PackageCompatibilityStatus::Compatible
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct ComponentExportSource {
     pub package_id: String,
     pub export_name: String,
@@ -105,6 +144,8 @@ pub(super) fn descriptor_for_manifest(
     enabled: bool,
     effective_permissions: EffectivePackagePermissionsV2,
 ) -> PackageDescriptor {
+    let compatibility = compatibility_for_manifest(manifest);
+    let enabled = enabled && compatibility.is_compatible();
     PackageDescriptor {
         id: manifest.id.clone(),
         name: manifest.name.clone(),
@@ -185,14 +226,85 @@ pub(super) fn descriptor_for_manifest(
                     description: export.description.clone(),
                 })
                 .collect(),
+            configuration: manifest
+                .exports
+                .configuration
+                .as_ref()
+                .map(|configuration| ConfigurationExportDescriptor {
+                    title: configuration.title.clone(),
+                    description: configuration.description.clone(),
+                    path: configuration.path.clone(),
+                    visuals: configuration
+                        .visuals
+                        .iter()
+                        .map(|(name, export)| {
+                            let [default_width, default_height] =
+                                export.default_size.unwrap_or([1200.0, 740.0]);
+                            VisualExportDescriptor {
+                                name: name.clone(),
+                                entry: export.entry.clone(),
+                                default_width,
+                                default_height,
+                                settings: export.settings.clone(),
+                            }
+                        })
+                        .collect(),
+                }),
         },
         imports: PackageImportsDescriptor {
             components: manifest.imports.components.clone(),
             services: manifest.imports.services.clone(),
         },
         effective_permissions,
+        compatibility,
         settings: manifest.settings.clone(),
         error: None,
+    }
+}
+
+pub(super) fn compatibility_for_manifest(
+    manifest: &PluginPackageManifestV2,
+) -> PackageCompatibilityDescriptor {
+    let runtime_api = manifest
+        .compatibility
+        .as_ref()
+        .and_then(|compatibility| compatibility.runtime_api.clone());
+    let sdk = manifest
+        .compatibility
+        .as_ref()
+        .and_then(|compatibility| compatibility.sdk.clone());
+    let (status, message) = match runtime_api
+        .as_deref()
+        .and_then(parse_runtime_api_version)
+    {
+        None => (
+            PackageCompatibilityStatus::UnknownRuntimeApi,
+            Some("Package does not declare compatibility.runtimeApi; rebuild it with the current SDK.".to_string()),
+        ),
+        Some((0, 3, _)) => (PackageCompatibilityStatus::Compatible, None),
+        Some((0, minor, _)) if minor < 3 => (
+            PackageCompatibilityStatus::Incompatible,
+            Some(format!(
+                "Package targets runtime API {}; update the package to {}.",
+                runtime_api.as_deref().unwrap_or("unknown"),
+                HOST_RUNTIME_API_VERSION
+            )),
+        ),
+        Some(_) => (
+            PackageCompatibilityStatus::RequiresNewerHost,
+            Some(format!(
+                "Package targets runtime API {}; update BakingRL to a host that supports it.",
+                runtime_api.as_deref().unwrap_or("unknown")
+            )),
+        ),
+    };
+    PackageCompatibilityDescriptor {
+        status,
+        runtime_api,
+        sdk,
+        host_runtime_api: HOST_RUNTIME_API_VERSION.to_string(),
+        supported_runtime_api: HOST_RUNTIME_API_RANGE.to_string(),
+        message,
     }
 }
 

@@ -31,10 +31,11 @@ use crate::plugin_v2::install::{
     parse_install_deep_link, InstallReceipt,
 };
 use crate::plugin_v2::manifest::PluginPackageManifestV2;
+use crate::plugin_v2::manifest::{HOST_RUNTIME_API_RANGE, HOST_RUNTIME_API_VERSION};
 use crate::plugin_v2::permissions::EffectivePackagePermissionsV2;
 use crate::registry::Registry;
 use connector_runtime::ConnectorRuntimeManager;
-use descriptors::{apply_graph_diagnostics, descriptor_for_manifest};
+use descriptors::{apply_graph_diagnostics, compatibility_for_manifest, descriptor_for_manifest};
 pub use descriptors::{
     ComponentExportSource, PackageDescriptor, PackageExportsDescriptor, PackageImportsDescriptor,
     PackageStatus, PreparedPackageInstall,
@@ -52,6 +53,13 @@ use package_files::{
 };
 use runtime_specs::{connector_specs_for_records, service_specs_for_records};
 use service_runtime::ServiceRuntimeManager;
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeInfo {
+    pub runtime_api_version: String,
+    pub supported_runtime_api: String,
+}
 
 #[derive(Debug)]
 struct PackageRecord {
@@ -191,14 +199,17 @@ impl PluginHost {
 
         apply_graph_diagnostics(&mut records);
         let runtime_isolation = self.load_app_settings().security.plugin_runtime_isolation;
-        let service_specs = service_specs_for_records(&records, &runtime_isolation);
+        let package_settings = self.load_package_settings().values;
+        let service_specs =
+            service_specs_for_records(&records, &runtime_isolation, &package_settings);
         self.service_runtimes.reload_with_app_handle(
             service_specs,
             self.bus.clone(),
             self.registry.clone(),
             self.app_handle.clone(),
         );
-        let connector_specs = connector_specs_for_records(&records, &runtime_isolation);
+        let connector_specs =
+            connector_specs_for_records(&records, &runtime_isolation, &package_settings);
         self.connector_runtimes.reload_with_app_handle(
             connector_specs,
             self.bus.clone(),
@@ -217,13 +228,15 @@ impl PluginHost {
     }
 
     pub fn install_package_from_file(&self, path: String) -> Result<InstallReceipt, String> {
+        let inspection = inspect_bundle_file(Path::new(&path))?;
+        let should_enable = compatibility_for_manifest(&inspection.manifest).is_compatible();
         let receipt = install_bundle_from_file(
             Path::new(&path),
             &self.packages_dir,
             &self.packages_dir.join(".staging"),
             format!("file:{path}"),
         )?;
-        self.save_package_enabled(&receipt.package_id, true)?;
+        self.save_package_enabled(&receipt.package_id, should_enable)?;
         self.reload_packages();
         Ok(receipt)
     }
@@ -361,13 +374,15 @@ impl PluginHost {
     ) -> Result<InstallReceipt, String> {
         let bundle_path = PathBuf::from(&path);
         self.validate_install_trust(&bundle_path, &source)?;
+        let inspection = inspect_bundle_file(&bundle_path)?;
+        let should_enable = compatibility_for_manifest(&inspection.manifest).is_compatible();
         let receipt = install_bundle_from_file(
             &bundle_path,
             &self.packages_dir,
             &self.packages_dir.join(".staging"),
             source,
         )?;
-        self.save_package_enabled(&receipt.package_id, true)?;
+        self.save_package_enabled(&receipt.package_id, should_enable)?;
         let _ = self.discard_prepared_download(&bundle_path);
         self.reload_packages();
         Ok(receipt)
@@ -411,8 +426,16 @@ impl PluginHost {
 
         {
             let records = self.records.lock().unwrap();
-            if !records.contains_key(&package_id) {
-                return Err(format!("Package '{package_id}' is not installed."));
+            let record = records
+                .get(&package_id)
+                .ok_or_else(|| format!("Package '{package_id}' is not installed."))?;
+            if enabled && !record.descriptor.compatibility.is_compatible() {
+                return Err(record
+                    .descriptor
+                    .compatibility
+                    .message
+                    .clone()
+                    .unwrap_or_else(|| format!("Package '{package_id}' is incompatible.")));
             }
         }
 
@@ -706,6 +729,14 @@ impl PluginHost {
         if !record.descriptor.enabled {
             return Err(format!("Package '{package_id}' is disabled."));
         }
+        if !record.descriptor.compatibility.is_compatible() {
+            return Err(record
+                .descriptor
+                .compatibility
+                .message
+                .clone()
+                .unwrap_or_else(|| format!("Package '{package_id}' is incompatible.")));
+        }
         if let Some(error) = &record.descriptor.error {
             return Err(format!(
                 "Package '{package_id}' has unresolved diagnostics: {error}"
@@ -824,11 +855,39 @@ impl PluginHost {
         settings.values.insert(package_id.clone(), values);
         self.save_package_settings_file(&settings)?;
         self.emit_package_settings_changed(&package_id);
+        self.reload_packages();
         self.get_package_settings(&package_id)
     }
 
     pub fn get_overlay_layouts(&self) -> OverlayLayoutsFile {
         self.load_overlay_layouts()
+    }
+
+    pub fn get_package_configuration_page(&self, package_id: String) -> Result<PageLayout, String> {
+        let records = self.records.lock().unwrap();
+        let record = self.require_enabled_record(&records, &package_id)?;
+        let configuration = record
+            .manifest
+            .exports
+            .configuration
+            .as_ref()
+            .ok_or_else(|| {
+                format!("Package '{package_id}' does not expose a configuration page.")
+            })?;
+        let package_root = Path::new(&record.descriptor.path);
+        let raw = read_json_package_file(package_root, &configuration.path)?;
+        let mut page: PageLayout = serde_json::from_value(raw).map_err(|e| {
+            format!("Configuration page for package '{package_id}' is invalid: {e}")
+        })?;
+        page.id = format!("configuration-{package_id}");
+        page.name = configuration
+            .title
+            .clone()
+            .unwrap_or_else(|| format!("{} Configuration", record.descriptor.name));
+        page.width = 1200.0;
+        page.height = 740.0;
+        normalize_page(&mut page, false);
+        Ok(page)
     }
 
     pub fn save_overlay_layout(&self, layout: OverlayLayout) -> Result<OverlayLayoutsFile, String> {
@@ -1334,6 +1393,13 @@ impl PluginHost {
     }
 }
 
+pub fn runtime_info() -> RuntimeInfo {
+    RuntimeInfo {
+        runtime_api_version: HOST_RUNTIME_API_VERSION.to_string(),
+        supported_runtime_api: HOST_RUNTIME_API_RANGE.to_string(),
+    }
+}
+
 fn monitor_id(monitor: &Monitor) -> String {
     if let Some(name) = monitor.name() {
         if !name.trim().is_empty() {
@@ -1500,6 +1566,11 @@ pub fn packages_dir(host: State<'_, Arc<PluginHost>>) -> String {
 }
 
 #[tauri::command]
+pub fn get_runtime_info() -> RuntimeInfo {
+    runtime_info()
+}
+
+#[tauri::command]
 pub async fn reload_packages(
     host: State<'_, Arc<PluginHost>>,
 ) -> Result<Vec<PackageDescriptor>, String> {
@@ -1621,6 +1692,14 @@ pub fn save_package_settings(
 #[tauri::command]
 pub fn get_overlay_layouts(host: State<'_, Arc<PluginHost>>) -> OverlayLayoutsFile {
     host.get_overlay_layouts()
+}
+
+#[tauri::command]
+pub fn get_package_configuration_page(
+    host: State<'_, Arc<PluginHost>>,
+    package_id: String,
+) -> Result<PageLayout, String> {
+    host.get_package_configuration_page(package_id)
 }
 
 #[tauri::command]

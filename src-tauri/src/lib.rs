@@ -13,14 +13,14 @@ use crate::models::{GameEvent, ObsGatewayStatus, TelemetryConnectionStatus};
 use crate::plugin_host::{
     call_service_export, create_overlay_layout, create_page, delete_overlay_layout, delete_page,
     discard_prepared_package, duplicate_overlay_layout, duplicate_page, get_app_settings,
-    get_overlay_layouts, get_package_settings, get_pages, get_visual_settings_schema,
-    import_package_layout, import_package_page, inspect_package_bundle, install_package_from_file,
-    install_package_from_url, install_prepared_package, list_packages, open_page, packages_dir,
-    plugin_registry_get, prepare_package_from_deep_link, prepare_package_from_git,
-    prepare_package_from_url, read_component_export_source, read_visual_export_source,
-    reload_packages, remove_package, save_app_settings, save_overlay_layout, save_package_settings,
-    save_page, set_active_overlay_layout, set_package_enabled, set_stream_overlay_layout,
-    PluginHost,
+    get_overlay_layouts, get_package_configuration_page, get_package_settings, get_pages,
+    get_runtime_info, get_visual_settings_schema, import_package_layout, import_package_page,
+    inspect_package_bundle, install_package_from_file, install_package_from_url,
+    install_prepared_package, list_packages, open_page, packages_dir, plugin_registry_get,
+    prepare_package_from_deep_link, prepare_package_from_git, prepare_package_from_url,
+    read_component_export_source, read_visual_export_source, reload_packages, remove_package,
+    save_app_settings, save_overlay_layout, save_package_settings, save_page,
+    set_active_overlay_layout, set_package_enabled, set_stream_overlay_layout, PluginHost,
 };
 use crate::registry::{registry_entries, registry_get, Registry};
 use crate::window_watcher::start_window_visibility_watcher;
@@ -651,6 +651,7 @@ pub fn run() {
             install_prepared_package,
             discard_prepared_package,
             packages_dir,
+            get_runtime_info,
             get_app_settings,
             save_app_settings,
             get_package_settings,
@@ -664,6 +665,7 @@ pub fn run() {
             call_service_export,
             plugin_registry_get,
             get_overlay_layouts,
+            get_package_configuration_page,
             save_overlay_layout,
             create_overlay_layout,
             duplicate_overlay_layout,
