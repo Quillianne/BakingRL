@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::Path;
 
 use crate::plugin_v2::bundle::BundleInspection;
 use crate::plugin_v2::manifest::{
@@ -7,6 +8,8 @@ use crate::plugin_v2::manifest::{
 };
 use crate::plugin_v2::permissions::EffectivePackagePermissionsV2;
 
+use super::package_files::read_json_package_file;
+use super::settings_contract::secret_key_set;
 use super::PackageRecord;
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -23,6 +26,8 @@ pub struct PackageDescriptor {
     pub effective_permissions: EffectivePackagePermissionsV2,
     pub compatibility: PackageCompatibilityDescriptor,
     pub settings: Option<String>,
+    pub has_public_settings: bool,
+    pub has_secrets: bool,
     pub error: Option<String>,
 }
 
@@ -146,6 +151,7 @@ pub(super) fn descriptor_for_manifest(
 ) -> PackageDescriptor {
     let compatibility = compatibility_for_manifest(manifest);
     let enabled = enabled && compatibility.is_compatible();
+    let (has_public_settings, has_secrets) = package_settings_capabilities(manifest, &path);
     PackageDescriptor {
         id: manifest.id.clone(),
         name: manifest.name.clone(),
@@ -258,13 +264,40 @@ pub(super) fn descriptor_for_manifest(
         effective_permissions,
         compatibility,
         settings: manifest.settings.clone(),
+        has_public_settings,
+        has_secrets,
         error: None,
     }
+}
+
+fn package_settings_capabilities(manifest: &PluginPackageManifestV2, path: &str) -> (bool, bool) {
+    let Some(settings_path) = manifest.settings.as_deref() else {
+        return (false, false);
+    };
+    let Ok(schema) = read_json_package_file(Path::new(path), settings_path) else {
+        return (false, false);
+    };
+    let secret_keys = secret_key_set(Some(&schema));
+    let has_public_settings = schema
+        .get("properties")
+        .and_then(serde_json::Value::as_object)
+        .map(|properties| properties.keys().any(|key| !secret_keys.contains(key)))
+        .or_else(|| {
+            schema
+                .get("fields")
+                .and_then(serde_json::Value::as_array)
+                .map(|fields| !fields.is_empty())
+        })
+        .unwrap_or(false);
+    (has_public_settings, !secret_keys.is_empty())
 }
 
 pub(super) fn compatibility_for_manifest(
     manifest: &PluginPackageManifestV2,
 ) -> PackageCompatibilityDescriptor {
+    let host_runtime_api = parse_runtime_api_version(HOST_RUNTIME_API_VERSION)
+        .expect("HOST_RUNTIME_API_VERSION must be a semver version");
+    let host_runtime_api_minor = (host_runtime_api.0, host_runtime_api.1);
     let runtime_api = manifest
         .compatibility
         .as_ref()
@@ -281,8 +314,10 @@ pub(super) fn compatibility_for_manifest(
             PackageCompatibilityStatus::UnknownRuntimeApi,
             Some("Package does not declare compatibility.runtimeApi; rebuild it with the current SDK.".to_string()),
         ),
-        Some((0, 3, _)) => (PackageCompatibilityStatus::Compatible, None),
-        Some((0, minor, _)) if minor < 3 => (
+        Some((major, minor, _)) if (major, minor) == host_runtime_api_minor => {
+            (PackageCompatibilityStatus::Compatible, None)
+        }
+        Some((major, minor, _)) if (major, minor) < host_runtime_api_minor => (
             PackageCompatibilityStatus::Incompatible,
             Some(format!(
                 "Package targets runtime API {}; update the package to {}.",

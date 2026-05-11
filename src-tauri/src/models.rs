@@ -457,7 +457,10 @@ pub struct AppSettings {
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct PackageSettingsFile {
+    #[serde(default)]
     pub values: HashMap<String, serde_json::Value>,
+    #[serde(default)]
+    pub configured_secrets: HashMap<String, HashMap<String, bool>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

@@ -114,7 +114,7 @@ The host loads only the exports it needs:
 - Connectors load when enabled and permitted.
 - Page templates load when imported into a page.
 - Layout templates load when imported into the host-owned overlay layout list.
-- Configuration pages load from the package detail configuration tab.
+- Configuration pages load from the package configuration action.
 
 If a service or connector fails to start, the host emits a runtime error event.
 The dashboard records it in Developer Tools and shows an error toast during the

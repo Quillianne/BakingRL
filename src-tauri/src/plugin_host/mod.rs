@@ -6,6 +6,7 @@ mod package_files;
 mod runtime_module_loader;
 mod runtime_specs;
 mod service_runtime;
+mod settings_contract;
 
 use std::collections::HashMap;
 use std::fs;
@@ -53,6 +54,13 @@ use package_files::{
 };
 use runtime_specs::{connector_specs_for_records, service_specs_for_records};
 use service_runtime::ServiceRuntimeManager;
+use settings_contract::{
+    delete_package_secret as delete_keychain_package_secret, merge_package_settings,
+    merge_package_settings_with_schema, package_secret_configured, read_package_settings_schema,
+    sanitize_package_settings_values, secret_definitions, secret_store_status,
+    set_package_secret_configured, write_package_secret,
+};
+pub use settings_contract::{PackageConfigurationState, PackageSecretDescriptor};
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -199,7 +207,7 @@ impl PluginHost {
 
         apply_graph_diagnostics(&mut records);
         let runtime_isolation = self.load_app_settings().security.plugin_runtime_isolation;
-        let package_settings = self.load_package_settings().values;
+        let package_settings = self.load_package_settings();
         let service_specs =
             service_specs_for_records(&records, &runtime_isolation, &package_settings);
         self.service_runtimes.reload_with_app_handle(
@@ -208,8 +216,12 @@ impl PluginHost {
             self.registry.clone(),
             self.app_handle.clone(),
         );
-        let connector_specs =
-            connector_specs_for_records(&records, &runtime_isolation, &package_settings);
+        let connector_specs = connector_specs_for_records(
+            &records,
+            &runtime_isolation,
+            &package_settings,
+            &self.package_settings_path,
+        );
         self.connector_runtimes.reload_with_app_handle(
             connector_specs,
             self.bus.clone(),
@@ -221,6 +233,36 @@ impl PluginHost {
         let packages = self.list_packages();
         self.emit_packages_changed(&packages);
         packages
+    }
+
+    fn reload_runtimes_from_current_records(&self) {
+        let runtime_isolation = self.load_app_settings().security.plugin_runtime_isolation;
+        let package_settings = self.load_package_settings();
+        let (service_specs, connector_specs) = {
+            let records = self.records.lock().unwrap();
+            (
+                service_specs_for_records(&records, &runtime_isolation, &package_settings),
+                connector_specs_for_records(
+                    &records,
+                    &runtime_isolation,
+                    &package_settings,
+                    &self.package_settings_path,
+                ),
+            )
+        };
+        self.service_runtimes.reload_with_app_handle(
+            service_specs,
+            self.bus.clone(),
+            self.registry.clone(),
+            self.app_handle.clone(),
+        );
+        self.connector_runtimes.reload_with_app_handle(
+            connector_specs,
+            self.bus.clone(),
+            self.registry.clone(),
+            self.service_runtimes.router(),
+            self.app_handle.clone(),
+        );
     }
 
     pub fn inspect_package_bundle(&self, path: String) -> Result<BundleInspection, String> {
@@ -763,6 +805,11 @@ impl PluginHost {
         fs::write(&self.app_settings_path, raw)
             .map_err(|e| format!("Failed to write app settings: {e}"))?;
         self.apply_overlay_window_settings(&settings);
+        if previous_settings.security.plugin_runtime_isolation
+            != settings.security.plugin_runtime_isolation
+        {
+            self.reload_runtimes_from_current_records();
+        }
         Ok(settings)
     }
 
@@ -826,9 +873,9 @@ impl PluginHost {
         let record = records
             .get(package_id)
             .ok_or_else(|| format!("Package '{package_id}' is not installed."))?;
-        Ok(merge_settings(
-            record.descriptor.settings.as_deref(),
-            Path::new(&record.descriptor.path),
+        let schema = read_package_settings_schema(record)?;
+        Ok(merge_package_settings_with_schema(
+            schema.as_ref(),
             self.load_package_settings()
                 .values
                 .get(package_id)
@@ -842,21 +889,133 @@ impl PluginHost {
         package_id: String,
         values: serde_json::Value,
     ) -> Result<serde_json::Value, String> {
-        if !values.is_object() {
-            return Err("Package settings must be a JSON object.".to_string());
-        }
-        {
+        let sanitized = {
             let records = self.records.lock().unwrap();
-            if !records.contains_key(&package_id) {
-                return Err(format!("Package '{package_id}' is not installed."));
-            }
-        }
+            let record = records
+                .get(&package_id)
+                .ok_or_else(|| format!("Package '{package_id}' is not installed."))?;
+            let schema = read_package_settings_schema(record)?;
+            sanitize_package_settings_values(schema.as_ref(), values)?
+        };
         let mut settings = self.load_package_settings();
-        settings.values.insert(package_id.clone(), values);
+        settings.values.insert(package_id.clone(), sanitized);
         self.save_package_settings_file(&settings)?;
         self.emit_package_settings_changed(&package_id);
-        self.reload_packages();
+        self.reload_runtimes_from_current_records();
         self.get_package_settings(&package_id)
+    }
+
+    pub fn get_package_configuration_state(
+        &self,
+        package_id: String,
+    ) -> Result<PackageConfigurationState, String> {
+        let records = self.records.lock().unwrap();
+        let record = records
+            .get(&package_id)
+            .ok_or_else(|| format!("Package '{package_id}' is not installed."))?;
+        let schema = read_package_settings_schema(record)?;
+        let package_settings = self.load_package_settings();
+        let values = merge_package_settings_with_schema(
+            schema.as_ref(),
+            package_settings
+                .values
+                .get(&package_id)
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({})),
+        );
+        let secret_store = secret_store_status();
+        let secret_store_error = secret_store.as_ref().err().cloned();
+        let secrets = secret_definitions(schema.as_ref())
+            .into_iter()
+            .map(|definition| PackageSecretDescriptor {
+                configured: package_secret_configured(
+                    &package_settings,
+                    &package_id,
+                    &definition.key,
+                ),
+                key: definition.key,
+                label: definition.label,
+                description: definition.description,
+                required: definition.required,
+            })
+            .collect::<Vec<_>>();
+        let secret_store_available = secret_store_error.is_none();
+        let title = record
+            .manifest
+            .exports
+            .configuration
+            .as_ref()
+            .and_then(|configuration| configuration.title.clone())
+            .or_else(|| {
+                schema
+                    .as_ref()
+                    .and_then(|schema| schema.get("title"))
+                    .and_then(|title| title.as_str())
+                    .map(ToOwned::to_owned)
+            })
+            .unwrap_or_else(|| format!("{} Settings", record.descriptor.name));
+        Ok(PackageConfigurationState {
+            package_id,
+            title,
+            has_custom_page: record.manifest.exports.configuration.is_some(),
+            schema,
+            values,
+            secrets,
+            secret_store_available,
+            secret_store_error,
+        })
+    }
+
+    pub fn set_package_secret(
+        &self,
+        package_id: String,
+        key: String,
+        value: String,
+    ) -> Result<PackageConfigurationState, String> {
+        self.ensure_declared_package_secret(&package_id, &key)?;
+        let configured = !value.is_empty();
+        if value.is_empty() {
+            delete_keychain_package_secret(&package_id, &key)?;
+        } else {
+            write_package_secret(&package_id, &key, &value)?;
+        }
+        let mut settings = self.load_package_settings();
+        set_package_secret_configured(&mut settings, &package_id, &key, configured);
+        self.save_package_settings_file(&settings)?;
+        self.emit_package_settings_changed(&package_id);
+        self.get_package_configuration_state(package_id)
+    }
+
+    pub fn delete_package_secret(
+        &self,
+        package_id: String,
+        key: String,
+    ) -> Result<PackageConfigurationState, String> {
+        self.ensure_declared_package_secret(&package_id, &key)?;
+        delete_keychain_package_secret(&package_id, &key)?;
+        let mut settings = self.load_package_settings();
+        set_package_secret_configured(&mut settings, &package_id, &key, false);
+        self.save_package_settings_file(&settings)?;
+        self.emit_package_settings_changed(&package_id);
+        self.get_package_configuration_state(package_id)
+    }
+
+    fn ensure_declared_package_secret(&self, package_id: &str, key: &str) -> Result<(), String> {
+        let records = self.records.lock().unwrap();
+        let record = records
+            .get(package_id)
+            .ok_or_else(|| format!("Package '{package_id}' is not installed."))?;
+        let schema = read_package_settings_schema(record)?;
+        if secret_definitions(schema.as_ref())
+            .iter()
+            .any(|definition| definition.key == key)
+        {
+            Ok(())
+        } else {
+            Err(format!(
+                "Package '{package_id}' did not declare secret setting '{key}'."
+            ))
+        }
     }
 
     pub fn get_overlay_layouts(&self) -> OverlayLayoutsFile {
@@ -1165,30 +1324,13 @@ impl PluginHost {
 
         if page.settings.open_target == "window" {
             let label = page_window_label(&page_id);
-            if let Some(window) = self.app_handle.get_webview_window(&label) {
-                window
-                    .eval(format!("window.location.href = {js_path};"))
-                    .map_err(|error| error.to_string())?;
-                let _ = window.show();
-                let _ = window.set_focus();
-                return Ok(());
-            }
-
-            let window = WebviewWindowBuilder::new(
-                &self.app_handle,
+            return self.open_standalone_page_window(
                 label,
-                WebviewUrl::App(PathBuf::from(path)),
-            )
-            .title(format!("BakingRL - {}", page.name))
-            .inner_size(page.width.max(480.0), (page.height + 48.0).max(368.0))
-            .min_inner_size(480.0, 320.0)
-            .decorations(false)
-            .resizable(true)
-            .visible(true)
-            .build()
-            .map_err(|error| error.to_string())?;
-            let _ = window.set_focus();
-            return Ok(());
+                path,
+                format!("BakingRL - {}", page.name),
+                page.width,
+                page.height,
+            );
         }
 
         let main_window = self
@@ -1200,6 +1342,93 @@ impl PluginHost {
             .map_err(|error| error.to_string())?;
         let _ = main_window.show();
         let _ = main_window.set_focus();
+        Ok(())
+    }
+
+    pub fn open_package_configuration(&self, package_id: String) -> Result<(), String> {
+        let title = {
+            let records = self.records.lock().unwrap();
+            let record = records
+                .get(&package_id)
+                .ok_or_else(|| format!("Package '{package_id}' is not installed."))?;
+            if record.manifest.exports.configuration.is_none()
+                && !record.descriptor.has_public_settings
+            {
+                return Err(format!(
+                    "Package '{package_id}' does not expose configuration settings."
+                ));
+            }
+            record
+                .manifest
+                .exports
+                .configuration
+                .as_ref()
+                .and_then(|configuration| configuration.title.clone())
+                .unwrap_or_else(|| format!("{} Settings", record.descriptor.name))
+        };
+        let page_id = format!("configuration-{package_id}");
+        self.open_standalone_page_window(
+            page_window_label(&page_id),
+            format!("/page/{page_id}"),
+            format!("BakingRL - {title}"),
+            1200.0,
+            740.0,
+        )
+    }
+
+    pub fn open_package_secrets(&self, package_id: String) -> Result<(), String> {
+        let title = {
+            let records = self.records.lock().unwrap();
+            let record = records
+                .get(&package_id)
+                .ok_or_else(|| format!("Package '{package_id}' is not installed."))?;
+            if !record.descriptor.has_secrets {
+                return Err(format!("Package '{package_id}' does not declare secrets."));
+            }
+            format!("{} Secrets", record.descriptor.name)
+        };
+        let page_id = format!("secrets-{package_id}");
+        self.open_standalone_page_window(
+            page_window_label(&page_id),
+            format!("/page/{page_id}"),
+            format!("BakingRL - {title}"),
+            760.0,
+            620.0,
+        )
+    }
+
+    fn open_standalone_page_window(
+        &self,
+        label: String,
+        path: String,
+        title: String,
+        width: f64,
+        height: f64,
+    ) -> Result<(), String> {
+        let js_path = serde_json::to_string(&path).map_err(|error| error.to_string())?;
+        if let Some(window) = self.app_handle.get_webview_window(&label) {
+            window
+                .eval(format!("window.location.href = {js_path};"))
+                .map_err(|error| error.to_string())?;
+            let _ = window.show();
+            let _ = window.set_focus();
+            return Ok(());
+        }
+
+        let window = WebviewWindowBuilder::new(
+            &self.app_handle,
+            label,
+            WebviewUrl::App(PathBuf::from(path)),
+        )
+        .title(title)
+        .inner_size(width.max(480.0), (height + 48.0).max(368.0))
+        .min_inner_size(480.0, 320.0)
+        .decorations(false)
+        .resizable(true)
+        .visible(true)
+        .build()
+        .map_err(|error| error.to_string())?;
+        let _ = window.set_focus();
         Ok(())
     }
 
@@ -1424,35 +1653,7 @@ fn merge_settings(
     package_root: &Path,
     values: serde_json::Value,
 ) -> serde_json::Value {
-    let mut merged = serde_json::Map::new();
-    if let Some(schema_path) = schema_path {
-        let schema = package_root
-            .join(schema_path)
-            .canonicalize()
-            .ok()
-            .and_then(|path| fs::read_to_string(path).ok())
-            .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok());
-        if let Some(fields) = schema
-            .as_ref()
-            .and_then(|schema| schema.get("fields"))
-            .and_then(|fields| fields.as_array())
-        {
-            for field in fields {
-                if let (Some(key), Some(default_value)) = (
-                    field.get("key").and_then(|key| key.as_str()),
-                    field.get("default"),
-                ) {
-                    merged.insert(key.to_string(), default_value.clone());
-                }
-            }
-        }
-    }
-    if let Some(values) = values.as_object() {
-        for (key, value) in values {
-            merged.insert(key.clone(), value.clone());
-        }
-    }
-    serde_json::Value::Object(merged)
+    merge_package_settings(schema_path, package_root, values)
 }
 
 fn unique_id(prefix: &str) -> String {
@@ -1690,6 +1891,33 @@ pub fn save_package_settings(
 }
 
 #[tauri::command]
+pub fn get_package_configuration_state(
+    host: State<'_, Arc<PluginHost>>,
+    package_id: String,
+) -> Result<PackageConfigurationState, String> {
+    host.get_package_configuration_state(package_id)
+}
+
+#[tauri::command]
+pub fn set_package_secret(
+    host: State<'_, Arc<PluginHost>>,
+    package_id: String,
+    key: String,
+    value: String,
+) -> Result<PackageConfigurationState, String> {
+    host.set_package_secret(package_id, key, value)
+}
+
+#[tauri::command]
+pub fn delete_package_secret(
+    host: State<'_, Arc<PluginHost>>,
+    package_id: String,
+    key: String,
+) -> Result<PackageConfigurationState, String> {
+    host.delete_package_secret(package_id, key)
+}
+
+#[tauri::command]
 pub fn get_overlay_layouts(host: State<'_, Arc<PluginHost>>) -> OverlayLayoutsFile {
     host.get_overlay_layouts()
 }
@@ -1807,4 +2035,20 @@ pub fn import_package_page(
 #[tauri::command]
 pub fn open_page(host: State<'_, Arc<PluginHost>>, page_id: String) -> Result<(), String> {
     host.open_page(page_id)
+}
+
+#[tauri::command]
+pub fn open_package_configuration(
+    host: State<'_, Arc<PluginHost>>,
+    package_id: String,
+) -> Result<(), String> {
+    host.open_package_configuration(package_id)
+}
+
+#[tauri::command]
+pub fn open_package_secrets(
+    host: State<'_, Arc<PluginHost>>,
+    package_id: String,
+) -> Result<(), String> {
+    host.open_package_secrets(package_id)
 }

@@ -64,19 +64,19 @@ validation command, reinstall it locally, then reload packages in BakingRL.
 
 If a package is installed but disabled, inspect its package details. Packages
 must declare `compatibility.runtimeApi` and the current host supports
-`>=0.3.0 <0.4.0`.
+`>=0.4.0 <0.5.0`.
 
 When the declared version is outside that range, rebuild the package with a
 compatible SDK and helper CLI. The host keeps the package visible so users can
 identify the package ID, package version, and declared runtime API before
 removing or updating it.
 
-## Missing Configuration Tab
+## Missing Configuration Action
 
-The package detail Configuration tab appears only when the manifest declares
-`exports.configuration`. The export must include a valid page template path.
-Private configuration visuals must declare built `.js` entries under
-`exports.configuration.visuals`.
+The package configuration action appears when the manifest declares package
+`settings` or `exports.configuration`. A custom configuration export must
+include a valid page template path. Private configuration visuals must declare
+built `.js` entries under `exports.configuration.visuals`.
 
 Run the package helper validation command after changing the manifest:
 

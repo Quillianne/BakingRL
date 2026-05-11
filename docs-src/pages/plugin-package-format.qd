@@ -14,8 +14,8 @@ BakingRL packages are described by `bakingrl.plugin.json`.
   "name": "My Package",
   "version": "1.0.0",
   "compatibility": {
-    "runtimeApi": "0.3.0",
-    "sdk": "0.3.0"
+    "runtimeApi": "0.4.0",
+    "sdk": "0.4.0"
   },
   "exports": {
     "visuals": {
@@ -37,7 +37,7 @@ BakingRL packages are described by `bakingrl.plugin.json`.
 
 ## Runtime Compatibility
 
-Current host runtime API support is `>=0.3.0 <0.4.0`. Packages must declare
+Current host runtime API support is `>=0.4.0 <0.5.0`. Packages must declare
 `compatibility.runtimeApi`; packages that omit it or target an unsupported API
 are visible in the package manager, but they are disabled and cannot be
 enabled until rebuilt.
@@ -85,9 +85,9 @@ timestamps and layer/item IDs.
 ## Configuration Page
 
 `exports.configuration` declares one private fixed-size package configuration
-page. It is shown from the package detail configuration tab, not from the
-public page-template importer. Private configuration visuals are only
-available inside that page.
+page. It opens from the package configuration action, not from the public
+page-template importer. Private configuration visuals are only available inside
+that page.
 
 BakingRL forces configuration pages to `1200x740`:
 
@@ -107,6 +107,20 @@ BakingRL forces configuration pages to `1200x740`:
   }
 }
 ```
+
+## Package Settings And Secrets
+
+Top-level `settings` points to a package-level JSON Schema. If a package has no
+custom `exports.configuration` page, BakingRL renders a host-owned form from
+that schema. Non-sensitive values are exposed to plugin runtimes through
+`context.settings`.
+
+String fields marked with `x-bakingrl-secret: true` are stored in the OS
+keychain, never returned by `context.settings`, and are only readable by
+connectors through `context.secrets`.
+`context.secrets.configured(key)` reads a host-maintained non-secret state.
+`context.secrets.get(key)` reads the keychain on first access and then uses an
+in-memory host cache until the app exits.
 
 ## Imported Template State
 

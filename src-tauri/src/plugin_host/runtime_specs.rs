@@ -1,10 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 
-use crate::models::PluginRuntimeIsolation;
+use crate::models::{PackageSettingsFile, PluginRuntimeIsolation};
 
 use super::connector_runtime::{ConnectorRuntimeModuleSpec, ConnectorRuntimeSpec};
 use super::service_runtime::{ServiceRuntimeModuleSpec, ServiceRuntimeSpec};
+use super::settings_contract::{read_package_settings_schema, secret_key_set};
 use super::{merge_settings, PackageRecord};
 
 fn service_methods_for_records(
@@ -32,7 +33,7 @@ fn service_methods_for_records(
 pub(super) fn service_specs_for_records(
     records: &HashMap<String, PackageRecord>,
     runtime_isolation: &PluginRuntimeIsolation,
-    package_settings: &HashMap<String, serde_json::Value>,
+    package_settings: &PackageSettingsFile,
 ) -> Vec<ServiceRuntimeSpec> {
     let service_methods = service_methods_for_records(records);
     let mut specs = Vec::new();
@@ -47,6 +48,7 @@ pub(super) fn service_specs_for_records(
             record.descriptor.settings.as_deref(),
             Path::new(&record.descriptor.path),
             package_settings
+                .values
                 .get(&record.manifest.id)
                 .cloned()
                 .unwrap_or_else(|| serde_json::json!({})),
@@ -98,7 +100,8 @@ pub(super) fn service_specs_for_records(
 pub(super) fn connector_specs_for_records(
     records: &HashMap<String, PackageRecord>,
     runtime_isolation: &PluginRuntimeIsolation,
-    package_settings: &HashMap<String, serde_json::Value>,
+    package_settings: &PackageSettingsFile,
+    package_settings_path: &Path,
 ) -> Vec<ConnectorRuntimeSpec> {
     let service_methods = service_methods_for_records(records);
     let mut specs = Vec::new();
@@ -113,10 +116,12 @@ pub(super) fn connector_specs_for_records(
             record.descriptor.settings.as_deref(),
             Path::new(&record.descriptor.path),
             package_settings
+                .values
                 .get(&record.manifest.id)
                 .cloned()
                 .unwrap_or_else(|| serde_json::json!({})),
         );
+        let secret_keys = connector_secret_keys(record);
         match runtime_isolation {
             PluginRuntimeIsolation::Export => {
                 for (name, export) in &record.manifest.exports.connectors {
@@ -129,6 +134,8 @@ pub(super) fn connector_specs_for_records(
                         service_methods: service_methods.clone(),
                         permissions: record.descriptor.effective_permissions.clone(),
                         settings: settings.clone(),
+                        secret_keys: secret_keys.clone(),
+                        package_settings_path: package_settings_path.to_path_buf(),
                         additional_modules: Vec::new(),
                     });
                 }
@@ -156,10 +163,23 @@ pub(super) fn connector_specs_for_records(
                     service_methods: service_methods.clone(),
                     permissions: record.descriptor.effective_permissions.clone(),
                     settings,
+                    secret_keys,
+                    package_settings_path: package_settings_path.to_path_buf(),
                     additional_modules,
                 });
             }
         }
     }
     specs
+}
+
+fn connector_secret_keys(record: &PackageRecord) -> BTreeSet<String> {
+    if record.manifest.exports.connectors.is_empty() {
+        return BTreeSet::new();
+    }
+    read_package_settings_schema(record)
+        .ok()
+        .flatten()
+        .map(|schema| secret_key_set(Some(&schema)).into_iter().collect())
+        .unwrap_or_default()
 }

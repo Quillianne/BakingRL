@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -16,6 +16,7 @@ use tracing::{error, info, warn};
 
 use super::runtime_module_loader::PackageModuleLoader;
 use super::service_runtime::ServiceCallRouter;
+use super::settings_contract;
 use crate::bus::{BusEvent, EventBus};
 use crate::models::GameEvent;
 use crate::plugin_v2::permissions::EffectivePackagePermissionsV2;
@@ -42,6 +43,8 @@ pub struct ConnectorRuntimeSpec {
     pub service_methods: HashMap<String, Vec<String>>,
     pub permissions: EffectivePackagePermissionsV2,
     pub settings: serde_json::Value,
+    pub secret_keys: BTreeSet<String>,
+    pub package_settings_path: PathBuf,
     pub additional_modules: Vec<ConnectorRuntimeModuleSpec>,
 }
 
@@ -201,6 +204,8 @@ struct ConnectorRuntimeContext {
     service_imports: Vec<String>,
     service_methods: HashMap<String, Vec<String>>,
     permissions: EffectivePackagePermissionsV2,
+    secret_keys: BTreeSet<String>,
+    package_settings_path: PathBuf,
 }
 
 type EventReceiver = Rc<tokio::sync::Mutex<mpsc::Receiver<serde_json::Value>>>;
@@ -291,6 +296,8 @@ async fn run_connector_runtime(
         service_imports: spec.service_imports.clone(),
         service_methods: spec.service_methods.clone(),
         permissions: spec.permissions.clone(),
+        secret_keys: spec.secret_keys.clone(),
+        package_settings_path: spec.package_settings_path.clone(),
     };
 
     forward_bus_events(
@@ -468,6 +475,15 @@ const context = {{
     get(key) {{ return packageSettings?.[String(key)]; }},
     all() {{ return JSON.parse(JSON.stringify(packageSettings ?? {{}})); }}
   }},
+  secrets: {{
+    get(key) {{
+      const value = globalThis.Deno.core.ops.op_connector_secret_get(String(key));
+      return value === null ? undefined : value;
+    }},
+    configured(key) {{
+      return globalThis.Deno.core.ops.op_connector_secret_configured(String(key));
+    }}
+  }},
   fetch(url, init) {{
     return globalThis.Deno.core.ops.op_connector_fetch(String(url), init ?? null);
   }},
@@ -610,6 +626,46 @@ pub fn op_connector_registry_set(
     let registry = state.borrow::<Arc<Registry>>().clone();
     registry.set(key, value);
     Ok(())
+}
+
+#[op2]
+#[serde]
+pub fn op_connector_secret_get(
+    state: &mut OpState,
+    #[string] key: String,
+) -> Result<serde_json::Value, JsErrorBox> {
+    let context = state.borrow::<ConnectorRuntimeContext>().clone();
+    if !context.secret_keys.contains(&key) {
+        return Err(JsErrorBox::generic(format!(
+            "Package '{}' did not declare secret setting '{}'.",
+            context.package_id, key
+        )));
+    }
+    Ok(
+        settings_contract::read_package_secret(&context.package_id, &key)
+            .map_err(JsErrorBox::generic)?
+            .map(serde_json::Value::String)
+            .unwrap_or(serde_json::Value::Null),
+    )
+}
+
+#[op2(fast)]
+pub fn op_connector_secret_configured(
+    state: &mut OpState,
+    #[string] key: String,
+) -> Result<bool, JsErrorBox> {
+    let context = state.borrow::<ConnectorRuntimeContext>().clone();
+    if !context.secret_keys.contains(&key) {
+        return Err(JsErrorBox::generic(format!(
+            "Package '{}' did not declare secret setting '{}'.",
+            context.package_id, key
+        )));
+    }
+    Ok(settings_contract::read_package_secret_configured(
+        &context.package_settings_path,
+        &context.package_id,
+        &key,
+    ))
 }
 
 #[op2]
@@ -970,6 +1026,8 @@ deno_core::extension!(
         op_connector_bus_emit,
         op_connector_registry_get,
         op_connector_registry_set,
+        op_connector_secret_get,
+        op_connector_secret_configured,
         op_connector_storage_read,
         op_connector_storage_write,
         op_connector_service_call,
@@ -1057,6 +1115,8 @@ export default {
                     },
                 },
                 settings: serde_json::json!({}),
+                secret_keys: BTreeSet::new(),
+                package_settings_path: dir.path().join("package_settings.json"),
                 additional_modules: Vec::new(),
             }],
             Arc::new(EventBus::new(16)),
@@ -1125,6 +1185,8 @@ export default {
                     },
                 },
                 settings: serde_json::json!({}),
+                secret_keys: BTreeSet::new(),
+                package_settings_path: dir.path().join("package_settings.json"),
                 additional_modules: Vec::new(),
             }],
             Arc::new(EventBus::new(16)),
@@ -1227,6 +1289,8 @@ export default {
                     },
                 },
                 settings: serde_json::json!({}),
+                secret_keys: BTreeSet::new(),
+                package_settings_path: dir.path().join("package_settings.json"),
                 additional_modules: Vec::new(),
             }],
             Arc::new(EventBus::new(16)),

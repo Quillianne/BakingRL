@@ -2,10 +2,50 @@
   import { getDashboardContext } from "$lib/dashboard/context";
   import { THEMES } from "$lib/themes";
   import type { Locale } from "$lib/i18n";
+  import type { AppSettings } from "$lib/dashboard/types";
 
   const dashboard = getDashboardContext();
 
   let section = $state<"general" | "security" | "appearance" | "telemetry" | "overlay" | "about">("general");
+  let draftSettings = $state<AppSettings | null>(null);
+  let syncedSettingsSignature = "";
+  const settingsDirty = $derived(Boolean(draftSettings && dashboard.appSettings && settingsSignature(draftSettings) !== settingsSignature(dashboard.appSettings)));
+
+  $effect(() => {
+    const settings = dashboard.appSettings;
+    if (!settings) {
+      draftSettings = null;
+      syncedSettingsSignature = "";
+      return;
+    }
+    const signature = settingsSignature(settings);
+    if (signature === syncedSettingsSignature) return;
+    syncedSettingsSignature = signature;
+    draftSettings = cloneAppSettings(settings);
+  });
+
+  function cloneAppSettings(settings: AppSettings) {
+    return JSON.parse(JSON.stringify(settings)) as AppSettings;
+  }
+
+  function settingsSignature(settings: AppSettings) {
+    return JSON.stringify(settings);
+  }
+
+  async function saveDraftSettings() {
+    if (!draftSettings) return;
+    const saved = await dashboard.saveAppSettings(cloneAppSettings(draftSettings));
+    if (saved && dashboard.appSettings) {
+      syncedSettingsSignature = settingsSignature(dashboard.appSettings);
+      draftSettings = cloneAppSettings(dashboard.appSettings);
+    }
+  }
+
+  function cancelDraftSettings() {
+    if (!dashboard.appSettings) return;
+    syncedSettingsSignature = settingsSignature(dashboard.appSettings);
+    draftSettings = cloneAppSettings(dashboard.appSettings);
+  }
 </script>
 
 <div class="page-title">
@@ -15,7 +55,7 @@
   </div>
 </div>
 
-{#if dashboard.appSettings}
+{#if draftSettings}
   <div class="settings-layout">
     <nav class="studio-panel settings-nav" aria-label={dashboard.t("nav.settings")}>
       <button class="btn-outline" class:active={section === "general"} onclick={() => (section = "general")}>
@@ -49,23 +89,26 @@
 
         <div class="section-stack">
           <label class="check-row">
-            <input type="checkbox" bind:checked={dashboard.appSettings.behavior.start_minimized} />
+            <input type="checkbox" bind:checked={draftSettings.behavior.start_minimized} />
             <span></span>
             {dashboard.t("settings.startMinimized")}
           </label>
           <label class="check-row">
-            <input type="checkbox" bind:checked={dashboard.appSettings.behavior.close_will_hide} />
+            <input type="checkbox" bind:checked={draftSettings.behavior.close_will_hide} />
             <span></span>
             {dashboard.t("settings.closeMinimized")}
           </label>
           <label class="check-row">
-            <input type="checkbox" bind:checked={dashboard.appSettings.behavior.launch_at_startup} />
+            <input type="checkbox" bind:checked={draftSettings.behavior.launch_at_startup} />
             <span></span>
             {dashboard.t("settings.launchAtStartup")}
           </label>
 
           <div class="card-actions">
-            <button class="btn-primary" onclick={() => void dashboard.saveAppSettings()} disabled={dashboard.busy}>
+            <button class="btn-secondary" onclick={cancelDraftSettings} disabled={dashboard.busy || !settingsDirty}>
+              {dashboard.t("common.cancel")}
+            </button>
+            <button class="btn-primary" onclick={() => void saveDraftSettings()} disabled={dashboard.busy || !settingsDirty}>
               {dashboard.t("common.saveSettings")}
             </button>
           </div>
@@ -81,20 +124,23 @@
         <div class="section-stack">
           <div class="input-group">
             <label for="runtimeIsolation">{dashboard.t("settings.runtimeIsolation")}</label>
-            <select id="runtimeIsolation" bind:value={dashboard.appSettings.security.plugin_runtime_isolation}>
+            <select id="runtimeIsolation" bind:value={draftSettings.security.plugin_runtime_isolation}>
               <option value="export">{dashboard.t("settings.runtimeIsolationExport")}</option>
               <option value="package">{dashboard.t("settings.runtimeIsolationPackage")}</option>
             </select>
           </div>
 
           <label class="check-row">
-            <input type="checkbox" bind:checked={dashboard.appSettings.security.require_trusted_remote_packages} />
+            <input type="checkbox" bind:checked={draftSettings.security.require_trusted_remote_packages} />
             <span></span>
             {dashboard.t("settings.requireTrustedRemotePackages")}
           </label>
 
           <div class="card-actions">
-            <button class="btn-primary" onclick={() => void dashboard.saveAppSettings()} disabled={dashboard.busy}>
+            <button class="btn-secondary" onclick={cancelDraftSettings} disabled={dashboard.busy || !settingsDirty}>
+              {dashboard.t("common.cancel")}
+            </button>
+            <button class="btn-primary" onclick={() => void saveDraftSettings()} disabled={dashboard.busy || !settingsDirty}>
               {dashboard.t("common.saveSettings")}
             </button>
           </div>
@@ -162,17 +208,22 @@
         <div class="studio-grid telemetry-settings-grid">
           <div class="input-group">
             <label for="telemetryHost">{dashboard.t("settings.host")}</label>
-            <input id="telemetryHost" bind:value={dashboard.appSettings.telemetry.rocket_league_host} />
+            <input id="telemetryHost" bind:value={draftSettings.telemetry.rocket_league_host} />
           </div>
           <div class="input-group">
             <label for="telemetryPort">{dashboard.t("settings.port")}</label>
-            <input id="telemetryPort" type="number" bind:value={dashboard.appSettings.telemetry.rocket_league_port} />
+            <input id="telemetryPort" type="number" bind:value={draftSettings.telemetry.rocket_league_port} />
           </div>
           <div class="input-group telemetry-save-group">
             <span class="field-label">&nbsp;</span>
-            <button class="btn-primary" onclick={() => void dashboard.saveAppSettings()} disabled={dashboard.busy}>
-              {dashboard.t("common.saveSettings")}
-            </button>
+            <div class="card-actions">
+              <button class="btn-secondary" onclick={cancelDraftSettings} disabled={dashboard.busy || !settingsDirty}>
+                {dashboard.t("common.cancel")}
+              </button>
+              <button class="btn-primary" onclick={() => void saveDraftSettings()} disabled={dashboard.busy || !settingsDirty}>
+                {dashboard.t("common.saveSettings")}
+              </button>
+            </div>
           </div>
         </div>
       {:else if section === "overlay"}
@@ -187,13 +238,13 @@
           <div class="studio-grid three-col">
             <div class="input-group">
               <label for="overlayFps">{dashboard.t("settings.updateRate")}</label>
-              <input id="overlayFps" type="number" min="1" max="120" bind:value={dashboard.appSettings.overlay.update_rate_fps} />
+              <input id="overlayFps" type="number" min="1" max="120" bind:value={draftSettings.overlay.update_rate_fps} />
             </div>
 
-            {#if dashboard.appSettings.overlay.use_monitor_size}
+            {#if draftSettings.overlay.use_monitor_size}
               <div class="input-group">
                 <label for="overlayMonitor">{dashboard.t("settings.overlayMonitor")}</label>
-                <select id="overlayMonitor" bind:value={dashboard.appSettings.overlay.monitor_id}>
+                <select id="overlayMonitor" bind:value={draftSettings.overlay.monitor_id}>
                   <option value="">{dashboard.t("settings.currentPrimary")}</option>
                   {#each dashboard.overlayMonitors as monitor}
                     <option value={monitor.id}>
@@ -206,26 +257,29 @@
               <div class="input-group">
                 <span class="field-label">{dashboard.t("settings.overlaySize")}</span>
                 <div class="form-row">
-                  <input type="number" min="1" bind:value={dashboard.appSettings.overlay.screen_width} aria-label="Overlay width" />
-                  <input type="number" min="1" bind:value={dashboard.appSettings.overlay.screen_height} aria-label="Overlay height" />
+                  <input type="number" min="1" bind:value={draftSettings.overlay.screen_width} aria-label="Overlay width" />
+                  <input type="number" min="1" bind:value={draftSettings.overlay.screen_height} aria-label="Overlay height" />
                 </div>
               </div>
             {/if}
           </div>
 
           <label class="check-row">
-            <input type="checkbox" bind:checked={dashboard.appSettings.overlay.use_monitor_size} />
+            <input type="checkbox" bind:checked={draftSettings.overlay.use_monitor_size} />
             <span></span>
             {dashboard.t("settings.useFullMonitor")}
           </label>
           <label class="check-row">
-            <input type="checkbox" bind:checked={dashboard.appSettings.overlay.hide_when_game_unfocused} />
+            <input type="checkbox" bind:checked={draftSettings.overlay.hide_when_game_unfocused} />
             <span></span>
             {dashboard.t("settings.hideUnfocused")}
           </label>
 
           <div class="card-actions">
-            <button class="btn-primary" onclick={() => void dashboard.saveAppSettings()} disabled={dashboard.busy}>
+            <button class="btn-secondary" onclick={cancelDraftSettings} disabled={dashboard.busy || !settingsDirty}>
+              {dashboard.t("common.cancel")}
+            </button>
+            <button class="btn-primary" onclick={() => void saveDraftSettings()} disabled={dashboard.busy || !settingsDirty}>
               {dashboard.t("common.saveSettings")}
             </button>
           </div>

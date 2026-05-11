@@ -109,7 +109,53 @@ export type PackageDescriptor = {
   effective_permissions: PermissionShape;
   compatibility: PackageCompatibilityDescriptor;
   settings: string | null;
+  has_public_settings: boolean;
+  has_secrets: boolean;
   error: string | null;
+};
+
+export type JsonSchema = {
+  title?: string;
+  description?: string;
+  type?: string | string[];
+  format?: string;
+  default?: unknown;
+  enum?: unknown[];
+  oneOf?: JsonSchemaOption[];
+  anyOf?: JsonSchemaOption[];
+  items?: JsonSchema;
+  properties?: Record<string, JsonSchema>;
+  required?: string[];
+  minimum?: number;
+  maximum?: number;
+  minLength?: number;
+  maxLength?: number;
+  "x-bakingrl-secret"?: boolean;
+};
+
+export type JsonSchemaOption = {
+  const?: unknown;
+  title?: string;
+  description?: string;
+};
+
+export type PackageSecretDescriptor = {
+  key: string;
+  label: string;
+  description: string | null;
+  required: boolean;
+  configured: boolean;
+};
+
+export type PackageConfigurationState = {
+  packageId: string;
+  title: string;
+  hasCustomPage: boolean;
+  schema: JsonSchema | null;
+  values: Record<string, unknown>;
+  secrets: PackageSecretDescriptor[];
+  secretStoreAvailable: boolean;
+  secretStoreError: string | null;
 };
 
 export type ManifestExports = {

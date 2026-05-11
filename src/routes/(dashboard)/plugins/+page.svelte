@@ -1,6 +1,6 @@
 <script lang="ts">
+  import { invoke } from "@tauri-apps/api/core";
   import { getDashboardContext } from "$lib/dashboard/context";
-  import PackageConfigurationPanel from "$lib/dashboard/PackageConfigurationPanel.svelte";
   import type { PackageDescriptor } from "$lib/dashboard/types";
 
   const dashboard = getDashboardContext();
@@ -16,7 +16,7 @@
     rows: PackageExportRow[];
   };
 
-  type PackageDetailTab = "exports" | "permissions" | "configuration";
+  type PackageDetailTab = "exports" | "permissions";
 
   let detailPackageId = $state<string | null>(null);
   let activeDetailTab = $state<PackageDetailTab>("exports");
@@ -31,11 +31,21 @@
     detailPackageId = null;
   }
 
-  $effect(() => {
-    if (activeDetailTab === "configuration" && !detailPackage?.exports.configuration) {
-      activeDetailTab = "exports";
+  async function openPackageConfiguration(pkg: PackageDescriptor) {
+    try {
+      await invoke("open_package_configuration", { packageId: pkg.id });
+    } catch (error) {
+      dashboard.notifyError(error);
     }
-  });
+  }
+
+  async function openPackageSecrets(pkg: PackageDescriptor) {
+    try {
+      await invoke("open_package_secrets", { packageId: pkg.id });
+    } catch (error) {
+      dashboard.notifyError(error);
+    }
+  }
 
   function packageExportSections(pkg: PackageDescriptor): PackageExportSection[] {
     const sections: PackageExportSection[] = [
@@ -92,22 +102,6 @@
         }))
       }
     ];
-    if (pkg.exports.configuration) {
-      sections.push({
-        title: dashboard.t("packages.configuration"),
-        count: 1,
-        rows: [
-          {
-            name: pkg.exports.configuration.title ?? dashboard.t("packages.configuration"),
-            meta: pkg.exports.configuration.path
-          },
-          {
-            name: dashboard.t("packages.privateConfigurationVisuals"),
-            meta: String(pkg.exports.configuration.visuals.length)
-          }
-        ]
-      });
-    }
     return sections.filter((section) => section.count > 0);
   }
 </script>
@@ -134,25 +128,56 @@
       <div class="card-grid">
         {#each dashboard.packages as pkg (pkg.id)}
           <article class="studio-card package-card" class:disabled={!dashboard.isPackageEnabled(pkg)}>
+            <div class="package-card-tools">
+              {#if pkg.exports.configuration || (pkg.settings && pkg.has_public_settings)}
+                <button
+                  class="icon-button"
+                  onclick={() => openPackageConfiguration(pkg)}
+                  disabled={dashboard.isPackageDeleting(pkg)}
+                  title={dashboard.t("packages.configuration")}
+                  aria-label={dashboard.t("packages.configuration")}
+                >
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M9.67 4.14a2.34 2.34 0 0 1 4.66 0 2.34 2.34 0 0 0 3.32 1.91 2.34 2.34 0 0 1 2.33 4.03 2.34 2.34 0 0 0 0 3.84 2.34 2.34 0 0 1-2.33 4.03 2.34 2.34 0 0 0-3.32 1.91 2.34 2.34 0 0 1-4.66 0 2.34 2.34 0 0 0-3.32-1.91 2.34 2.34 0 0 1-2.33-4.03 2.34 2.34 0 0 0 0-3.84 2.34 2.34 0 0 1 2.33-4.03 2.34 2.34 0 0 0 3.32-1.91Z"></path>
+                    <circle cx="12" cy="12" r="3"></circle>
+                  </svg>
+                </button>
+              {/if}
+              {#if pkg.has_secrets}
+                <button
+                  class="icon-button secret"
+                  onclick={() => openPackageSecrets(pkg)}
+                  disabled={dashboard.isPackageDeleting(pkg)}
+                  title={dashboard.t("packages.secrets")}
+                  aria-label={dashboard.t("packages.secrets")}
+                >
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="5" y="10" width="14" height="10" rx="2"></rect>
+                    <path d="M8 10V7a4 4 0 0 1 8 0v3"></path>
+                    <path d="M12 14v2"></path>
+                  </svg>
+                </button>
+              {/if}
+              <button
+                class="icon-button danger"
+                onclick={() => dashboard.removePackage(pkg)}
+                disabled={dashboard.isPackageActionDisabled(pkg)}
+                title={dashboard.t("common.remove")}
+                aria-label={dashboard.t("common.remove")}
+              >
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M3 6h18"></path>
+                  <path d="M8 6V4h8v2"></path>
+                  <path d="M19 6l-1 14H6L5 6"></path>
+                  <path d="M10 11v5"></path>
+                  <path d="M14 11v5"></path>
+                </svg>
+              </button>
+            </div>
             <div class="package-head">
               <div class="package-meta">
                 <div class="package-title-row">
                   <h3>{pkg.name}</h3>
-                  <button
-                    class="icon-button danger"
-                    onclick={() => dashboard.removePackage(pkg)}
-                    disabled={dashboard.isPackageActionDisabled(pkg)}
-                    title={dashboard.t("common.remove")}
-                    aria-label={dashboard.t("common.remove")}
-                  >
-                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M3 6h18"></path>
-                      <path d="M8 6V4h8v2"></path>
-                      <path d="M19 6l-1 14H6L5 6"></path>
-                      <path d="M10 11v5"></path>
-                      <path d="M14 11v5"></path>
-                    </svg>
-                  </button>
                 </div>
                 <p>{dashboard.t("packages.by")} {pkg.author ?? dashboard.t("packages.unknownAuthor")} · v{pkg.version}</p>
               </div>
@@ -322,11 +347,6 @@
         <button class="btn-outline" class:active={activeDetailTab === "permissions"} onclick={() => (activeDetailTab = "permissions")}>
           {dashboard.t("common.permissions")}
         </button>
-        {#if detailPackage.exports.configuration}
-          <button class="btn-outline" class:active={activeDetailTab === "configuration"} onclick={() => (activeDetailTab = "configuration")}>
-            {dashboard.t("packages.configuration")}
-          </button>
-        {/if}
       </div>
 
       {#if activeDetailTab === "exports"}
@@ -391,14 +411,6 @@
           {:else}
             <p class="permission-none">{dashboard.t("packages.noExtraPermissions")}</p>
           {/if}
-        </section>
-      {:else}
-        <section class="package-detail-section">
-          <div class="package-detail-section-head">
-            <h3>{dashboard.t("packages.configuration")}</h3>
-            <span class="section-count">1200x740</span>
-          </div>
-          <PackageConfigurationPanel state={dashboard} pkg={detailPackage} />
         </section>
       {/if}
 

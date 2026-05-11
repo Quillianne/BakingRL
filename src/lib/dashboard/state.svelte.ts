@@ -78,6 +78,14 @@ function permissionValueList(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
 }
 
+function parseRuntimeApiVersion(value: string | null | undefined) {
+  const parts = typeof value === "string" ? value.split(".").map((part) => Number(part)) : [];
+  if (parts.length !== 3 || parts.some((part) => !Number.isInteger(part) || part < 0)) {
+    return null;
+  }
+  return { major: parts[0], minor: parts[1], patch: parts[2] };
+}
+
 export class DashboardState {
   locale = $state<Locale>("fr");
   packages = $state<PackageDescriptor[]>([]);
@@ -462,13 +470,20 @@ export class DashboardState {
   }
 
   runtimeApiCompatibility(runtimeApi: string | null | undefined) {
-    const parts = typeof runtimeApi === "string" ? runtimeApi.split(".").map((part) => Number(part)) : [];
-    if (parts.length !== 3 || parts.some((part) => !Number.isInteger(part) || part < 0)) {
+    const targetVersion = parseRuntimeApiVersion(runtimeApi);
+    const hostVersion = parseRuntimeApiVersion(this.runtimeInfo?.runtimeApiVersion ?? "0.4.0");
+    if (!targetVersion || !hostVersion) {
       return "unknown_runtime_api" as const;
     }
-    const [major, minor] = parts;
-    if (major === 0 && minor === 3) return "compatible" as const;
-    if (major === 0 && minor < 3) return "incompatible" as const;
+    if (targetVersion.major === hostVersion.major && targetVersion.minor === hostVersion.minor) {
+      return "compatible" as const;
+    }
+    if (
+      targetVersion.major < hostVersion.major ||
+      (targetVersion.major === hostVersion.major && targetVersion.minor < hostVersion.minor)
+    ) {
+      return "incompatible" as const;
+    }
     return "requires_newer_host" as const;
   }
 
@@ -494,7 +509,7 @@ export class DashboardState {
   inspectionCompatibilityMessage(inspection: BundleInspection) {
     const runtimeApi = inspection.manifest.compatibility?.runtimeApi;
     const sdk = inspection.manifest.compatibility?.sdk;
-    const hostRange = this.runtimeInfo?.supportedRuntimeApi ?? ">=0.3.0 <0.4.0";
+    const hostRange = this.runtimeInfo?.supportedRuntimeApi ?? ">=0.4.0 <0.5.0";
     if (!runtimeApi) return this.t("packages.missingRuntimeApiMessage");
     const sdkPart = sdk ? ` · SDK ${sdk}` : "";
     return this.tx("packages.runtimeApiMessage", { runtimeApi, hostRange }) + sdkPart;
@@ -951,16 +966,19 @@ export class DashboardState {
     await this.navigate(`/editor/page/${encodeURIComponent(pageId)}${this.editorReturnQuery()}`);
   }
 
-  async saveAppSettings() {
-    if (!this.appSettings) return;
+  async saveAppSettings(settings: AppSettings | null = this.appSettings) {
+    if (!settings) return false;
     this.busy = true;
     try {
-      this.appSettings.overlay.monitor_id = this.appSettings.overlay.monitor_id || null;
-      this.appSettings = await invoke<AppSettings>("save_app_settings", { settings: this.appSettings });
+      const nextSettings = JSON.parse(JSON.stringify(settings)) as AppSettings;
+      nextSettings.overlay.monitor_id = nextSettings.overlay.monitor_id || null;
+      this.appSettings = await invoke<AppSettings>("save_app_settings", { settings: nextSettings });
       this.overlayMonitors = await invoke<OverlayMonitor[]>("list_overlay_monitors");
       this.notify(this.t("msg.settingsSaved"), "success");
+      return true;
     } catch (error) {
       this.notifyError(error);
+      return false;
     } finally {
       this.busy = false;
     }
@@ -975,8 +993,7 @@ export class DashboardState {
       pkg.exports.assets.length +
       pkg.exports.schemas.length +
       pkg.exports.pages.length +
-      pkg.exports.layouts.length +
-      (pkg.exports.configuration ? 1 : 0)
+      pkg.exports.layouts.length
     );
   }
 

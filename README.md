@@ -55,10 +55,10 @@ generator usage, and authoring workflows are documented in `BakingRLSDK`.
 
 ## Current Runtime Contract
 
-The current host runtime API is `0.3.0`. The host supports packages declaring:
+The current host runtime API is `0.4.0`. The host supports packages declaring:
 
 ```txt
->=0.3.0 <0.4.0
+>=0.4.0 <0.5.0
 ```
 
 Packages without a compatible `compatibility.runtimeApi` field can be installed

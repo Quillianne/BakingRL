@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use std::path::{Component, Path};
 
 pub const PLUGIN_SCHEMA_V2: &str = "bakingrl.plugin/2";
-pub const HOST_RUNTIME_API_VERSION: &str = "0.3.0";
-pub const HOST_RUNTIME_API_RANGE: &str = ">=0.3.0 <0.4.0";
+pub const HOST_RUNTIME_API_VERSION: &str = "0.4.0";
+pub const HOST_RUNTIME_API_RANGE: &str = ">=0.4.0 <0.5.0";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -418,7 +418,7 @@ pub fn parse_runtime_api_version(value: &str) -> Option<(u64, u64, u64)> {
 
 fn validate_semver(field: &str, value: &str) -> Result<(), String> {
     if parse_runtime_api_version(value).is_none() {
-        return Err(format!("{field} must be a semver version like 0.3.0"));
+        return Err(format!("{field} must be a semver version like 0.4.0"));
     }
     Ok(())
 }
