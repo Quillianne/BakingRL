@@ -423,6 +423,10 @@ export class DashboardState {
     return pkg.compatibility.status === "compatible";
   }
 
+  hasPackageCompatibilityIssue(pkg: PackageDescriptor) {
+    return !this.isPackageCompatible(pkg);
+  }
+
   packageCompatibilityClass(pkg: PackageDescriptor) {
     if (pkg.compatibility.status === "compatible") return "connected";
     if (pkg.compatibility.status === "requires_newer_host") return "connecting";
@@ -453,6 +457,10 @@ export class DashboardState {
     if (status === "requires_newer_host") return this.t("packages.requiresNewerHost");
     if (status === "unknown_runtime_api") return this.t("packages.unknownRuntimeApi");
     return this.t("packages.incompatible");
+  }
+
+  hasInspectionCompatibilityIssue(inspection: BundleInspection) {
+    return this.runtimeApiCompatibility(inspection.manifest.compatibility?.runtimeApi) !== "compatible";
   }
 
   inspectionCompatibilityClass(inspection: BundleInspection) {

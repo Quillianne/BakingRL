@@ -165,13 +165,12 @@
                   <span class="status-dot"></span>
                   {dashboard.packageStateLabel(pkg)}
                 </span>
-              </div>
-              <div class="package-summary-item">
-                <span class="package-summary-label">{dashboard.t("packages.compatibility")}</span>
-                <span class="status-pill {dashboard.packageCompatibilityClass(pkg)}" title={pkg.compatibility.message ?? ""}>
-                  <span class="status-dot"></span>
-                  {dashboard.packageCompatibilityLabel(pkg)}
-                </span>
+                {#if dashboard.hasPackageCompatibilityIssue(pkg)}
+                  <span class="status-pill {dashboard.packageCompatibilityClass(pkg)}" title={pkg.compatibility.message ?? ""}>
+                    <span class="status-dot"></span>
+                    {dashboard.packageCompatibilityLabel(pkg)}
+                  </span>
+                {/if}
               </div>
               <div class="package-summary-item">
                 <span class="package-summary-label">{dashboard.t("common.permissions")}</span>
@@ -284,10 +283,12 @@
               <span class="status-dot"></span>
               {dashboard.packageStateLabel(detailPackage)}
             </span>
-            <span class="status-pill {dashboard.packageCompatibilityClass(detailPackage)}" title={detailPackage.compatibility.message ?? ""}>
-              <span class="status-dot"></span>
-              {dashboard.packageCompatibilityLabel(detailPackage)}
-            </span>
+            {#if dashboard.hasPackageCompatibilityIssue(detailPackage)}
+              <span class="status-pill {dashboard.packageCompatibilityClass(detailPackage)}" title={detailPackage.compatibility.message ?? ""}>
+                <span class="status-dot"></span>
+                {dashboard.packageCompatibilityLabel(detailPackage)}
+              </span>
+            {/if}
           </div>
           <p>v{detailPackage.version} · {dashboard.t("packages.by")} {detailPackage.author ?? dashboard.t("packages.unknownAuthor")}</p>
         </div>
