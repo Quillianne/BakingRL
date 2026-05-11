@@ -641,6 +641,13 @@ pub fn op_connector_secret_get(
             context.package_id, key
         )));
     }
+    if !settings_contract::read_package_secret_configured(
+        &context.package_settings_path,
+        &context.package_id,
+        &key,
+    ) {
+        return Ok(serde_json::Value::Null);
+    }
     Ok(
         settings_contract::read_package_secret(&context.package_id, &key)
             .map_err(JsErrorBox::generic)?
