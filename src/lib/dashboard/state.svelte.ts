@@ -427,6 +427,27 @@ export class DashboardState {
     return !this.isPackageCompatible(pkg);
   }
 
+  packageDisplayStateClass(pkg: PackageDescriptor) {
+    if (!this.isPackageDeleting(pkg) && this.hasPackageCompatibilityIssue(pkg)) {
+      return this.packageCompatibilityClass(pkg);
+    }
+    return this.packageStateClass(pkg);
+  }
+
+  packageDisplayStateLabel(pkg: PackageDescriptor) {
+    if (!this.isPackageDeleting(pkg) && this.hasPackageCompatibilityIssue(pkg)) {
+      return this.packageCompatibilityLabel(pkg);
+    }
+    return this.packageStateLabel(pkg);
+  }
+
+  packageDisplayStateTitle(pkg: PackageDescriptor) {
+    if (!this.isPackageDeleting(pkg) && this.hasPackageCompatibilityIssue(pkg)) {
+      return pkg.compatibility.message ?? "";
+    }
+    return "";
+  }
+
   packageCompatibilityClass(pkg: PackageDescriptor) {
     if (pkg.compatibility.status === "compatible") return "connected";
     if (pkg.compatibility.status === "requires_newer_host") return "connecting";

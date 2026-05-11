@@ -161,16 +161,10 @@
             <div class="package-card-summary">
               <div class="package-summary-item">
                 <span class="package-summary-label">{dashboard.t("common.state")}</span>
-                <span class="status-pill {dashboard.packageStateClass(pkg)}">
+                <span class="status-pill {dashboard.packageDisplayStateClass(pkg)}" title={dashboard.packageDisplayStateTitle(pkg)}>
                   <span class="status-dot"></span>
-                  {dashboard.packageStateLabel(pkg)}
+                  {dashboard.packageDisplayStateLabel(pkg)}
                 </span>
-                {#if dashboard.hasPackageCompatibilityIssue(pkg)}
-                  <span class="status-pill {dashboard.packageCompatibilityClass(pkg)}" title={pkg.compatibility.message ?? ""}>
-                    <span class="status-dot"></span>
-                    {dashboard.packageCompatibilityLabel(pkg)}
-                  </span>
-                {/if}
               </div>
               <div class="package-summary-item">
                 <span class="package-summary-label">{dashboard.t("common.permissions")}</span>
@@ -279,16 +273,10 @@
         <div class="package-detail-heading-main">
           <div class="package-detail-title-row">
             <h2 id="package-detail-title">{detailPackage.name}</h2>
-            <span class="status-pill {dashboard.packageStateClass(detailPackage)}">
+            <span class="status-pill {dashboard.packageDisplayStateClass(detailPackage)}" title={dashboard.packageDisplayStateTitle(detailPackage)}>
               <span class="status-dot"></span>
-              {dashboard.packageStateLabel(detailPackage)}
+              {dashboard.packageDisplayStateLabel(detailPackage)}
             </span>
-            {#if dashboard.hasPackageCompatibilityIssue(detailPackage)}
-              <span class="status-pill {dashboard.packageCompatibilityClass(detailPackage)}" title={detailPackage.compatibility.message ?? ""}>
-                <span class="status-dot"></span>
-                {dashboard.packageCompatibilityLabel(detailPackage)}
-              </span>
-            {/if}
           </div>
           <p>v{detailPackage.version} · {dashboard.t("packages.by")} {detailPackage.author ?? dashboard.t("packages.unknownAuthor")}</p>
         </div>
@@ -310,7 +298,7 @@
 
       <div class="package-detail-summary">
         <div class="package-detail-stat">
-          <strong>{dashboard.packageStateLabel(detailPackage)}</strong>
+          <strong>{dashboard.packageDisplayStateLabel(detailPackage)}</strong>
           <span>{dashboard.t("common.state")}</span>
         </div>
         <div class="package-detail-stat">
