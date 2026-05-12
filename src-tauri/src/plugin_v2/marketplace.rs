@@ -12,10 +12,10 @@ use super::permissions::EffectivePackagePermissionsV2;
 pub const OFFICIAL_MARKETPLACE_URL: &str =
     "https://quillianne.github.io/BakingRLMarketplace/marketplace.json";
 
-// Replace this public key before enabling the official hosted marketplace in a
-// release build. During development, BAKINGRL_MARKETPLACE_PUBLIC_KEY can supply
-// the trusted key without changing source.
-const OFFICIAL_MARKETPLACE_PUBLIC_KEY: &str = "";
+// Official BakingRL Marketplace index signing key. During development,
+// BAKINGRL_MARKETPLACE_PUBLIC_KEY can supply additional trusted keys without
+// changing source.
+const OFFICIAL_MARKETPLACE_PUBLIC_KEY: &str = "gWpy0Yiz0Jn6nCUK38WOqV9WQByCIXveRrG94zbLjeo=";
 const MAX_MARKETPLACE_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_LISTING_BYTES: u64 = 512 * 1024;
 

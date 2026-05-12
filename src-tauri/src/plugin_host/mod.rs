@@ -201,6 +201,13 @@ impl PluginHost {
                     if !path.is_dir() {
                         continue;
                     }
+                    if path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name.starts_with('.'))
+                    {
+                        continue;
+                    }
                     match self.read_package_record(&path, &state) {
                         Ok(record) => {
                             records.insert(record.descriptor.id.clone(), record);
@@ -414,16 +421,10 @@ impl PluginHost {
         if package_id.is_empty() || version.is_empty() {
             return Err("Marketplace package id and version are required.".to_string());
         }
-        let index = match read_cached_marketplace_index(&self.marketplace_cache_path) {
-            Ok(index) => index,
-            Err(_) => {
-                let index = fetch_verified_marketplace_index(OFFICIAL_MARKETPLACE_URL)
-                    .await
-                    .map_err(|e| format!("Unable to load marketplace index: {e}"))?;
-                write_marketplace_cache(&self.marketplace_cache_path, &index)?;
-                index
-            }
-        };
+        let index = fetch_verified_marketplace_index(OFFICIAL_MARKETPLACE_URL)
+            .await
+            .map_err(|e| format!("Unable to refresh marketplace index: {e}"))?;
+        write_marketplace_cache(&self.marketplace_cache_path, &index)?;
         let (package, approved_version) = find_marketplace_version(&index, package_id, version)?;
         if !developer_allows_key(
             &index,
