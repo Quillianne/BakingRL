@@ -6,6 +6,7 @@
 
   const dashboard = getDashboardContext();
   let createDialogOpen = $state(false);
+  let templateDialogOpen = $state(false);
   let createPageName = $state("");
   let createOpenTarget = $state<"app" | "window">("app");
   let createWidth = $state(1440);
@@ -63,96 +64,113 @@
 <div class="page-title">
   <div>
     <h1>{dashboard.t("pages.title")}</h1>
-    <p>{dashboard.t("pages.desc")}</p>
   </div>
-  <button class="btn-primary" onclick={() => (createDialogOpen = true)} disabled={dashboard.busy}>
-    {dashboard.t("pages.createPage")}
-  </button>
+  <div class="inline-actions">
+    {#if dashboard.pageTemplates.length}
+      <button class="btn-secondary" onclick={() => (templateDialogOpen = true)} disabled={dashboard.busy}>
+        {dashboard.t("common.import")}
+      </button>
+    {/if}
+    <button class="btn-primary" onclick={() => (createDialogOpen = true)} disabled={dashboard.busy}>
+      {dashboard.t("common.create")}
+    </button>
+  </div>
 </div>
 
-<div class="studio-grid two-col">
-  <div class="section-stack">
-    {#if dashboard.pages?.pages.length}
-      <section class="card-grid" aria-label={dashboard.t("pages.title")}>
-        {#each dashboard.pages.pages as page (page.id)}
-          <LayoutCard
-            name={page.name}
-            ariaLabel={dashboard.t("pages.title")}
-            summary={pageSummary(page)}
-            badges={pageBadges(page)}
-            onNameBlur={(event) => handleNameBlur(page, event)}
-            onDelete={() => dashboard.deletePage(page)}
-            deleteDisabled={dashboard.busy}
-            deleteTitle={dashboard.t("confirm.deletePageTitle")}
-          >
-            {#snippet preview()}
-              <LayoutThumbnail thumbnail={page.thumbnail} name={page.name} />
-            {/snippet}
+<div class="section-stack">
+  {#if dashboard.pages?.pages.length}
+    <section class="card-grid" aria-label={dashboard.t("pages.title")}>
+      {#each dashboard.pages.pages as page (page.id)}
+        <LayoutCard
+          name={page.name}
+          ariaLabel={dashboard.t("pages.title")}
+          summary={pageSummary(page)}
+          actionLabel={dashboard.t("common.open")}
+          variant="page"
+          badges={pageBadges(page)}
+          onNameBlur={(event) => handleNameBlur(page, event)}
+          onDelete={() => dashboard.deletePage(page)}
+          onOpen={() => dashboard.openPage(page.id)}
+          deleteDisabled={dashboard.busy}
+          deleteTitle={dashboard.t("confirm.deletePageTitle")}
+        >
+          {#snippet preview()}
+            <LayoutThumbnail thumbnail={page.thumbnail} layout={page} kind="page" themeKey={dashboard.currentTheme} />
+          {/snippet}
 
-            {#snippet tools()}
-              <button
-                class="icon-button"
-                class:active={page.favorite}
-                onclick={() => void dashboard.togglePageFavorite(page)}
-                title={page.favorite ? dashboard.t("pages.unfavorite") : dashboard.t("pages.favorite")}
-              >
-                <svg viewBox="0 0 24 24" width="15" height="15" fill={page.favorite ? "currentColor" : "none"} stroke="currentColor" stroke-width="2">
-                  <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
-                </svg>
-              </button>
-            {/snippet}
+          {#snippet actions()}
+            <button
+              class="icon-button"
+              onclick={() => void dashboard.openPageEditor(page.id)}
+              disabled={dashboard.busy}
+              title={dashboard.t("common.edit")}
+              aria-label={dashboard.t("common.edit")}
+            >
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 20h9"></path>
+                <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"></path>
+              </svg>
+            </button>
+            <button
+              class="icon-button"
+              class:favorite-toggle={true}
+              class:active={page.favorite}
+              onclick={() => void dashboard.togglePageFavorite(page)}
+              disabled={dashboard.busy}
+              aria-pressed={page.favorite}
+              title={page.favorite ? dashboard.t("pages.unfavorite") : dashboard.t("pages.favorite")}
+              aria-label={page.favorite ? dashboard.t("pages.unfavorite") : dashboard.t("pages.favorite")}
+            >
+              <svg viewBox="0 0 24 24" width="15" height="15" fill={page.favorite ? "currentColor" : "none"} stroke="currentColor" stroke-width="2">
+                <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
+              </svg>
+            </button>
+          {/snippet}
+        </LayoutCard>
+      {/each}
+    </section>
+  {:else}
+    <div class="empty-state">
+      <p>{dashboard.t("pages.empty")}</p>
+    </div>
+  {/if}
+</div>
 
-            {#snippet actions()}
-              <button class="btn-primary" onclick={() => void dashboard.openPageEditor(page.id)}>
-                {dashboard.t("common.edit")}
-              </button>
-              <button class="btn-outline" onclick={() => void dashboard.openPage(page.id)} disabled={dashboard.busy}>
-                {dashboard.t("common.open")}
-              </button>
-              <button class="btn-outline" onclick={() => void dashboard.duplicatePage(page.id)} disabled={dashboard.busy}>
-                {dashboard.t("common.duplicate")}
-              </button>
-            {/snippet}
-          </LayoutCard>
-        {/each}
-      </section>
-    {:else}
-      <div class="empty-state">
-        <p>{dashboard.t("pages.empty")}</p>
+{#if templateDialogOpen}
+  <div class="modal-layer">
+    <button type="button" class="modal-scrim" aria-label={dashboard.t("common.cancel")} onclick={() => (templateDialogOpen = false)}></button>
+    <div class="studio-modal create-page-modal" role="dialog" aria-modal="true" aria-labelledby="import-page-title">
+      <div class="modal-heading">
+        <div>
+          <h2 id="import-page-title">{dashboard.t("pages.templatesTitle")}</h2>
+        </div>
+        <button type="button" class="icon-button" aria-label={dashboard.t("common.cancel")} onclick={() => (templateDialogOpen = false)}>
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 6 6 18"></path>
+            <path d="m6 6 12 12"></path>
+          </svg>
+        </button>
       </div>
-    {/if}
-  </div>
-
-  <aside class="studio-panel install-panel">
-    <div class="panel-heading">
-      <div>
-        <h2>{dashboard.t("pages.templatesTitle")}</h2>
-        <p>{dashboard.t("pages.templatesDesc")}</p>
+      <div class="template-list">
+        {#each dashboard.pageTemplates as entry}
+          <button
+            type="button"
+            class="template-row"
+            onclick={() => {
+              templateDialogOpen = false;
+              void dashboard.importPackagePage(entry.package.id, entry.page.name);
+            }}
+            disabled={dashboard.busy}
+            title={`${entry.package.id}/${entry.page.name}`}
+          >
+            <span>{entry.page.title ?? entry.page.name}</span>
+            <small>{entry.package.name}</small>
+          </button>
+        {/each}
       </div>
     </div>
-
-    {#if dashboard.pageTemplates.length}
-      <div class="section-stack">
-        {#each dashboard.pageTemplates as entry}
-          <article class="studio-card">
-            <div>
-              <h3>{entry.page.title ?? entry.page.name}</h3>
-              <p>{entry.page.description ?? entry.package.name}</p>
-              <span class="package-id">{entry.package.id}/{entry.page.name}</span>
-            </div>
-            <button class="btn-primary" onclick={() => void dashboard.importPackagePage(entry.package.id, entry.page.name)} disabled={dashboard.busy}>
-              {dashboard.t("common.import")}
-            </button>
-          </article>
-        {/each}
-      </div>
-    {:else}
-      <div class="empty-state">
-        <p>{dashboard.t("packages.noneInstalled")}</p>
-      </div>
-    {/if}
-  </aside>
-</div>
+  </div>
+{/if}
 
 {#if createDialogOpen}
   <div class="modal-layer">
@@ -173,7 +191,6 @@
         <div class="modal-heading">
           <div>
             <h2 id="create-page-title">{dashboard.t("pages.createDialogTitle")}</h2>
-            <p>{dashboard.t("pages.createDialogDesc")}</p>
           </div>
           <button type="button" class="icon-button" aria-label={dashboard.t("common.cancel")} onclick={closeCreateDialog}>
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">

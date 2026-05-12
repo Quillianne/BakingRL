@@ -11,6 +11,7 @@
     consumePendingRouteReturn,
     returnStateQuery,
     routeReturnFromParams,
+    storeRouteScrollRestore,
     type RouteReturnState
   } from "$lib/returnState";
 
@@ -73,6 +74,11 @@
     await navigateTo(`/editor/page/${encodeURIComponent(data.pageId)}${returnStateQuery({ returnTo: pageUrl, scrollY: 0 })}`);
   }
 
+  async function closePage() {
+    storeRouteScrollRestore(pageReturnState);
+    await navigateTo(pageReturnState.returnTo);
+  }
+
   async function navigateTo(path: string) {
     try {
       await goto(path);
@@ -122,12 +128,16 @@
 
 <main>
   <header class="page-toolbar">
-    <div class="page-title">
-      {#if !isPackageConfigurationRoute}
-        <button type="button" class="btn-primary" onclick={() => void editPage()}>{t["common.edit"]}</button>
-      {/if}
-      <strong>{pageTitle}</strong>
-    </div>
+    <button type="button" class="icon-btn back-btn" onclick={() => void closePage()} title={t["common.back"]} aria-label={t["common.back"]}>
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="m12 19-7-7 7-7"></path>
+        <path d="M19 12H5"></path>
+      </svg>
+    </button>
+    <strong class="page-heading">{pageTitle}</strong>
+    {#if !isPackageConfigurationRoute}
+      <button type="button" class="btn-primary" onclick={() => void editPage()}>{t["common.edit"]}</button>
+    {/if}
   </header>
 
   {#if isSecretsPage && configurationState}
@@ -201,23 +211,20 @@
     display: flex;
     align-items: center;
     justify-content: flex-start;
-    padding: 0 112px 0 14px;
+    gap: 8px;
+    padding: 0 112px 0 10px;
     border-bottom: 1px solid var(--border-color);
     background: var(--editor-bg-panel);
   }
 
-  .page-title {
+  .page-heading {
+    flex: 1 1 auto;
     min-width: 0;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-
-  .page-title strong {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     font-size: 14px;
+    font-weight: 650;
   }
 
   .page-stage {
@@ -237,6 +244,31 @@
     border-radius: 6px;
     background: var(--accent);
     font-weight: 700;
+  }
+
+  .icon-btn {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: var(--transition);
+  }
+
+  .icon-btn:hover {
+    background: var(--editor-bg-panel-hover);
+    color: var(--text-primary);
+  }
+
+  .back-btn {
+    color: var(--text-primary);
   }
 
   .empty-state {

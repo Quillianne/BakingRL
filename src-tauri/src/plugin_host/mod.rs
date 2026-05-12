@@ -1160,7 +1160,6 @@ impl PluginHost {
         let now = now_ms();
         file.layouts
             .push(new_overlay_layout(id.clone(), name, width, height, now));
-        file.active_layout_id = id;
         ensure_active_layout_ids(&mut file);
         self.save_overlay_layouts(&file)?;
         self.emit_overlay_layouts_changed(&file);

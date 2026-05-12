@@ -11,6 +11,8 @@
     name,
     ariaLabel,
     summary,
+    actionLabel = "",
+    variant = "default",
     badges = [],
     deleteTitle = "",
     deleteDisabled = false,
@@ -18,11 +20,14 @@
     onDelete,
     preview,
     tools,
-    actions
+    actions,
+    onOpen
   }: {
     name: string;
     ariaLabel: string;
     summary: string;
+    actionLabel?: string;
+    variant?: "default" | "overlay" | "page";
     badges?: Badge[];
     deleteTitle?: string;
     deleteDisabled?: boolean;
@@ -31,12 +36,33 @@
     preview?: Snippet;
     tools?: Snippet;
     actions: Snippet;
+    onOpen?: () => void | Promise<void>;
   } = $props();
+
+  const roleClass = $derived(
+    [
+      badges.some((badge) => badge.tone === "route") ? "role-route" : "",
+      badges.some((badge) => badge.tone === "stream") ? "role-stream" : "",
+      badges.some((badge) => badge.tone === "warn") ? "role-warn" : ""
+    ]
+      .filter(Boolean)
+      .join(" ")
+  );
+
+  const variantClass = $derived(variant === "default" ? "" : `layout-card-${variant}`);
 </script>
 
-<article class="studio-card layout-card">
-  <div class="thumb-preview overlay-layout-preview layout-card-preview" aria-hidden="true">
-    {@render preview?.()}
+<article
+  class={`studio-card layout-card ${variantClass} ${roleClass} ${onOpen ? "clickable-card" : ""}`}
+  title={summary}
+>
+  <div class="preview-click-zone">
+    <div class="thumb-preview overlay-layout-preview layout-card-preview" aria-hidden="true" data-action-label={actionLabel}>
+      {@render preview?.()}
+    </div>
+    {#if onOpen}
+      <button type="button" class="preview-hit-target" aria-label={actionLabel ? `${actionLabel} ${name}` : name} onclick={() => void onOpen()}></button>
+    {/if}
   </div>
 
   <div class="card-heading layout-card-heading">
@@ -61,16 +87,6 @@
       {@render tools?.()}
     </div>
   </div>
-
-  {#if badges.length}
-    <div class="badge-row">
-      {#each badges as badge}
-        <span class={`badge ${badge.tone ?? "muted"}`}>{badge.label}</span>
-      {/each}
-    </div>
-  {/if}
-
-  <p>{summary}</p>
 
   <div class="card-actions">
     {@render actions()}

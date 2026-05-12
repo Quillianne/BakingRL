@@ -6,6 +6,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { createLayoutThumbnail } from "$lib/layoutThumbnail";
 import { captureRouteReturnState, returnStateQuery, storePendingRouteReturn } from "$lib/returnState";
 import {
   RL_TELEMETRY_EVENT_NAMES,
@@ -734,11 +735,13 @@ export class DashboardState {
   async createOverlayLayout(options: { name?: string; width?: number; height?: number } = {}) {
     this.busy = true;
     try {
-      this.overlayLayouts = await invoke<OverlayLayoutCatalog>("create_overlay_layout", {
+      const previousIds = new Set((this.overlayLayouts?.layouts ?? []).map((layout) => layout.id));
+      const createdCatalog = await invoke<OverlayLayoutCatalog>("create_overlay_layout", {
         name: options.name?.trim() || this.t("overlays.untitled"),
         width: Math.max(320, Math.round(Number(options.width) || 1920)),
         height: Math.max(240, Math.round(Number(options.height) || 1080))
       });
+      this.overlayLayouts = await this.saveCreatedLayoutThumbnail(createdCatalog, previousIds);
       this.notify(this.t("msg.overlaySaved"), "success");
       return true;
     } catch (error) {
@@ -747,6 +750,19 @@ export class DashboardState {
     } finally {
       this.busy = false;
     }
+  }
+
+  async saveCreatedLayoutThumbnail(catalog: OverlayLayoutCatalog, previousIds: Set<string>) {
+    const created =
+      catalog.layouts.find((layout) => !previousIds.has(layout.id)) ??
+      catalog.layouts.find((layout) => layout.id === catalog.active_layout_id);
+    if (!created) return catalog;
+    return await invoke<OverlayLayoutCatalog>("save_overlay_layout", {
+      layout: {
+        ...created,
+        thumbnail: createLayoutThumbnail(created, { kind: "overlay" })
+      }
+    });
   }
 
   async saveLayout(layout: OverlayLayout) {
@@ -886,12 +902,14 @@ export class DashboardState {
   async createPage(options: { name?: string; openTarget?: "app" | "window"; width?: number; height?: number } = {}) {
     this.busy = true;
     try {
-      this.pages = await invoke<PagesFile>("create_page", {
+      const previousIds = new Set((this.pages?.pages ?? []).map((page) => page.id));
+      const createdPages = await invoke<PagesFile>("create_page", {
         name: options.name?.trim() || this.t("pages.untitled"),
         openTarget: options.openTarget ?? "app",
         width: Math.max(320, Math.round(Number(options.width) || 1440)),
         height: Math.max(240, Math.round(Number(options.height) || 900))
       });
+      this.pages = await this.saveCreatedPageThumbnail(createdPages, previousIds);
       this.notify(this.t("msg.pageSaved"), "success");
       return true;
     } catch (error) {
@@ -900,6 +918,19 @@ export class DashboardState {
     } finally {
       this.busy = false;
     }
+  }
+
+  async saveCreatedPageThumbnail(pagesFile: PagesFile, previousIds: Set<string>) {
+    const created =
+      pagesFile.pages.find((page) => !previousIds.has(page.id)) ??
+      [...pagesFile.pages].sort((a, b) => b.created_at_ms - a.created_at_ms)[0];
+    if (!created) return pagesFile;
+    return await invoke<PagesFile>("save_page", {
+      page: {
+        ...created,
+        thumbnail: createLayoutThumbnail(created, { kind: "page" })
+      }
+    });
   }
 
   async savePage(page: PageLayout) {
