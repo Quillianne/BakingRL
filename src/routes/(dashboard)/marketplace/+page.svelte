@@ -6,21 +6,26 @@
 
   const dashboard = getDashboardContext();
 
+  type MarketplaceFilter = "all" | "recommended" | "new";
+
   let selectedPackageId = $state<string | null>(null);
+  let activeFilter = $state<MarketplaceFilter>("all");
 
   const packages = $derived(dashboard.marketplace?.packages ?? []);
-  const selectedPackage = $derived(packages.find((pkg) => pkg.id === selectedPackageId) ?? packages[0] ?? null);
-  const recommendedPackages = $derived(sectionPackages(dashboard.marketplace?.sections.recommended ?? []));
-  const newPackages = $derived(sectionPackages(dashboard.marketplace?.sections.new ?? []));
+  const recommendedIds = $derived(new Set(dashboard.marketplace?.sections.recommended ?? []));
+  const newIds = $derived(new Set(dashboard.marketplace?.sections.new ?? []));
+  const filteredPackages = $derived(
+    packages.filter((pkg) => {
+      if (activeFilter === "recommended") return recommendedIds.has(pkg.id);
+      if (activeFilter === "new") return newIds.has(pkg.id);
+      return true;
+    })
+  );
+  const selectedPackage = $derived(filteredPackages.find((pkg) => pkg.id === selectedPackageId) ?? filteredPackages[0] ?? null);
 
   onMount(() => {
     void dashboard.loadMarketplace();
   });
-
-  function sectionPackages(ids: string[]) {
-    const byId = new Map(packages.map((pkg) => [pkg.id, pkg]));
-    return ids.map((id) => byId.get(id)).filter((pkg): pkg is MarketplaceCatalogPackage => Boolean(pkg));
-  }
 
   function titleFor(pkg: MarketplaceCatalogPackage) {
     return pkg.listing?.displayName ?? pkg.id;
@@ -36,6 +41,11 @@
 
   function packageCard(pkg: MarketplaceCatalogPackage) {
     selectedPackageId = pkg.id;
+  }
+
+  function setFilter(filter: MarketplaceFilter) {
+    activeFilter = filter;
+    selectedPackageId = null;
   }
 
   async function openExternal(url: string | null | undefined) {
@@ -67,13 +77,31 @@
 {#if packages.length}
   <div class="studio-grid two-col marketplace-layout">
     <section class="marketplace-main">
-      {#if recommendedPackages.length}
-        <section class="marketplace-section">
-          <div class="section-heading">
-            <h2>{dashboard.t("marketplace.recommended")}</h2>
+      <section class="marketplace-section">
+        <div class="section-heading">
+          <h2>
+            {activeFilter === "recommended"
+              ? dashboard.t("marketplace.recommended")
+              : activeFilter === "new"
+                ? dashboard.t("marketplace.new")
+                : dashboard.t("marketplace.allPackages")}
+          </h2>
+          <div class="inline-actions marketplace-filter-bar" aria-label={dashboard.t("marketplace.filters")}>
+            <button type="button" class="btn-outline" class:active={activeFilter === "all"} onclick={() => setFilter("all")}>
+              {dashboard.t("marketplace.allPackages")}
+            </button>
+            <button type="button" class="btn-outline" class:active={activeFilter === "recommended"} onclick={() => setFilter("recommended")}>
+              {dashboard.t("marketplace.recommended")}
+            </button>
+            <button type="button" class="btn-outline" class:active={activeFilter === "new"} onclick={() => setFilter("new")}>
+              {dashboard.t("marketplace.new")}
+            </button>
           </div>
+        </div>
+
+        {#if filteredPackages.length}
           <div class="card-grid marketplace-card-grid">
-            {#each recommendedPackages as pkg (pkg.id)}
+            {#each filteredPackages as pkg (pkg.id)}
               <button type="button" class="studio-card marketplace-card" class:active={selectedPackage?.id === pkg.id} onclick={() => packageCard(pkg)}>
                 {#if pkg.listing?.bannerUrl}
                   <img class="marketplace-banner" src={pkg.listing.bannerUrl} alt="" loading="lazy" />
@@ -86,64 +114,24 @@
                   {/if}
                   <span>
                     <strong>{titleFor(pkg)}</strong>
-                    <span>{dashboard.t("marketplace.by")} {pkg.developerName ?? pkg.developerId}</span>
+                    <span>
+                      {#if activeFilter === "new"}
+                        {dashboard.t("marketplace.latestApproved")} {approvedVersion(pkg)?.version ?? "-"}
+                      {:else}
+                        {dashboard.t("marketplace.by")} {pkg.developerName ?? pkg.developerId}
+                      {/if}
+                    </span>
                   </span>
                 </span>
                 <p>{descriptionFor(pkg)}</p>
               </button>
             {/each}
           </div>
-        </section>
-      {/if}
-
-      {#if newPackages.length}
-        <section class="marketplace-section">
-          <div class="section-heading">
-            <h2>{dashboard.t("marketplace.new")}</h2>
+        {:else}
+          <div class="empty-state">
+            <p>{dashboard.t("marketplace.emptyFilter")}</p>
           </div>
-          <div class="card-grid marketplace-card-grid">
-            {#each newPackages as pkg (pkg.id)}
-              <button type="button" class="studio-card marketplace-card" class:active={selectedPackage?.id === pkg.id} onclick={() => packageCard(pkg)}>
-                <span class="marketplace-card-head">
-                  {#if pkg.listing?.iconUrl}
-                    <img class="marketplace-icon" src={pkg.listing.iconUrl} alt="" loading="lazy" />
-                  {:else}
-                    <span class="marketplace-icon fallback">{titleFor(pkg).slice(0, 1)}</span>
-                  {/if}
-                  <span>
-                    <strong>{titleFor(pkg)}</strong>
-                    <span>{dashboard.t("marketplace.latestApproved")} {approvedVersion(pkg)?.version ?? "-"}</span>
-                  </span>
-                </span>
-                <p>{descriptionFor(pkg)}</p>
-              </button>
-            {/each}
-          </div>
-        </section>
-      {/if}
-
-      <section class="marketplace-section">
-        <div class="section-heading">
-          <h2>{dashboard.t("marketplace.allPackages")}</h2>
-        </div>
-        <div class="card-grid marketplace-card-grid">
-          {#each packages as pkg (pkg.id)}
-            <button type="button" class="studio-card marketplace-card" class:active={selectedPackage?.id === pkg.id} onclick={() => packageCard(pkg)}>
-              <span class="marketplace-card-head">
-                {#if pkg.listing?.iconUrl}
-                  <img class="marketplace-icon" src={pkg.listing.iconUrl} alt="" loading="lazy" />
-                {:else}
-                  <span class="marketplace-icon fallback">{titleFor(pkg).slice(0, 1)}</span>
-                {/if}
-                <span>
-                  <strong>{titleFor(pkg)}</strong>
-                  <span>{pkg.id}</span>
-                </span>
-              </span>
-              <p>{descriptionFor(pkg)}</p>
-            </button>
-          {/each}
-        </div>
+        {/if}
       </section>
     </section>
 

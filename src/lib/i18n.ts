@@ -56,6 +56,7 @@ const en = {
   "home.noFavoritePages": "No favorite page yet.",
   "home.mainLayouts": "Main Layouts",
   "home.mainLayoutsDesc": "Layouts currently routed to the overlay runtimes.",
+  "home.recommendedPackages": "Recommended packages",
   "home.recentActivity": "Recent Activity",
   "home.recentActivityDesc": "Recently edited pages and available layouts.",
 
@@ -153,6 +154,8 @@ const en = {
   "marketplace.new": "New",
   "marketplace.allPackages": "All packages",
   "marketplace.empty": "No marketplace packages available.",
+  "marketplace.emptyFilter": "No packages match this filter.",
+  "marketplace.filters": "Marketplace filters",
   "marketplace.noListing": "Listing metadata unavailable.",
   "marketplace.installReviewed": "Install reviewed version",
   "marketplace.latestApproved": "Latest approved",
@@ -417,6 +420,7 @@ const fr: Record<TranslationKey, string> = {
   "home.noFavoritePages": "Aucune page favorite pour le moment.",
   "home.mainLayouts": "Layouts principaux",
   "home.mainLayoutsDesc": "Layouts actuellement routés vers les runtimes overlay.",
+  "home.recommendedPackages": "Packages recommandés",
   "home.recentActivity": "Activité récente",
   "home.recentActivityDesc": "Pages récemment éditées et layouts disponibles.",
 
@@ -514,6 +518,8 @@ const fr: Record<TranslationKey, string> = {
   "marketplace.new": "Nouveautés",
   "marketplace.allPackages": "Tous les packages",
   "marketplace.empty": "Aucun package marketplace disponible.",
+  "marketplace.emptyFilter": "Aucun package ne correspond à ce filtre.",
+  "marketplace.filters": "Filtres marketplace",
   "marketplace.noListing": "Fiche catalogue indisponible.",
   "marketplace.installReviewed": "Installer la version reviewée",
   "marketplace.latestApproved": "Dernière version approuvée",

@@ -853,29 +853,32 @@ pre {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  padding-right: 110px;
+  padding-top: 2px;
 }
 
 .package-card-tools {
-  position: absolute;
-  top: 14px;
-  right: 14px;
   display: flex;
+  justify-self: end;
+  min-width: 0;
   align-items: center;
   gap: 6px;
 }
 
 .package-meta {
   display: flex;
+  flex: 1 1 auto;
   min-width: 0;
   flex-direction: column;
   gap: 5px;
 }
 
 .package-title-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content max-content;
+  width: 100%;
   min-width: 0;
   align-items: start;
+  column-gap: 6px;
 }
 
 .package-title-row h3 {
@@ -883,7 +886,17 @@ pre {
   overflow-wrap: anywhere;
 }
 
-.package-title-row .icon-button {
+.package-title-row .status-pill {
+  justify-self: end;
+  box-sizing: border-box;
+  min-height: 32px;
+  margin-top: 0;
+  margin-left: 0;
+  padding: 0 8px;
+  white-space: nowrap;
+}
+
+.package-title-row > .icon-button {
   width: 28px;
   height: 28px;
   border-color: transparent;
@@ -981,13 +994,19 @@ pre {
   line-height: 1.2;
 }
 
+.marketplace-filter-bar {
+  justify-content: flex-end;
+}
+
 .marketplace-card-grid {
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
 }
 
 .marketplace-card {
   align-items: stretch;
+  box-sizing: border-box;
   width: 100%;
+  max-width: 100%;
   color: inherit;
   cursor: pointer;
   font: inherit;
@@ -996,6 +1015,37 @@ pre {
 
 .marketplace-card.active {
   border-color: var(--accent);
+}
+
+.home-marketplace-card {
+  min-height: 128px;
+  cursor: default;
+  overflow: hidden;
+}
+
+.card-grid.home-marketplace-grid {
+  grid-template-columns: repeat(auto-fill, minmax(min(220px, 100%), 260px));
+}
+
+.home-marketplace-card .marketplace-card-head {
+  align-items: flex-start;
+}
+
+.home-marketplace-card .marketplace-card-head strong {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.25;
+}
+
+.home-marketplace-actions {
+  margin-top: auto;
+}
+
+.home-marketplace-actions .btn-primary {
+  width: 100%;
+  min-width: 0;
+  white-space: normal;
+  line-height: 1.2;
 }
 
 .marketplace-banner,
@@ -2503,9 +2553,13 @@ code {
   margin-bottom: 24px;
 }
 
-.page-title > .inline-actions {
+.page-title > :is(button, .inline-actions) {
   align-self: flex-start;
-  padding-top: 8px;
+  margin-top: 16px;
+}
+
+.page-title > .inline-actions {
+  padding-top: 0;
 }
 
 .page-title h1 {
@@ -2783,7 +2837,7 @@ code {
 }
 
 .package-head {
-  padding-right: 104px;
+  padding-right: 0;
 }
 
 .package-card-summary,
