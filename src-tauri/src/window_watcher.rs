@@ -2,9 +2,28 @@ use active_win_pos_rs::get_active_window;
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::plugin_host::PluginHost;
+
+fn apply_overlay_visibility(app_handle: &AppHandle, visible: bool) {
+    let app_for_thread = app_handle.clone();
+    if let Err(error) = app_handle.run_on_main_thread(move || {
+        let Some(overlay_window) = app_for_thread.get_webview_window("overlay-ingame") else {
+            return;
+        };
+
+        if visible {
+            let _ = overlay_window.show();
+            let _ = overlay_window.set_ignore_cursor_events(true);
+            let _ = overlay_window.set_always_on_top(true);
+        } else {
+            let _ = overlay_window.hide();
+        }
+    }) {
+        warn!("[WindowWatcher] Failed to schedule overlay visibility update: {error}");
+    }
+}
 
 pub fn start_window_visibility_watcher(app_handle: AppHandle, plugin_host: Arc<PluginHost>) {
     tauri::async_runtime::spawn(async move {
@@ -15,15 +34,11 @@ pub fn start_window_visibility_watcher(app_handle: AppHandle, plugin_host: Arc<P
         loop {
             interval.tick().await;
 
-            let Some(overlay_window) = app_handle.get_webview_window("overlay-ingame") else {
-                continue;
-            };
-
             if app_handle.get_webview_window("overlay-editor").is_some() {
                 if overlay_visible != Some(false) {
                     info!("[WindowWatcher] Hiding overlay while layout editor is open");
+                    apply_overlay_visibility(&app_handle, false);
                 }
-                let _ = overlay_window.hide();
                 is_overlay_forced_visible = false;
                 overlay_visible = Some(false);
                 continue;
@@ -36,8 +51,7 @@ pub fn start_window_visibility_watcher(app_handle: AppHandle, plugin_host: Arc<P
             if !hide_when_unfocused {
                 if !is_overlay_forced_visible {
                     info!("[WindowWatcher] Showing overlay because focus hiding is disabled");
-                    let _ = overlay_window.show();
-                    let _ = overlay_window.set_always_on_top(true);
+                    apply_overlay_visibility(&app_handle, true);
                     is_overlay_forced_visible = true;
                     overlay_visible = Some(true);
                 }
@@ -61,15 +75,14 @@ pub fn start_window_visibility_watcher(app_handle: AppHandle, plugin_host: Arc<P
             if is_game_focused {
                 if overlay_visible != Some(true) {
                     info!("[WindowWatcher] Showing overlay");
+                    apply_overlay_visibility(&app_handle, true);
                 }
-                let _ = overlay_window.show();
-                let _ = overlay_window.set_always_on_top(true);
                 overlay_visible = Some(true);
             } else {
                 if overlay_visible != Some(false) {
                     info!("[WindowWatcher] Hiding overlay");
+                    apply_overlay_visibility(&app_handle, false);
                 }
-                let _ = overlay_window.hide();
                 overlay_visible = Some(false);
             }
         }

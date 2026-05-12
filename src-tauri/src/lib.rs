@@ -531,11 +531,11 @@ pub fn run() {
             // Configuration du mode "Click-Through" pour l'overlay
             if let Some(overlay_window) = _app.get_webview_window(INGAME_OVERLAY_LABEL) {
                 info!("Activation du mode Click-Through pour l'overlay...");
-                let _ = overlay_window.set_ignore_cursor_events(true);
                 let _ = overlay_window.set_shadow(false);
                 let _ = overlay_window.set_skip_taskbar(true);
 
-                // Start with the window hidden, the watcher will show it if RL is in focus
+                // Start hidden. Click-through is applied by the watcher after
+                // the overlay has been shown at least once on Linux.
                 let _ = overlay_window.hide();
             } else {
                 warn!("Impossible de trouver la fenêtre 'overlay-ingame' pour activer le click-through.");
@@ -717,10 +717,10 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("Erreur lors de l'exécution de l'application Tauri")
-        .run(|app, event| {
+        .run(|_app, _event| {
             #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
-            if let tauri::RunEvent::Opened { urls } = event {
-                enqueue_package_file_opens(app, collect_package_file_paths_from_urls(&urls));
+            if let tauri::RunEvent::Opened { urls } = _event {
+                enqueue_package_file_opens(_app, collect_package_file_paths_from_urls(&urls));
             }
         });
 }

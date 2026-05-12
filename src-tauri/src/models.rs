@@ -331,7 +331,7 @@ pub enum PluginRuntimeIsolation {
 
 impl Default for PluginRuntimeIsolation {
     fn default() -> Self {
-        Self::Export
+        Self::Package
     }
 }
 
