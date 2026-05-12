@@ -37,6 +37,7 @@
   type DeveloperToolPanel = "registry" | "errors" | "send";
 
   let activeToolPanel = $state<DeveloperToolPanel>("registry");
+  let runtimeInfoOpen = $state(false);
   let frameDialogOpen = $state(false);
   let frameDialogFrame = $state<GameEventFrame | null>(null);
   let frameDialogError = $state("");
@@ -262,29 +263,36 @@
   <div class="page-title">
     <div>
       <h1>{dashboard.t("nav.developer")}</h1>
-      <p>{dashboard.t("developer.telemetryDesc")}</p>
     </div>
   </div>
 
   <div class="developer-layout">
     <div class="developer-column developer-tools-column">
-      <section class="studio-panel developer-panel developer-runtime-card">
-        <div class="panel-heading">
-          <div>
-            <h2>{dashboard.t("developer.runtimeTitle")}</h2>
-            <p>{dashboard.t("developer.runtimeDesc")}</p>
-          </div>
+      <section class="studio-panel developer-panel developer-runtime-card" class:active={runtimeInfoOpen}>
+        <div class="panel-heading developer-tool-heading">
+          <button
+            class="developer-tool-toggle"
+            aria-expanded={runtimeInfoOpen}
+            aria-controls="developer-runtime-panel"
+            onclick={() => (runtimeInfoOpen = !runtimeInfoOpen)}
+          >
+            <svg class:rotated={runtimeInfoOpen} viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="9 18 15 12 9 6"></polyline>
+            </svg>
+            <span>
+              <strong>{dashboard.t("developer.runtimeTitle")} {dashboard.runtimeInfo?.runtimeApiVersion ?? "n/a"}</strong>
+            </span>
+          </button>
         </div>
-        <div class="package-detail-summary">
-          <div class="package-detail-stat">
-            <strong>{dashboard.runtimeInfo?.runtimeApiVersion ?? "n/a"}</strong>
-            <span>{dashboard.t("developer.runtimeApiVersion")}</span>
+
+        {#if runtimeInfoOpen}
+          <div id="developer-runtime-panel" class="developer-panel-body runtime-compatibility">
+            <div class="runtime-api-line">
+              <span>{dashboard.t("packages.compatibility")}</span>
+              <strong>{dashboard.runtimeInfo?.supportedRuntimeApi ?? "n/a"}</strong>
+            </div>
           </div>
-          <div class="package-detail-stat">
-            <strong>{dashboard.runtimeInfo?.supportedRuntimeApi ?? "n/a"}</strong>
-            <span>{dashboard.t("developer.runtimeApiRange")}</span>
-          </div>
-        </div>
+        {/if}
       </section>
 
       <section class="studio-panel developer-panel developer-tool-panel" class:active={activeToolPanel === "registry"}>
@@ -300,7 +308,6 @@
             </svg>
             <span>
               <strong>{dashboard.t("developer.registryTitle")}</strong>
-              <small>{dashboard.t("developer.registryDesc")}</small>
             </span>
           </button>
         </div>
@@ -340,7 +347,6 @@
             </svg>
             <span>
               <strong>{dashboard.t("developer.errorsTitle")}</strong>
-              <small>{dashboard.t("developer.errorsDesc")}</small>
             </span>
           </button>
           {#if activeToolPanel === "errors"}
@@ -386,7 +392,6 @@
             </svg>
             <span>
               <strong>{dashboard.t("developer.sendFrameTitle")}</strong>
-              <small>{dashboard.t("developer.sendFrameDesc")}</small>
             </span>
           </button>
         </div>
@@ -424,7 +429,6 @@
       <div class="panel-heading">
         <div>
           <h2>{dashboard.t("developer.telemetryTitle")}</h2>
-          <p>{dashboard.t("developer.telemetryDesc")}</p>
         </div>
         <div class="inline-actions">
           <div class="badge-row" aria-label={dashboard.t("developer.sortLabel")}>
@@ -474,7 +478,6 @@
       <div class="studio-modal frame-editor-modal" role="dialog" aria-modal="true" aria-labelledby="frame-editor-title">
         <div class="modal-heading">
           <h2 id="frame-editor-title">{dashboard.t("developer.sendFrameTitle")}</h2>
-          <p>{dashboard.t("developer.sendFrameDesc")}</p>
         </div>
 
         {#if frameDialogError}

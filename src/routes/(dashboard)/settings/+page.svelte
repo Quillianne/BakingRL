@@ -6,7 +6,7 @@
 
   const dashboard = getDashboardContext();
 
-  let section = $state<"general" | "security" | "appearance" | "telemetry" | "overlay" | "about">("general");
+  let section = $state<"general" | "runtime" | "advanced">("general");
   let draftSettings = $state<AppSettings | null>(null);
   let syncedSettingsSignature = "";
   const settingsDirty = $derived(Boolean(draftSettings && dashboard.appSettings && settingsSignature(draftSettings) !== settingsSignature(dashboard.appSettings)));
@@ -51,7 +51,6 @@
 <div class="page-title">
   <div>
     <h1>{dashboard.t("nav.settings")}</h1>
-    <p>{dashboard.t("settings.appearanceDesc")}</p>
   </div>
 </div>
 
@@ -61,20 +60,11 @@
       <button class="btn-outline" class:active={section === "general"} onclick={() => (section = "general")}>
         {dashboard.t("settings.general")}
       </button>
-      <button class="btn-outline" class:active={section === "security"} onclick={() => (section = "security")}>
-        {dashboard.t("settings.security")}
+      <button class="btn-outline" class:active={section === "runtime"} onclick={() => (section = "runtime")}>
+        {dashboard.t("settings.runtime")}
       </button>
-      <button class="btn-outline" class:active={section === "appearance"} onclick={() => (section = "appearance")}>
-        {dashboard.t("settings.appearance")}
-      </button>
-      <button class="btn-outline" class:active={section === "telemetry"} onclick={() => (section = "telemetry")}>
-        {dashboard.t("settings.telemetry")}
-      </button>
-      <button class="btn-outline" class:active={section === "overlay"} onclick={() => (section = "overlay")}>
-        {dashboard.t("settings.overlay")}
-      </button>
-      <button class="btn-outline" class:active={section === "about"} onclick={() => (section = "about")}>
-        {dashboard.t("settings.about")}
+      <button class="btn-outline" class:active={section === "advanced"} onclick={() => (section = "advanced")}>
+        {dashboard.t("settings.advanced")}
       </button>
     </nav>
 
@@ -83,199 +73,155 @@
         <div class="panel-heading">
           <div>
             <h2>{dashboard.t("settings.general")}</h2>
-            <p>{dashboard.t("settings.generalDesc")}</p>
           </div>
         </div>
 
-        <div class="section-stack">
-          <label class="check-row">
-            <input type="checkbox" bind:checked={draftSettings.behavior.start_minimized} />
-            <span></span>
-            {dashboard.t("settings.startMinimized")}
-          </label>
-          <label class="check-row">
-            <input type="checkbox" bind:checked={draftSettings.behavior.close_will_hide} />
-            <span></span>
-            {dashboard.t("settings.closeMinimized")}
-          </label>
-          <label class="check-row">
-            <input type="checkbox" bind:checked={draftSettings.behavior.launch_at_startup} />
-            <span></span>
-            {dashboard.t("settings.launchAtStartup")}
-          </label>
-
-          <div class="card-actions">
-            <button class="btn-secondary" onclick={cancelDraftSettings} disabled={dashboard.busy || !settingsDirty}>
-              {dashboard.t("common.cancel")}
-            </button>
-            <button class="btn-primary" onclick={() => void saveDraftSettings()} disabled={dashboard.busy || !settingsDirty}>
-              {dashboard.t("common.saveSettings")}
-            </button>
-          </div>
-        </div>
-      {:else if section === "security"}
-        <div class="panel-heading">
-          <div>
-            <h2>{dashboard.t("settings.security")}</h2>
-            <p>{dashboard.t("settings.securityDesc")}</p>
-          </div>
-        </div>
-
-        <div class="section-stack">
-          <div class="input-group">
-            <label for="runtimeIsolation">{dashboard.t("settings.runtimeIsolation")}</label>
-            <select id="runtimeIsolation" bind:value={draftSettings.security.plugin_runtime_isolation}>
-              <option value="export">{dashboard.t("settings.runtimeIsolationExport")}</option>
-              <option value="package">{dashboard.t("settings.runtimeIsolationPackage")}</option>
-            </select>
+        <div class="section-stack compact-settings-stack">
+          <div class="settings-group">
+            <h3>{dashboard.t("settings.applicationBehavior")}</h3>
+            <div class="settings-check-grid">
+              <label class="check-row">
+                <input type="checkbox" bind:checked={draftSettings.behavior.start_minimized} />
+                <span></span>
+                {dashboard.t("settings.startMinimized")}
+              </label>
+              <label class="check-row">
+                <input type="checkbox" bind:checked={draftSettings.behavior.close_will_hide} />
+                <span></span>
+                {dashboard.t("settings.closeMinimized")}
+              </label>
+              <label class="check-row">
+                <input type="checkbox" bind:checked={draftSettings.behavior.launch_at_startup} />
+                <span></span>
+                {dashboard.t("settings.launchAtStartup")}
+              </label>
+            </div>
           </div>
 
-          <label class="check-row">
-            <input type="checkbox" bind:checked={draftSettings.security.require_trusted_remote_packages} />
-            <span></span>
-            {dashboard.t("settings.requireTrustedRemotePackages")}
-          </label>
+          <div class="settings-group">
+            <h3>{dashboard.t("settings.appearance")}</h3>
+            <div class="input-group settings-narrow-field">
+              <label for="localeSelect">{dashboard.t("settings.interfaceLanguage")}</label>
+              <select id="localeSelect" value={dashboard.locale} onchange={(event) => dashboard.setLocale(event.currentTarget.value as Locale)}>
+                <option value="fr">Français</option>
+                <option value="en">English</option>
+              </select>
+            </div>
 
-          <div class="card-actions">
-            <button class="btn-secondary" onclick={cancelDraftSettings} disabled={dashboard.busy || !settingsDirty}>
-              {dashboard.t("common.cancel")}
-            </button>
-            <button class="btn-primary" onclick={() => void saveDraftSettings()} disabled={dashboard.busy || !settingsDirty}>
-              {dashboard.t("common.saveSettings")}
-            </button>
-          </div>
-        </div>
-      {:else if section === "appearance"}
-        <div class="panel-heading">
-          <div>
-            <h2>{dashboard.t("settings.appearance")}</h2>
-            <p>{dashboard.t("settings.appearanceDesc")}</p>
-          </div>
-        </div>
-
-        <div class="section-stack">
-          <div class="input-group">
-            <label for="localeSelect">{dashboard.t("settings.interfaceLanguage")}</label>
-            <select id="localeSelect" value={dashboard.locale} onchange={(event) => dashboard.setLocale(event.currentTarget.value as Locale)}>
-              <option value="fr">Français</option>
-              <option value="en">English</option>
-            </select>
-          </div>
-
-          <div class="theme-grid">
-            {#each THEMES as theme}
-              <button
-                type="button"
-                class="theme-option"
-                class:active={dashboard.currentTheme === theme.id}
-                aria-pressed={dashboard.currentTheme === theme.id}
-                onclick={() => dashboard.selectTheme(theme.id)}
-                style={`--theme-preview-bg:${theme.preview.background};--theme-preview-surface:${theme.preview.surface};--theme-preview-accent:${theme.preview.accent};--theme-preview-text:${theme.preview.text};`}
-              >
-                <span class="theme-preview" aria-hidden="true">
-                  <span class="theme-preview-panel"></span>
-                  <span class="theme-preview-line"></span>
-                  <span class="theme-preview-swatches">
-                    <span class="theme-swatch accent"></span>
-                    <span class="theme-swatch text"></span>
+            <div class="theme-grid">
+              {#each THEMES as theme}
+                <button
+                  type="button"
+                  class="theme-option"
+                  class:active={dashboard.currentTheme === theme.id}
+                  aria-pressed={dashboard.currentTheme === theme.id}
+                  onclick={() => dashboard.selectTheme(theme.id)}
+                  style={`--theme-preview-bg:${theme.preview.background};--theme-preview-surface:${theme.preview.surface};--theme-preview-accent:${theme.preview.accent};--theme-preview-text:${theme.preview.text};`}
+                >
+                  <span class="theme-preview" aria-hidden="true">
+                    <span class="theme-preview-panel"></span>
+                    <span class="theme-preview-line"></span>
+                    <span class="theme-preview-swatches">
+                      <span class="theme-swatch accent"></span>
+                      <span class="theme-swatch text"></span>
+                    </span>
                   </span>
-                </span>
-                <span class="theme-copy">
-                  <span class="theme-name">{theme.label}</span>
-                  <span class="theme-description">{theme.description}</span>
-                </span>
-              </button>
-            {/each}
+                  <span class="theme-copy">
+                    <span class="theme-name">{theme.label}</span>
+                  </span>
+                </button>
+              {/each}
+            </div>
           </div>
-        </div>
-      {:else if section === "telemetry"}
-        <div class="panel-heading">
-          <div>
-            <h2>{dashboard.t("settings.telemetry")}</h2>
-            <p>{dashboard.t("settings.telemetryDesc")}</p>
-          </div>
-          <div class="inline-actions">
-            <button type="button" class="btn-secondary" onclick={() => dashboard.openTelemetryHelp()}>
-              {dashboard.t("settings.setupHelp")}
+
+          <div class="card-actions settings-actions">
+            <button class="btn-secondary" onclick={cancelDraftSettings} disabled={dashboard.busy || !settingsDirty}>
+              {dashboard.t("common.cancel")}
             </button>
-            <span class="status-pill {dashboard.telemetryStatus?.state === 'connected' ? 'connected' : dashboard.telemetryStatus?.state === 'connecting' ? 'connecting' : 'disconnected'}">
-              <span class="status-dot"></span>
-              {dashboard.telemetryStatusLabel}
-            </span>
+            <button class="btn-primary" onclick={() => void saveDraftSettings()} disabled={dashboard.busy || !settingsDirty}>
+              {dashboard.t("common.saveSettings")}
+            </button>
           </div>
         </div>
-
-        <div class="studio-grid telemetry-settings-grid">
-          <div class="input-group">
-            <label for="telemetryHost">{dashboard.t("settings.host")}</label>
-            <input id="telemetryHost" bind:value={draftSettings.telemetry.rocket_league_host} />
-          </div>
-          <div class="input-group">
-            <label for="telemetryPort">{dashboard.t("settings.port")}</label>
-            <input id="telemetryPort" type="number" bind:value={draftSettings.telemetry.rocket_league_port} />
-          </div>
-          <div class="input-group telemetry-save-group">
-            <span class="field-label">&nbsp;</span>
-            <div class="card-actions">
-              <button class="btn-secondary" onclick={cancelDraftSettings} disabled={dashboard.busy || !settingsDirty}>
-                {dashboard.t("common.cancel")}
-              </button>
-              <button class="btn-primary" onclick={() => void saveDraftSettings()} disabled={dashboard.busy || !settingsDirty}>
-                {dashboard.t("common.saveSettings")}
-              </button>
-            </div>
-          </div>
-        </div>
-      {:else if section === "overlay"}
+      {:else if section === "runtime"}
         <div class="panel-heading">
           <div>
-            <h2>{dashboard.t("settings.overlay")}</h2>
-            <p>{dashboard.t("settings.overlayDesc")}</p>
+            <h2>{dashboard.t("settings.runtime")}</h2>
           </div>
         </div>
 
-        <div class="section-stack">
-          <div class="studio-grid three-col">
-            <div class="input-group">
-              <label for="overlayFps">{dashboard.t("settings.updateRate")}</label>
-              <input id="overlayFps" type="number" min="1" max="120" bind:value={draftSettings.overlay.update_rate_fps} />
+        <div class="section-stack compact-settings-stack">
+          <div class="settings-group">
+            <div class="settings-group-heading">
+              <h3>{dashboard.t("settings.telemetry")}</h3>
+              <div class="inline-actions">
+                <button type="button" class="btn-secondary" onclick={() => dashboard.openTelemetryHelp()}>
+                  {dashboard.t("settings.setupHelp")}
+                </button>
+                <span class="status-pill {dashboard.telemetryStatus?.state === 'connected' ? 'connected' : dashboard.telemetryStatus?.state === 'connecting' ? 'connecting' : 'disconnected'}">
+                  <span class="status-dot"></span>
+                  {dashboard.telemetryStatusLabel}
+                </span>
+              </div>
             </div>
-
-            {#if draftSettings.overlay.use_monitor_size}
+            <div class="studio-grid settings-two-col">
               <div class="input-group">
-                <label for="overlayMonitor">{dashboard.t("settings.overlayMonitor")}</label>
-                <select id="overlayMonitor" bind:value={draftSettings.overlay.monitor_id}>
-                  <option value="">{dashboard.t("settings.currentPrimary")}</option>
-                  {#each dashboard.overlayMonitors as monitor}
-                    <option value={monitor.id}>
-                      {monitor.name} · {monitor.width}x{monitor.height}{monitor.primary ? " · primary" : ""}{monitor.current ? " · current" : ""}
-                    </option>
-                  {/each}
-                </select>
+                <label for="telemetryHost">{dashboard.t("settings.host")}</label>
+                <input id="telemetryHost" bind:value={draftSettings.telemetry.rocket_league_host} />
               </div>
-            {:else}
               <div class="input-group">
-                <span class="field-label">{dashboard.t("settings.overlaySize")}</span>
-                <div class="form-row">
-                  <input type="number" min="1" bind:value={draftSettings.overlay.screen_width} aria-label="Overlay width" />
-                  <input type="number" min="1" bind:value={draftSettings.overlay.screen_height} aria-label="Overlay height" />
-                </div>
+                <label for="telemetryPort">{dashboard.t("settings.port")}</label>
+                <input id="telemetryPort" type="number" bind:value={draftSettings.telemetry.rocket_league_port} />
               </div>
-            {/if}
+            </div>
           </div>
 
-          <label class="check-row">
-            <input type="checkbox" bind:checked={draftSettings.overlay.use_monitor_size} />
-            <span></span>
-            {dashboard.t("settings.useFullMonitor")}
-          </label>
-          <label class="check-row">
-            <input type="checkbox" bind:checked={draftSettings.overlay.hide_when_game_unfocused} />
-            <span></span>
-            {dashboard.t("settings.hideUnfocused")}
-          </label>
+          <div class="settings-group">
+            <h3>{dashboard.t("settings.overlay")}</h3>
+            <div class="studio-grid settings-two-col">
+              <div class="input-group">
+                <label for="overlayFps">{dashboard.t("settings.updateRate")}</label>
+                <input id="overlayFps" type="number" min="1" max="120" bind:value={draftSettings.overlay.update_rate_fps} />
+              </div>
 
-          <div class="card-actions">
+              {#if draftSettings.overlay.use_monitor_size}
+                <div class="input-group">
+                  <label for="overlayMonitor">{dashboard.t("settings.overlayMonitor")}</label>
+                  <select id="overlayMonitor" bind:value={draftSettings.overlay.monitor_id}>
+                    <option value="">{dashboard.t("settings.currentPrimary")}</option>
+                    {#each dashboard.overlayMonitors as monitor}
+                      <option value={monitor.id}>
+                        {monitor.name} · {monitor.width}x{monitor.height}{monitor.primary ? " · primary" : ""}{monitor.current ? " · current" : ""}
+                      </option>
+                    {/each}
+                  </select>
+                </div>
+              {:else}
+                <div class="input-group">
+                  <span class="field-label">{dashboard.t("settings.overlaySize")}</span>
+                  <div class="form-row">
+                    <input type="number" min="1" bind:value={draftSettings.overlay.screen_width} aria-label="Overlay width" />
+                    <input type="number" min="1" bind:value={draftSettings.overlay.screen_height} aria-label="Overlay height" />
+                  </div>
+                </div>
+              {/if}
+            </div>
+
+            <div class="settings-check-grid">
+              <label class="check-row">
+                <input type="checkbox" bind:checked={draftSettings.overlay.use_monitor_size} />
+                <span></span>
+                {dashboard.t("settings.useFullMonitor")}
+              </label>
+              <label class="check-row">
+                <input type="checkbox" bind:checked={draftSettings.overlay.hide_when_game_unfocused} />
+                <span></span>
+                {dashboard.t("settings.hideUnfocused")}
+              </label>
+            </div>
+          </div>
+
+          <div class="card-actions settings-actions">
             <button class="btn-secondary" onclick={cancelDraftSettings} disabled={dashboard.busy || !settingsDirty}>
               {dashboard.t("common.cancel")}
             </button>
@@ -287,19 +233,43 @@
       {:else}
         <div class="panel-heading">
           <div>
-            <h2>{dashboard.t("settings.about")}</h2>
-            <p>{dashboard.t("settings.aboutDesc")}</p>
+            <h2>{dashboard.t("settings.advanced")}</h2>
           </div>
         </div>
 
-        <div class="package-detail-summary">
-          <div class="package-detail-stat">
-            <strong>{dashboard.runtimeInfo?.runtimeApiVersion ?? "n/a"}</strong>
-            <span>{dashboard.t("developer.runtimeApiVersion")}</span>
+        <div class="section-stack compact-settings-stack">
+          <div class="settings-group">
+            <h3>{dashboard.t("settings.security")}</h3>
+            <div class="input-group">
+              <label for="runtimeIsolation">{dashboard.t("settings.runtimeIsolation")}</label>
+              <select id="runtimeIsolation" bind:value={draftSettings.security.plugin_runtime_isolation}>
+                <option value="package">{dashboard.t("settings.runtimeIsolationPackage")}</option>
+                <option value="export">{dashboard.t("settings.runtimeIsolationExport")}</option>
+              </select>
+            </div>
+
+            <label class="check-row">
+              <input type="checkbox" bind:checked={draftSettings.security.require_trusted_remote_packages} />
+              <span></span>
+              {dashboard.t("settings.requireTrustedRemotePackages")}
+            </label>
           </div>
-          <div class="package-detail-stat">
-            <strong>{dashboard.runtimeInfo?.supportedRuntimeApi ?? "n/a"}</strong>
-            <span>{dashboard.t("developer.runtimeApiRange")}</span>
+
+          <div class="settings-group">
+            <h3>{dashboard.t("settings.about")}</h3>
+            <div class="runtime-api-line">
+              <span>{dashboard.t("developer.runtimeApiVersion")}</span>
+              <strong>{dashboard.runtimeInfo?.runtimeApiVersion ?? "n/a"}</strong>
+            </div>
+          </div>
+
+          <div class="card-actions settings-actions">
+            <button class="btn-secondary" onclick={cancelDraftSettings} disabled={dashboard.busy || !settingsDirty}>
+              {dashboard.t("common.cancel")}
+            </button>
+            <button class="btn-primary" onclick={() => void saveDraftSettings()} disabled={dashboard.busy || !settingsDirty}>
+              {dashboard.t("common.saveSettings")}
+            </button>
           </div>
         </div>
       {/if}

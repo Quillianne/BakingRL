@@ -109,7 +109,6 @@
 <div class="page-title">
   <div>
     <h1>{dashboard.t("packages.installedTitle")}</h1>
-    <p>{dashboard.t("packages.installDesc")}</p>
   </div>
   <button class="btn-secondary" onclick={() => void dashboard.reloadPackages()} disabled={dashboard.busy}>
     <svg class="reload-icon" class:spinning={dashboard.packagesReloading} viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
@@ -127,7 +126,11 @@
     {#if dashboard.packages.length}
       <div class="card-grid">
         {#each dashboard.packages as pkg (pkg.id)}
-          <article class="studio-card package-card" class:disabled={!dashboard.isPackageEnabled(pkg)}>
+          <article
+            class="studio-card package-card"
+            class:disabled={!dashboard.isPackageEnabled(pkg)}
+            title={`${dashboard.permissionTotal(pkg.effective_permissions)} ${dashboard.t("common.permissions")} · ${dashboard.exportCount(pkg)} ${dashboard.t("packages.elements")}`}
+          >
             <div class="package-card-tools">
               {#if pkg.exports.configuration || (pkg.settings && pkg.has_public_settings)}
                 <button
@@ -181,20 +184,10 @@
                 </div>
                 <p>{dashboard.t("packages.by")} {pkg.author ?? dashboard.t("packages.unknownAuthor")} · v{pkg.version}</p>
               </div>
-            </div>
-
-            <div class="package-card-summary">
-              <div class="package-summary-item">
-                <span class="package-summary-label">{dashboard.t("common.state")}</span>
-                <span class="status-pill {dashboard.packageDisplayStateClass(pkg)}" title={dashboard.packageDisplayStateTitle(pkg)}>
-                  <span class="status-dot"></span>
-                  {dashboard.packageDisplayStateLabel(pkg)}
-                </span>
-              </div>
-              <div class="package-summary-item">
-                <span class="package-summary-label">{dashboard.t("common.permissions")}</span>
-                <strong>{dashboard.permissionTotal(pkg.effective_permissions)}</strong>
-              </div>
+              <span class="status-pill {dashboard.packageDisplayStateClass(pkg)}" title={dashboard.packageDisplayStateTitle(pkg)}>
+                <span class="status-dot"></span>
+                {dashboard.packageDisplayStateLabel(pkg)}
+              </span>
             </div>
 
             {#if pkg.error}
@@ -230,7 +223,6 @@
     <div class="panel-heading">
       <div>
         <h2>{dashboard.t("packages.installTitle")}</h2>
-        <p>{dashboard.t("packages.installDesc")}</p>
       </div>
     </div>
 

@@ -50,7 +50,6 @@
 <div class="studio-shell">
   <aside class="studio-rail" aria-label="BakingRL">
     <div class="rail-brand" aria-label="BakingRL">
-      <span class="brand-mark">B</span>
       <div>
         <h1>BakingRL</h1>
         <p>Your RL Companion</p>
@@ -136,7 +135,7 @@
     </section>
   </aside>
 
-  <main class="studio-main">
+  <main class="studio-main" class:developer-main={$page.url.pathname.startsWith("/developer")}>
     <div class="studio-content">
       {@render children()}
     </div>

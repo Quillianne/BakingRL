@@ -27,37 +27,33 @@
 
     <div class="card-grid home-card-grid">
       {#each mainLayouts as entry}
-        <article class="thumb-card home-thumb-card">
-          <div class="thumb-preview" aria-hidden="true" style={entry.layout ? `--layout-width: ${entry.layout.width};` : ""}>
+        <article
+          class="thumb-card home-thumb-card home-click-card {entry.kind === 'stream' ? 'role-stream' : 'role-route'}"
+          title={entry.layout ? `${entry.label} · ${entry.layout.width}x${entry.layout.height}` : entry.label}
+        >
+          <div class="preview-click-zone home-preview-zone">
+            <div
+              class="thumb-preview"
+              aria-hidden="true"
+              style={entry.layout ? `--layout-width: ${entry.layout.width};` : ""}
+              data-action-label={entry.layout ? state.t("common.edit") : ""}
+            >
+              {#if entry.layout}
+                <LayoutThumbnail thumbnail={entry.layout.thumbnail} layout={entry.layout} kind="overlay" themeKey={state.currentTheme} />
+              {/if}
+            </div>
             {#if entry.layout}
-              <LayoutThumbnail thumbnail={entry.layout.thumbnail} name={entry.layout.name} />
+              <button
+                type="button"
+                class="preview-hit-target"
+                aria-label={`${state.t("common.edit")} ${entry.layout?.name ?? ""}`}
+                onclick={() => entry.layout && void state.openLayoutEditor(entry.layout.id)}
+              ></button>
             {/if}
           </div>
           <div class="thumb-copy">
             <div class="thumb-title-row">
               <span class="thumb-title">{entry.layout?.name ?? state.t("home.noLayout")}</span>
-              <span class="badge {entry.kind === 'stream' ? 'stream' : 'route'}">{entry.label}</span>
-            </div>
-            <div class="card-actions">
-              <button
-                class="btn-secondary home-main-action"
-                onclick={() => entry.layout && void state.openPreview(entry.kind === "stream" ? state.streamUrl() : state.layoutUrl(entry.layout.id))}
-                disabled={!entry.layout || !state.obsBaseUrl}
-              >
-                {state.t("common.preview")}
-              </button>
-              <button
-                class="icon-button home-edit-action"
-                onclick={() => entry.layout && void state.openLayoutEditor(entry.layout.id)}
-                disabled={!entry.layout}
-                title={state.t("common.edit")}
-                aria-label={state.t("common.edit")}
-              >
-                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M12 20h9"></path>
-                  <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"></path>
-                </svg>
-              </button>
             </div>
           </div>
         </article>
@@ -75,28 +71,23 @@
     {#if state.favoritePages.length}
       <div class="card-grid home-card-grid">
         {#each state.favoritePages as page (page.id)}
-          <article class="thumb-card home-thumb-card">
-            <div class="thumb-preview" aria-hidden="true" style={`--layout-width: ${page.width};`}>
-              <LayoutThumbnail thumbnail={page.thumbnail} name={page.name} />
+          <article
+            class="thumb-card home-thumb-card home-click-card"
+            title={`${page.width}x${page.height}`}
+          >
+            <div class="preview-click-zone home-preview-zone">
+              <div class="thumb-preview" aria-hidden="true" style={`--layout-width: ${page.width};`} data-action-label={state.t("common.open")}>
+                <LayoutThumbnail thumbnail={page.thumbnail} layout={page} kind="page" themeKey={state.currentTheme} />
+              </div>
+              <button
+                type="button"
+                class="preview-hit-target"
+                aria-label={`${state.t("common.open")} ${page.name}`}
+                onclick={() => void state.openPage(page.id)}
+              ></button>
             </div>
             <div class="thumb-copy">
               <span class="thumb-title">{page.name}</span>
-              <div class="card-actions">
-                <button class="btn-primary home-main-action" onclick={() => void state.openPage(page.id)}>
-                  {state.t("common.open")}
-                </button>
-                <button
-                  class="icon-button home-edit-action"
-                  onclick={() => void state.openPageEditor(page.id)}
-                  title={state.t("common.edit")}
-                  aria-label={state.t("common.edit")}
-                >
-                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M12 20h9"></path>
-                    <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"></path>
-                  </svg>
-                </button>
-              </div>
             </div>
           </article>
         {/each}

@@ -1,17 +1,27 @@
 <script lang="ts">
+  import { createLayoutThumbnail, type ThumbnailLayout } from "$lib/layoutThumbnail";
+
   const {
     thumbnail = null,
-    name = ""
+    layout = null,
+    kind = "overlay",
+    themeKey = ""
   }: {
     thumbnail?: string | null;
-    name?: string;
+    layout?: ThumbnailLayout | null;
+    kind?: "overlay" | "page";
+    themeKey?: string;
   } = $props();
+
+  const source = $derived(layout ? thumbnailForTheme(layout, kind, themeKey) : thumbnail);
+
+  function thumbnailForTheme(layout: ThumbnailLayout, kind: "overlay" | "page", _themeKey: string) {
+    return createLayoutThumbnail(layout, { kind });
+  }
 </script>
 
-{#if thumbnail}
-  <img class="thumb-image" src={thumbnail} alt="" draggable="false" />
+{#if source}
+  <img class="thumb-image" src={source} alt="" draggable="false" />
 {:else}
-  <div class="thumb-placeholder">
-    <span>{name}</span>
-  </div>
+  <div class="thumb-placeholder"></div>
 {/if}
