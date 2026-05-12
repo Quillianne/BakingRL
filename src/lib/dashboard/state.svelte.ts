@@ -29,6 +29,8 @@ import type {
   DeveloperTelemetryEntry,
   DeveloperTelemetryGroup,
   DeveloperTelemetrySort,
+  MarketplaceCatalog,
+  MarketplaceCatalogPackage,
   OverlayLayout,
   OverlayLayoutCatalog,
   OverlayMonitor,
@@ -91,6 +93,8 @@ export class DashboardState {
   packages = $state<PackageDescriptor[]>([]);
   overlayLayouts = $state<OverlayLayoutCatalog | null>(null);
   pages = $state<PagesFile | null>(null);
+  marketplace = $state<MarketplaceCatalog | null>(null);
+  marketplaceLoading = $state(false);
   appSettings = $state<AppSettings | null>(null);
   bundlePath = $state("");
   bundleUrl = $state("");
@@ -361,6 +365,37 @@ export class DashboardState {
         await new Promise((resolve) => setTimeout(resolve, remainingMs));
       }
       this.packagesReloading = false;
+      this.busy = false;
+    }
+  }
+
+  async loadMarketplace({ refresh = false } = {}) {
+    this.marketplaceLoading = true;
+    try {
+      this.marketplace = await invoke<MarketplaceCatalog>(refresh ? "refresh_marketplace" : "get_marketplace_catalog");
+    } catch (error) {
+      this.notifyError(error);
+    } finally {
+      this.marketplaceLoading = false;
+    }
+  }
+
+  async installMarketplacePackage(pkg: MarketplaceCatalogPackage, version = pkg.approvedVersions[0]?.version) {
+    if (!version) return;
+    this.busy = true;
+    try {
+      const prepared = await invoke<PreparedPackageInstall>("prepare_marketplace_package", {
+        packageId: pkg.id,
+        version
+      });
+      await this.setPendingInstall({
+        kind: "marketplace",
+        label: `${pkg.listing?.displayName ?? pkg.id} v${version}`,
+        ...prepared
+      });
+    } catch (error) {
+      this.notifyError(error);
+    } finally {
       this.busy = false;
     }
   }
@@ -651,7 +686,7 @@ export class DashboardState {
         this.bundlePath = "";
       } else if (sourceKind === "url") {
         this.bundleUrl = "";
-      } else {
+      } else if (sourceKind === "git") {
         this.gitRepo = "";
         this.gitRev = "";
       }
@@ -661,7 +696,9 @@ export class DashboardState {
           ? this.t("msg.installedFile")
           : sourceKind === "url"
             ? this.t("msg.installedUrl")
-            : this.t("msg.installedGit"),
+            : sourceKind === "git"
+              ? this.t("msg.installedGit")
+              : this.t("msg.installedMarketplace"),
         "success"
       );
     } catch (error) {

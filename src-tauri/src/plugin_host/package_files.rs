@@ -174,5 +174,8 @@ pub(super) fn format_command_error(command: &str, stderr: &[u8]) -> String {
 }
 
 pub(super) fn is_remote_package_source(source: &str) -> bool {
-    source.starts_with("url:") || source.starts_with("deeplink:") || source.starts_with("git:")
+    source.starts_with("url:")
+        || source.starts_with("deeplink:")
+        || source.starts_with("git:")
+        || source.starts_with("marketplace:")
 }

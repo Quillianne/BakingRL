@@ -205,8 +205,64 @@ export type PreparedPackageInstall = {
 };
 
 export type PendingInstall = PreparedPackageInstall & {
-  kind: "file" | "url" | "git";
+  kind: "file" | "url" | "git" | "marketplace";
   label: string;
+};
+
+export type MarketplaceListing = {
+  schema: string;
+  packageId: string;
+  displayName: string;
+  shortDescription: string;
+  longDescription: string;
+  tags: string[];
+  repo: string;
+  iconUrl: string | null;
+  bannerUrl: string | null;
+  screenshots: {
+    url: string;
+    alt: string | null;
+    caption: string | null;
+  }[];
+  links: {
+    docs?: string | null;
+    support?: string | null;
+    homepage?: string | null;
+  };
+};
+
+export type MarketplaceApprovedVersion = {
+  version: string;
+  bundleUrl: string;
+  bundleSha256: string;
+  signaturePublicKey: string;
+  runtimeApi: string | null;
+  revoked?: boolean;
+  review: {
+    status: string;
+    reviewedAt: string;
+    permissions: PermissionShape;
+  };
+};
+
+export type MarketplaceCatalogPackage = {
+  id: string;
+  developerId: string;
+  developerName: string | null;
+  repo: string;
+  listingUrl: string;
+  listing: MarketplaceListing | null;
+  listingError: string | null;
+  approvedVersions: MarketplaceApprovedVersion[];
+};
+
+export type MarketplaceCatalog = {
+  generatedAt: string;
+  sections: {
+    recommended: string[];
+    new: string[];
+  };
+  packages: MarketplaceCatalogPackage[];
 };
 
 export type ConfirmRequest = {
