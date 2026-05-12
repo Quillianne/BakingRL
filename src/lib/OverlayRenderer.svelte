@@ -217,17 +217,12 @@
   let observedPackageRevision: number | null = null;
   let previewScale = $state(1);
 
-  const persistedActiveOverlay = $derived.by(() => {
-    const selectedLayoutId = layoutId ?? (layoutType === "ingame" ? overlayLayouts?.active_layout_id : overlayLayouts?.stream_layout_id);
-    return overlayLayouts?.layouts.find((layout) => layout.id === selectedLayoutId) ?? null;
-  });
-  const persistedActivePage = $derived.by(() => {
-    if (!layoutId) return null;
-    return pages?.pages.find((page) => page.id === layoutId) ?? null;
-  });
+  const persistedActiveOverlay = $derived.by(() => selectedOverlayLayout(overlayLayouts));
+  const persistedActivePage = $derived.by(() => selectedPageLayout(pages));
   const activeLayout = $derived.by((): LayoutModel | null => {
     return layoutOverride ?? (source === "page" ? persistedActivePage : persistedActiveOverlay);
   });
+  const activeLayoutSyncKey = $derived.by(() => layoutSyncKey(activeLayout));
 
   const eventLayerActive = $derived(eventActiveItems.size > 0);
   const hostStyle = $derived.by(() => {
@@ -267,6 +262,7 @@
 
   $effect(() => {
     layoutRevision;
+    activeLayoutSyncKey;
     if (activeLayout) {
       void syncMountedItems(activeLayout);
     }
@@ -318,6 +314,50 @@
     return layoutLayers(layout).flatMap((layer) => layer.items.map((item) => ({ layer, item })));
   }
 
+  function selectedOverlayLayout(catalog: OverlayLayoutCatalog | null) {
+    if (!catalog) return null;
+    const selectedLayoutId = layoutId ?? (layoutType === "ingame" ? catalog.active_layout_id : catalog.stream_layout_id);
+    return catalog.layouts.find((layout) => layout.id === selectedLayoutId) ?? null;
+  }
+
+  function selectedPageLayout(file: PagesFile | null) {
+    if (!file || !layoutId) return null;
+    return file.pages.find((page) => page.id === layoutId) ?? null;
+  }
+
+  function layoutSyncKey(layout: LayoutModel | null) {
+    if (!layout) return "";
+    return JSON.stringify({
+      id: layout.id,
+      width: layout.width,
+      height: layout.height,
+      background: layout.background ?? null,
+      layers: layoutLayers(layout).map((layer) => ({
+        id: layer.id,
+        kind: layer.kind,
+        visible: layer.visible,
+        locked: layer.locked,
+        order: layer.order,
+        items: layer.items.map((item) => ({
+          id: item.id,
+          kind: itemKind(item),
+          package_id: item.package_id ?? null,
+          export_name: item.export_name ?? null,
+          name: item.name,
+          x: item.x,
+          y: item.y,
+          width: item.width,
+          height: item.height,
+          z_index: item.z_index,
+          visible: item.visible,
+          locked: item.locked,
+          opacity: item.opacity,
+          settings: settingsObject(item)
+        }))
+      }))
+    });
+  }
+
   function subscribe(callback: (event: unknown) => void) {
     telemetrySubscribers.add(callback);
     if (latestEvent) callback(latestEvent);
@@ -357,8 +397,12 @@
     root.style.zIndex = String(layer.kind === "event" ? 100_000 + item.z_index : item.z_index);
     root.style.opacity = String(item.opacity ?? 1);
     root.style.display = itemVisible(layer, item) ? "block" : "none";
-    root.style.overflow = "visible";
+    root.style.overflow = "hidden";
     root.style.pointerEvents = mode === "editor" ? "none" : "auto";
+    root.style.setProperty("--bakingrl-item-width", `${item.width}px`);
+    root.style.setProperty("--bakingrl-item-height", `${item.height}px`);
+    root.style.setProperty("--bakingrl-layout-width", `${layout.width}px`);
+    root.style.setProperty("--bakingrl-layout-height", `${layout.height}px`);
   }
 
   function itemRoot(itemId: string) {
@@ -761,12 +805,17 @@
       adapter.configureGateway(settings.obs.host, settings.obs.port, settings.obs.access_token);
     }
     packages = await adapter.invoke<PackageDescriptor[]>("list_packages");
+    let nextLayout: LayoutModel | null = layoutOverride;
     if (source === "page") {
-      pages = await adapter.invoke<PagesFile>("get_pages");
+      const nextPages = await adapter.invoke<PagesFile>("get_pages");
+      pages = nextPages;
+      nextLayout = nextLayout ?? selectedPageLayout(nextPages);
     } else {
-      overlayLayouts = await adapter.invoke<OverlayLayoutCatalog>("get_overlay_layouts");
+      const nextCatalog = await adapter.invoke<OverlayLayoutCatalog>("get_overlay_layouts");
+      overlayLayouts = nextCatalog;
+      nextLayout = nextLayout ?? (source === "overlay" ? selectedOverlayLayout(nextCatalog) : activeLayout);
     }
-    if (activeLayout) await syncMountedItems(activeLayout);
+    if (nextLayout) await syncMountedItems(nextLayout);
   }
 
   onMount(() => {
@@ -789,11 +838,19 @@
     });
     void adapter.listen<OverlayLayoutCatalog>("bakingrl-overlay-layouts-changed", (event) => {
       overlayLayouts = event;
+      if (source === "overlay" && !layoutOverride) {
+        const nextLayout = selectedOverlayLayout(event);
+        if (nextLayout) void syncMountedItems(nextLayout);
+      }
     }).then((unlisten) => {
       unlistenOverlays = unlisten;
     });
     void adapter.listen<PagesFile>("bakingrl-pages-changed", (event) => {
       pages = event;
+      if (source === "page" && !layoutOverride) {
+        const nextLayout = selectedPageLayout(event);
+        if (nextLayout) void syncMountedItems(nextLayout);
+      }
     }).then((unlisten) => {
       unlistenPages = unlisten;
     });
@@ -837,3 +894,17 @@
   bind:this={host}
   aria-label="Visual export host"
 ></main>
+
+<style>
+  .overlay-renderer-host :global(.visual-export),
+  .overlay-renderer-host :global(.native-export) {
+    box-sizing: border-box;
+    contain: layout paint;
+    container-type: size;
+  }
+
+  .overlay-renderer-host.editor :global(.visual-export),
+  .overlay-renderer-host.editor :global(.native-export) {
+    user-select: none;
+  }
+</style>

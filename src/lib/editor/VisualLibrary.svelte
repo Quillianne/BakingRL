@@ -7,7 +7,21 @@
     };
     visual: {
       name: string;
+      default_width?: number;
+      default_height?: number;
+      settings?: string | null;
     };
+  };
+  type PointerVisualDragState = {
+    ref: string;
+    name: string;
+    packageName: string;
+    pointerId: number;
+    startX: number;
+    startY: number;
+    currentX: number;
+    currentY: number;
+    dragging: boolean;
   };
 
   let {
@@ -15,22 +29,116 @@
     search = $bindable(""),
     searchPlaceholder = "Search visuals...",
     emptyLabel = "No visuals available.",
-    onadd
+    onadd,
+    onplace
   }: {
     entries: VisualLibraryEntry[];
     search?: string;
     searchPlaceholder?: string;
     emptyLabel?: string;
     onadd: (ref: string) => void;
+    onplace?: (ref: string, event: PointerEvent) => void;
   } = $props();
 
-  const filteredEntries = $derived(
-    entries.filter((entry) => {
-      const needle = search.trim().toLowerCase();
+  let pointerDrag = $state<PointerVisualDragState | null>(null);
+  let suppressClick = $state(false);
+
+  const filteredEntries = $derived.by(() => {
+    const needle = search.trim().toLowerCase();
+    return entries.filter((entry) => {
       if (!needle) return true;
       return `${entry.package.name} ${entry.package.id} ${entry.visual.name}`.toLowerCase().includes(needle);
-    })
-  );
+    });
+  });
+
+  const groupedEntries = $derived.by(() => {
+    const groups = new Map<string, { package: VisualLibraryEntry["package"]; entries: VisualLibraryEntry[] }>();
+    for (const entry of filteredEntries) {
+      const group = groups.get(entry.package.id);
+      if (group) {
+        group.entries.push(entry);
+      } else {
+        groups.set(entry.package.id, { package: entry.package, entries: [entry] });
+      }
+    }
+    return [...groups.values()].sort((a, b) => a.package.name.localeCompare(b.package.name));
+  });
+  const dragPreview = $derived(pointerDrag?.dragging === true ? pointerDrag : null);
+
+  function visualMeta(entry: VisualLibraryEntry) {
+    const width = Math.round(Number(entry.visual.default_width) || 0);
+    const height = Math.round(Number(entry.visual.default_height) || 0);
+    return width > 0 && height > 0 ? `${width}x${height}` : entry.package.id;
+  }
+
+  function clearPointerDrag(event?: PointerEvent) {
+    if (event?.currentTarget instanceof HTMLElement && event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    pointerDrag = null;
+  }
+
+  function startVisualPointerDrag(event: PointerEvent, entry: VisualLibraryEntry) {
+    if (event.button !== 0) return;
+    event.stopPropagation();
+    if (event.currentTarget instanceof HTMLElement) {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    }
+    pointerDrag = {
+      ref: entry.ref,
+      name: entry.visual.name,
+      packageName: entry.package.name,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      currentX: event.clientX,
+      currentY: event.clientY,
+      dragging: false
+    };
+  }
+
+  function moveVisualPointerDrag(event: PointerEvent) {
+    if (!pointerDrag || pointerDrag.pointerId !== event.pointerId) return;
+    if (event.buttons === 0) {
+      clearPointerDrag(event);
+      return;
+    }
+    const distance = Math.hypot(event.clientX - pointerDrag.startX, event.clientY - pointerDrag.startY);
+    if (!pointerDrag.dragging && distance < 4) {
+      pointerDrag = { ...pointerDrag, currentX: event.clientX, currentY: event.clientY };
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    pointerDrag = { ...pointerDrag, currentX: event.clientX, currentY: event.clientY, dragging: true };
+  }
+
+  function endVisualPointerDrag(event: PointerEvent) {
+    if (!pointerDrag || pointerDrag.pointerId !== event.pointerId) return;
+    const state = pointerDrag;
+    clearPointerDrag(event);
+    if (!state.dragging) return;
+    event.preventDefault();
+    event.stopPropagation();
+    suppressClick = true;
+    onplace?.(state.ref, event);
+    setTimeout(() => {
+      suppressClick = false;
+    }, 0);
+  }
+
+  function clickVisual(event: MouseEvent, entry: VisualLibraryEntry) {
+    if (suppressClick) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    onadd(entry.ref);
+  }
+
+  function dragPreviewStyle(x: number, y: number) {
+    return `left:${x}px;top:${y}px;`;
+  }
 </script>
 
 <div class="visual-library">
@@ -44,28 +152,59 @@
 
   {#if filteredEntries.length}
     <div class="visual-list">
-      {#each filteredEntries as entry (entry.ref)}
-        <button class="visual-list-item" onclick={() => onadd(entry.ref)}>
-          <span class="item-icon">
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-            </svg>
-          </span>
-          <span class="item-text">
-            <span class="title">{entry.visual.name}</span>
-            <span class="sub">{entry.package.name}</span>
-          </span>
-          <svg class="add-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="12" y1="5" x2="12" y2="19"></line>
-            <line x1="5" y1="12" x2="19" y2="12"></line>
-          </svg>
-        </button>
+      {#each groupedEntries as group (group.package.id)}
+        <section class="visual-group" aria-label={group.package.name}>
+          <header class="group-title">
+            <span>{group.package.name}</span>
+            <small>{group.entries.length}</small>
+          </header>
+          {#each group.entries as entry (entry.ref)}
+            <button
+              class="visual-list-item"
+              class:dragging={dragPreview?.ref === entry.ref}
+              onpointerdown={(event) => startVisualPointerDrag(event, entry)}
+              onpointermove={moveVisualPointerDrag}
+              onpointerup={endVisualPointerDrag}
+              onpointercancel={clearPointerDrag}
+              onclick={(event) => clickVisual(event, entry)}
+              title={`${entry.visual.name} - ${entry.package.name}`}
+            >
+              <span class="item-icon">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                </svg>
+              </span>
+              <span class="item-text">
+                <span class="title">{entry.visual.name}</span>
+                <span class="sub">{visualMeta(entry)}</span>
+              </span>
+              <svg class="add-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="12" y1="5" x2="12" y2="19"></line>
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+              </svg>
+            </button>
+          {/each}
+        </section>
       {/each}
     </div>
   {:else}
     <p class="visual-empty">{emptyLabel}</p>
   {/if}
 </div>
+
+{#if dragPreview}
+  <div class="visual-drag-preview" style={dragPreviewStyle(dragPreview.currentX, dragPreview.currentY)} aria-hidden="true">
+    <span class="item-icon">
+      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+      </svg>
+    </span>
+    <span class="item-text">
+      <span class="title">{dragPreview.name}</span>
+      <span class="sub">{dragPreview.packageName}</span>
+    </span>
+  </div>
+{/if}
 
 <style>
   .visual-library {
@@ -106,7 +245,38 @@
     display: flex;
     min-height: 0;
     flex-direction: column;
+    gap: 10px;
+  }
+
+  .visual-group {
+    display: flex;
+    flex-direction: column;
     gap: 4px;
+  }
+
+  .group-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    color: var(--text-muted);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .group-title span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .group-title small {
+    flex: none;
+    font: inherit;
+    opacity: 0.7;
   }
 
   .visual-list-item {
@@ -122,11 +292,38 @@
     text-align: left;
     cursor: pointer;
     transition: var(--transition);
+    touch-action: none;
+  }
+
+  .visual-list-item:active {
+    cursor: grabbing;
   }
 
   .visual-list-item:hover {
     border-color: var(--border-color-focus);
     background: var(--editor-bg-panel-hover);
+  }
+
+  .visual-list-item.dragging {
+    opacity: 0.5;
+  }
+
+  .visual-drag-preview {
+    position: fixed;
+    z-index: 100000;
+    display: flex;
+    width: min(240px, calc(100vw - 32px));
+    min-height: 38px;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border-color));
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--bg-panel) 94%, var(--accent));
+    box-shadow: 0 12px 28px rgb(0 0 0 / 0.34);
+    color: var(--text-primary);
+    pointer-events: none;
+    transform: translate(12px, 10px) rotate(1deg);
   }
 
   .item-icon {

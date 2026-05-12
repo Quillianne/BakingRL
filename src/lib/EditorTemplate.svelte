@@ -27,6 +27,8 @@
     onPointerMove,
     onPointerUp,
     onStagePointerDown,
+    onKeyDown,
+    onStageDrop,
     onClose,
     stageContent,
     leftPanel,
@@ -47,7 +49,9 @@
     stageWrap?: HTMLElement;
     onPointerMove: (event: PointerEvent) => void;
     onPointerUp: (event: PointerEvent) => void;
-    onStagePointerDown: (event: PointerEvent) => void;
+    onStagePointerDown: (event: PointerEvent, detail?: { spacePressed: boolean }) => void;
+    onKeyDown?: (event: KeyboardEvent) => void;
+    onStageDrop?: (event: DragEvent) => void;
     onClose: () => void | Promise<void>;
     stageContent: Snippet;
     leftPanel: Snippet;
@@ -56,6 +60,7 @@
   } = $props();
 
   let appliedCenterKey = $state("");
+  let spacePressed = $state(false);
 
   const stageStyle = $derived(
     `width:${canvas.width}px;height:${canvas.height}px;transform:translate(${panX}px, ${panY}px) scale(${zoom});`
@@ -136,22 +141,83 @@
     return new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
   }
 
+  function wheelDeltaPixels(event: WheelEvent) {
+    if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) return event.deltaY * 16;
+    if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) return event.deltaY * window.innerHeight;
+    return event.deltaY;
+  }
+
+  function clampedWheelZoomDelta(event: WheelEvent) {
+    const delta = wheelDeltaPixels(event);
+    return Math.max(-50, Math.min(50, delta)) * 0.0008;
+  }
+
   function handleWheel(event: WheelEvent) {
     event.preventDefault();
-    setZoom(zoom + (event.deltaY > 0 ? -0.05 : 0.05));
+    if (event.metaKey || event.ctrlKey) {
+      setZoom(zoom - clampedWheelZoomDelta(event));
+      return;
+    }
+    panX -= event.deltaX;
+    panY -= event.deltaY;
+  }
+
+  function setActualSize() {
+    zoom = 1;
+    panX = 0;
+    panY = 0;
+  }
+
+  function handlePointerDown(event: PointerEvent) {
+    (event.currentTarget as HTMLElement).focus({ preventScroll: true });
+    onStagePointerDown(event, { spacePressed });
+  }
+
+  function handleKeyDown(event: KeyboardEvent) {
+    if (event.code === "Space" && event.target === stageWrap) {
+      spacePressed = true;
+      event.preventDefault();
+    }
+    onKeyDown?.(event);
+  }
+
+  function handleKeyUp(event: KeyboardEvent) {
+    if (event.code === "Space") {
+      spacePressed = false;
+      event.preventDefault();
+    }
+  }
+
+  function handleDragOver(event: DragEvent) {
+    if (!event.dataTransfer?.types.includes("application/x-bakingrl-visual")) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+  }
+
+  function handleDrop(event: DragEvent) {
+    if (!event.dataTransfer?.types.includes("application/x-bakingrl-visual")) return;
+    event.preventDefault();
+    onStageDrop?.(event);
   }
 </script>
 
+<svelte:window onkeydown={handleKeyDown} onkeyup={handleKeyUp} />
+
 <div class="editor-template" class:dragging>
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
   <section
     bind:this={stageWrap}
     class="stage-wrap"
+    class:panning={spacePressed}
     role="application"
+    tabindex="0"
     aria-label={canvasAriaLabel}
     onwheel={handleWheel}
     onpointermove={onPointerMove}
     onpointerup={onPointerUp}
-    onpointerdown={onStagePointerDown}
+    onpointerdown={handlePointerDown}
+    ondragover={handleDragOver}
+    ondrop={handleDrop}
   >
     <div class="stage" class:checkerboard bind:this={stage} style={stageStyle}>
       {@render stageContent()}
@@ -174,7 +240,8 @@
         <button class="icon-btn" onclick={() => setZoom(zoom - 0.08)} title="Zoom out">
           <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><path d="M8 11h6"></path><path d="m21 21-4.3-4.3"></path></svg>
         </button>
-        <button class="zoom-readout" onclick={resetViewport}>{Math.round(zoom * 100)}%</button>
+        <button class="zoom-readout" onclick={resetViewport} title="Fit canvas">{Math.round(zoom * 100)}%</button>
+        <button class="zoom-readout compact" onclick={setActualSize} title="100%">100%</button>
         <button class="icon-btn" onclick={() => setZoom(zoom + 0.08)} title="Zoom in">
           <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><path d="M8 11h6"></path><path d="M11 8v6"></path><path d="m21 21-4.3-4.3"></path></svg>
         </button>
@@ -225,6 +292,18 @@
       radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--text-muted) 28%, transparent) 1px, transparent 0),
       var(--editor-bg-dark);
     background-size: 24px 24px;
+  }
+
+  .stage-wrap:focus {
+    outline: none;
+  }
+
+  .stage-wrap:focus-visible {
+    box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent);
+  }
+
+  .stage-wrap.panning {
+    cursor: grab;
   }
 
   .stage {
@@ -360,6 +439,10 @@
     color: var(--text-secondary);
     font-size: 12px;
     cursor: pointer;
+  }
+
+  .zoom-readout.compact {
+    min-width: 42px;
   }
 
   .panel-content {
