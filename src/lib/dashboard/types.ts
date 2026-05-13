@@ -188,6 +188,10 @@ export type BundleInspection = {
   signature_present: boolean;
   signature_verified: boolean;
   signature_public_key: string | null;
+  verified_developer: {
+    id: string;
+    name: string;
+  } | null;
   file_count: number;
   uncompressed_size: number;
   sha256: string;
@@ -249,6 +253,7 @@ export type MarketplaceCatalogPackage = {
   id: string;
   developerId: string;
   developerName: string | null;
+  developerVerified: boolean;
   repo: string;
   listingUrl: string;
   listing: MarketplaceListing | null;

@@ -35,8 +35,9 @@ use crate::plugin_v2::manifest::PluginPackageManifestV2;
 use crate::plugin_v2::manifest::{HOST_RUNTIME_API_RANGE, HOST_RUNTIME_API_VERSION};
 use crate::plugin_v2::marketplace::{
     catalog_for_index, developer_allows_key, fetch_verified_marketplace_index,
-    find_marketplace_version, read_cached_marketplace_index, write_marketplace_cache,
-    MarketplaceApprovedVersion, MarketplaceCatalog, OFFICIAL_MARKETPLACE_URL,
+    find_marketplace_version, read_cached_marketplace_index, verified_developer_for_key,
+    write_marketplace_cache, MarketplaceApprovedVersion, MarketplaceCatalog, MarketplaceIndex,
+    OFFICIAL_MARKETPLACE_URL,
 };
 use crate::plugin_v2::permissions::EffectivePackagePermissionsV2;
 use crate::registry::Registry;
@@ -281,6 +282,7 @@ impl PluginHost {
 
     pub fn inspect_package_bundle(&self, path: String) -> Result<BundleInspection, String> {
         inspect_bundle_file(Path::new(&path))
+            .map(|inspection| self.with_verified_developer_from_cache(inspection))
     }
 
     pub fn install_package_from_file(&self, path: String) -> Result<InstallReceipt, String> {
@@ -375,7 +377,7 @@ impl PluginHost {
             return Err(format!("Unable to stage Git bundle: {err}"));
         }
         let _ = fs::remove_dir_all(&checkout_dir);
-        let inspection = match inspect_bundle_file(&download_path) {
+        let mut inspection = match inspect_bundle_file(&download_path) {
             Ok(inspection) => inspection,
             Err(err) => {
                 let _ = fs::remove_file(&download_path);
@@ -386,6 +388,7 @@ impl PluginHost {
             Some(rev) => format!("git:{repo}#{rev}"),
             None => format!("git:{repo}"),
         };
+        self.attach_verified_developer_from_cache(&mut inspection);
         Ok(PreparedPackageInstall {
             path: download_path.to_string_lossy().to_string(),
             source,
@@ -440,7 +443,7 @@ impl PluginHost {
             .downloads_dir()
             .join(format!("prepared-marketplace-{}.brlp", unique_id("bundle")));
         download_bundle_to_file(&approved_version.bundle_url, &download_path).await?;
-        let inspection = match inspect_bundle_file(&download_path) {
+        let mut inspection = match inspect_bundle_file(&download_path) {
             Ok(inspection) => inspection,
             Err(err) => {
                 let _ = fs::remove_file(&download_path);
@@ -458,6 +461,7 @@ impl PluginHost {
             let _ = fs::remove_file(&download_path);
             err
         })?;
+        self.attach_verified_developer_from_index(&mut inspection, &index);
         Ok(PreparedPackageInstall {
             path: download_path.to_string_lossy().to_string(),
             source: format!("marketplace:official:{package_id}@{version}"),
@@ -475,7 +479,7 @@ impl PluginHost {
             .downloads_dir()
             .join(format!("prepared-{}.brlp", unique_id("bundle")));
         download_bundle_to_file(&url, &download_path).await?;
-        let inspection = match inspect_bundle_file(&download_path) {
+        let mut inspection = match inspect_bundle_file(&download_path) {
             Ok(inspection) => inspection,
             Err(err) => {
                 let _ = fs::remove_file(&download_path);
@@ -488,6 +492,7 @@ impl PluginHost {
                 return Err("Downloaded bundle SHA-256 does not match deep link".to_string());
             }
         }
+        self.attach_verified_developer_from_cache(&mut inspection);
         Ok(PreparedPackageInstall {
             path: download_path.to_string_lossy().to_string(),
             source: format!("{source_kind}:{url}"),
@@ -1554,6 +1559,35 @@ impl PluginHost {
         let mut state = self.load_state();
         state.enabled.insert(package_id.to_string(), enabled);
         self.save_state(&state)
+    }
+
+    fn with_verified_developer_from_cache(
+        &self,
+        mut inspection: BundleInspection,
+    ) -> BundleInspection {
+        self.attach_verified_developer_from_cache(&mut inspection);
+        inspection
+    }
+
+    fn attach_verified_developer_from_cache(&self, inspection: &mut BundleInspection) {
+        let Ok(index) = read_cached_marketplace_index(&self.marketplace_cache_path) else {
+            return;
+        };
+        self.attach_verified_developer_from_index(inspection, &index);
+    }
+
+    fn attach_verified_developer_from_index(
+        &self,
+        inspection: &mut BundleInspection,
+        index: &MarketplaceIndex,
+    ) {
+        if !inspection.signature_verified {
+            return;
+        }
+        let Some(public_key) = inspection.signature_public_key.as_deref() else {
+            return;
+        };
+        inspection.verified_developer = verified_developer_for_key(index, public_key);
     }
 
     fn load_app_settings(&self) -> AppSettings {

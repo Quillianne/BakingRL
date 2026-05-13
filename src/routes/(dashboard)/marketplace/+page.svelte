@@ -2,7 +2,10 @@
   import { onMount } from "svelte";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { getDashboardContext } from "$lib/dashboard/context";
-  import type { MarketplaceCatalogPackage } from "$lib/dashboard/types";
+  import type {
+    MarketplaceApprovedVersion,
+    MarketplaceCatalogPackage
+  } from "$lib/dashboard/types";
 
   const dashboard = getDashboardContext();
 
@@ -35,8 +38,102 @@
     return pkg.listing?.shortDescription ?? dashboard.t("marketplace.noListing");
   }
 
+  function parseVersion(value: string) {
+    const normalized = value.trim().replace(/^v/i, "").split("+", 1)[0];
+    const [core, prerelease = ""] = normalized.split("-", 2);
+    const parts = core.split(".");
+    if (parts.length < 1 || parts.length > 3 || parts.some((part) => !/^\d+$/.test(part))) {
+      return null;
+    }
+    const numbers = parts.map((part) => Number(part));
+    while (numbers.length < 3) numbers.push(0);
+    return {
+      numbers,
+      prerelease: prerelease ? prerelease.split(".") : []
+    };
+  }
+
+  function comparePrerelease(left: string[], right: string[]) {
+    if (!left.length && !right.length) return 0;
+    if (!left.length) return 1;
+    if (!right.length) return -1;
+
+    const length = Math.max(left.length, right.length);
+    for (let index = 0; index < length; index += 1) {
+      const leftPart = left[index];
+      const rightPart = right[index];
+      if (leftPart === undefined) return -1;
+      if (rightPart === undefined) return 1;
+      if (leftPart === rightPart) continue;
+
+      const leftNumeric = /^\d+$/.test(leftPart);
+      const rightNumeric = /^\d+$/.test(rightPart);
+      if (leftNumeric && rightNumeric) return Number(leftPart) - Number(rightPart);
+      if (leftNumeric) return -1;
+      if (rightNumeric) return 1;
+      return leftPart.localeCompare(rightPart);
+    }
+
+    return 0;
+  }
+
+  function compareVersions(left: string, right: string) {
+    const parsedLeft = parseVersion(left);
+    const parsedRight = parseVersion(right);
+    if (!parsedLeft || !parsedRight) return left === right ? 0 : -1;
+
+    for (let index = 0; index < 3; index += 1) {
+      const difference = parsedLeft.numbers[index] - parsedRight.numbers[index];
+      if (difference !== 0) return difference;
+    }
+
+    return comparePrerelease(parsedLeft.prerelease, parsedRight.prerelease);
+  }
+
   function approvedVersion(pkg: MarketplaceCatalogPackage) {
-    return pkg.approvedVersions.find((version) => !version.revoked && version.review.status === "approved") ?? null;
+    return pkg.approvedVersions
+      .filter((version) => !version.revoked && version.review.status === "approved")
+      .reduce<MarketplaceApprovedVersion | null>(
+        (latest, version) => (!latest || compareVersions(version.version, latest.version) > 0 ? version : latest),
+        null
+      );
+  }
+
+  function installedPackage(pkg: MarketplaceCatalogPackage) {
+    return dashboard.packages.find((installed) => installed.id === pkg.id) ?? null;
+  }
+
+  function installState(pkg: MarketplaceCatalogPackage) {
+    const installed = installedPackage(pkg);
+    const latest = approvedVersion(pkg);
+    if (!installed) return { kind: "available" as const, installed, latest };
+    if (latest && compareVersions(installed.version, latest.version) < 0) {
+      return { kind: "update" as const, installed, latest };
+    }
+    return { kind: "installed" as const, installed, latest };
+  }
+
+  function installStateLabel(state: ReturnType<typeof installState>) {
+    if (state.kind === "update") return dashboard.t("marketplace.updateAvailable");
+    if (state.kind === "installed") return dashboard.t("marketplace.installed");
+    return "";
+  }
+
+  function installButtonLabel(state: ReturnType<typeof installState>) {
+    if (state.kind === "update") return dashboard.t("marketplace.updatePackage");
+    if (state.kind === "installed") return dashboard.t("marketplace.installed");
+    return dashboard.t("marketplace.installReviewed");
+  }
+
+  function installStateDetail(state: ReturnType<typeof installState>) {
+    if (!state.installed) return "";
+    if (state.kind === "update" && state.latest) {
+      return dashboard.tx("marketplace.installedVersionLatest", {
+        installed: state.installed.version,
+        latest: state.latest.version
+      });
+    }
+    return dashboard.tx("marketplace.installedVersion", { version: state.installed.version });
   }
 
   function packageCard(pkg: MarketplaceCatalogPackage) {
@@ -102,6 +199,8 @@
         {#if filteredPackages.length}
           <div class="card-grid marketplace-card-grid">
             {#each filteredPackages as pkg (pkg.id)}
+              {@const currentInstallState = installState(pkg)}
+              {@const currentApprovedVersion = approvedVersion(pkg)}
               <button type="button" class="studio-card marketplace-card" class:active={selectedPackage?.id === pkg.id} onclick={() => packageCard(pkg)}>
                 {#if pkg.listing?.bannerUrl}
                   <img class="marketplace-banner" src={pkg.listing.bannerUrl} alt="" loading="lazy" />
@@ -112,17 +211,33 @@
                   {:else}
                     <span class="marketplace-icon fallback">{titleFor(pkg).slice(0, 1)}</span>
                   {/if}
-                  <span>
+                  <span class="marketplace-card-copy">
                     <strong>{titleFor(pkg)}</strong>
-                    <span>
-                      {#if activeFilter === "new"}
-                        {dashboard.t("marketplace.latestApproved")} {approvedVersion(pkg)?.version ?? "-"}
-                      {:else}
-                        {dashboard.t("marketplace.by")} {pkg.developerName ?? pkg.developerId}
+                    <span class="verified-developer-line">
+                      {dashboard.t("marketplace.by")} {pkg.developerName ?? pkg.developerId}
+                      {#if pkg.developerVerified}
+                        <span class="verified-developer-check" title={dashboard.t("marketplace.verifiedDeveloper")} aria-label={dashboard.t("marketplace.verifiedDeveloper")}>
+                          <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                            <path d="m4 8 2.5 2.5L12 5"></path>
+                          </svg>
+                        </span>
                       {/if}
                     </span>
+                    {#if activeFilter === "new"}
+                      <span>{dashboard.t("marketplace.latestApproved")} {currentApprovedVersion?.version ?? "-"}</span>
+                    {/if}
+                    {#if currentInstallState.kind !== "available"}
+                      <span>
+                        {installStateDetail(currentInstallState)}
+                      </span>
+                    {/if}
                   </span>
                 </span>
+                {#if currentInstallState.kind !== "available"}
+                  <span class="marketplace-status-pill" class:update={currentInstallState.kind === "update"}>
+                    {installStateLabel(currentInstallState)}
+                  </span>
+                {/if}
                 <p>{descriptionFor(pkg)}</p>
               </button>
             {/each}
@@ -137,6 +252,8 @@
 
     <aside class="studio-panel marketplace-detail">
       {#if selectedPackage}
+        {@const selectedApprovedVersion = approvedVersion(selectedPackage)}
+        {@const selectedInstallState = installState(selectedPackage)}
         {#if selectedPackage.listing?.bannerUrl}
           <img class="marketplace-detail-banner" src={selectedPackage.listing.bannerUrl} alt="" loading="lazy" />
         {/if}
@@ -148,7 +265,16 @@
           {/if}
           <div>
             <h2>{titleFor(selectedPackage)}</h2>
-            <p>{dashboard.t("marketplace.by")} {selectedPackage.developerName ?? selectedPackage.developerId}</p>
+            <p class="verified-developer-line">
+              {dashboard.t("marketplace.by")} {selectedPackage.developerName ?? selectedPackage.developerId}
+              {#if selectedPackage.developerVerified}
+                <span class="verified-developer-check" title={dashboard.t("marketplace.verifiedDeveloper")} aria-label={dashboard.t("marketplace.verifiedDeveloper")}>
+                  <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                    <path d="m4 8 2.5 2.5L12 5"></path>
+                  </svg>
+                </span>
+              {/if}
+            </p>
           </div>
         </div>
 
@@ -178,12 +304,23 @@
 
         <div class="marketplace-version">
           <span>{dashboard.t("marketplace.version")}</span>
-          <strong>{approvedVersion(selectedPackage)?.version ?? "-"}</strong>
+          <strong>{selectedApprovedVersion?.version ?? "-"}</strong>
         </div>
 
+        {#if selectedInstallState.kind !== "available"}
+          <div class="marketplace-install-state" class:update={selectedInstallState.kind === "update"}>
+            <span>{installStateLabel(selectedInstallState)}</span>
+            <strong>{installStateDetail(selectedInstallState)}</strong>
+          </div>
+        {/if}
+
         <div class="card-actions marketplace-actions">
-          <button class="btn-primary" onclick={() => void dashboard.installMarketplacePackage(selectedPackage)} disabled={dashboard.busy || !approvedVersion(selectedPackage)}>
-            {dashboard.t("marketplace.installReviewed")}
+          <button
+            class="btn-primary"
+            onclick={() => selectedApprovedVersion && void dashboard.installMarketplacePackage(selectedPackage, selectedApprovedVersion.version)}
+            disabled={dashboard.busy || !selectedApprovedVersion || selectedInstallState.kind === "installed"}
+          >
+            {installButtonLabel(selectedInstallState)}
           </button>
           <button class="btn-secondary" onclick={() => void openExternal(selectedPackage.repo)}>
             {dashboard.t("marketplace.openRepo")}

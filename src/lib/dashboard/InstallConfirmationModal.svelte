@@ -6,6 +6,24 @@
   }: {
     state: DashboardState;
   } = $props();
+
+  const compactNumberFormatter = new Intl.NumberFormat(undefined, {
+    maximumFractionDigits: 1
+  });
+
+  function formatInstallSize(bytes: number) {
+    const units = ["B", "KB", "MB", "GB"];
+    let value = bytes;
+    let unitIndex = 0;
+
+    while (value >= 1024 && unitIndex < units.length - 1) {
+      value /= 1024;
+      unitIndex += 1;
+    }
+
+    const maximumFractionDigits = value >= 10 || unitIndex === 0 ? 0 : 1;
+    return `${new Intl.NumberFormat(undefined, { maximumFractionDigits }).format(value)} ${units[unitIndex]}`;
+  }
 </script>
 
 {#if state.pendingInstall}
@@ -32,22 +50,34 @@
       <div class="install-identity">
         <div>
           <h3>{state.pendingInstall.inspection.manifest.name}</h3>
+          {#if state.pendingInstall.inspection.verified_developer || state.pendingInstall.inspection.manifest.author}
+            <p class="verified-developer-line">
+              {state.t("marketplace.by")} {state.pendingInstall.inspection.verified_developer?.name ?? state.pendingInstall.inspection.manifest.author}
+              {#if state.pendingInstall.inspection.verified_developer}
+                <span class="verified-developer-check" title={state.t("marketplace.verifiedDeveloper")} aria-label={state.t("marketplace.verifiedDeveloper")}>
+                  <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                    <path d="m4 8 2.5 2.5L12 5"></path>
+                  </svg>
+                </span>
+              {/if}
+            </p>
+          {/if}
           <p>{state.pendingInstall.inspection.manifest.id}</p>
         </div>
         <span class="version">v{state.pendingInstall.inspection.manifest.version}</span>
       </div>
 
-      <div class="metric-grid compact">
+      <div class="metric-grid compact install-metrics">
         <div class="metric-cell">
           <strong>{state.inspectionExportCount(state.pendingInstall.inspection)}</strong>
           <span>{state.t("common.exports")}</span>
         </div>
         <div class="metric-cell">
-          <strong>{state.pendingInstall.inspection.file_count}</strong>
+          <strong>{compactNumberFormatter.format(state.pendingInstall.inspection.file_count)}</strong>
           <span>{state.t("common.files")}</span>
         </div>
         <div class="metric-cell">
-          <strong>{Math.round(state.pendingInstall.inspection.uncompressed_size / 1024)} KB</strong>
+          <strong>{formatInstallSize(state.pendingInstall.inspection.uncompressed_size)}</strong>
           <span>{state.t("common.size")}</span>
         </div>
       </div>

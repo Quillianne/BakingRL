@@ -1017,6 +1017,26 @@ pre {
   border-color: var(--accent);
 }
 
+.marketplace-status-pill {
+  align-self: flex-start;
+  max-width: 100%;
+  padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--success) 38%, transparent);
+  border-radius: var(--radius-sm);
+  background: var(--success-bg);
+  color: var(--success);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.marketplace-status-pill.update {
+  border-color: color-mix(in srgb, var(--warn) 42%, transparent);
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
 .home-marketplace-card {
   min-height: 128px;
   cursor: default;
@@ -1065,7 +1085,7 @@ pre {
   gap: 12px;
 }
 
-.marketplace-card-head > span:last-child,
+.marketplace-card-copy,
 .marketplace-detail-head > div {
   display: flex;
   min-width: 0;
@@ -1081,13 +1101,41 @@ pre {
   white-space: nowrap;
 }
 
-.marketplace-card-head span span,
+.marketplace-card-copy > span,
 .marketplace-detail-head p {
   overflow: hidden;
   color: var(--text-muted);
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.verified-developer-line {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+}
+
+.verified-developer-check {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 15px;
+  height: 15px;
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+}
+
+.verified-developer-check svg {
+  display: block;
+  stroke: currentColor;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  fill: none;
 }
 
 .marketplace-icon {
@@ -1170,6 +1218,34 @@ pre {
 .marketplace-version span {
   color: var(--text-muted);
   font-size: 12px;
+}
+
+.marketplace-install-state {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--success) 34%, transparent);
+  border-radius: var(--radius-sm);
+  background: var(--success-bg);
+}
+
+.marketplace-install-state.update {
+  border-color: color-mix(in srgb, var(--warn) 42%, transparent);
+  background: var(--warn-bg);
+}
+
+.marketplace-install-state span {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.marketplace-install-state strong {
+  color: var(--text-primary);
+  font-size: 13px;
+  overflow-wrap: anywhere;
 }
 
 .marketplace-actions {
@@ -2269,6 +2345,28 @@ pre {
   box-shadow: 0 24px 72px color-mix(in srgb, var(--bg-dark) 72%, transparent);
 }
 
+.install-modal {
+  overflow: hidden;
+}
+
+.install-modal .modal-heading,
+.install-modal .install-identity,
+.install-modal .install-metrics,
+.install-modal .security-strip,
+.install-modal .technical-details,
+.install-modal .modal-actions {
+  flex: none;
+}
+
+.install-modal .permissions-view {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+  scrollbar-gutter: stable;
+}
+
 .modal-heading {
   display: flex;
   flex-direction: column;
@@ -2290,16 +2388,47 @@ pre {
   display: flex;
   justify-content: space-between;
   gap: 14px;
+  min-width: 0;
   padding: 14px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
   background: var(--bg-panel);
 }
 
+.install-identity > div {
+  min-width: 0;
+}
+
+.install-identity h3,
+.install-identity p {
+  overflow-wrap: anywhere;
+}
+
 .version {
+  flex: 0 1 auto;
+  min-width: 0;
   color: var(--text-muted);
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
   font-size: 12px;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.install-metrics {
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  overflow: visible;
+}
+
+.install-metrics .metric-cell {
+  min-width: 0;
+  padding: 12px;
+}
+
+.install-metrics .metric-cell strong {
+  max-width: 100%;
+  font-size: 21px;
+  line-height: 1.12;
+  overflow-wrap: anywhere;
 }
 
 .setup-steps {

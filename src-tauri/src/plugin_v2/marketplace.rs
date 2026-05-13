@@ -7,6 +7,7 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use super::bundle::VerifiedDeveloperDescriptor;
 use super::permissions::EffectivePackagePermissionsV2;
 
 pub const OFFICIAL_MARKETPLACE_URL: &str =
@@ -141,6 +142,7 @@ pub struct MarketplaceCatalogPackage {
     pub id: String,
     pub developer_id: String,
     pub developer_name: Option<String>,
+    pub developer_verified: bool,
     pub repo: String,
     pub listing_url: String,
     pub listing: Option<MarketplaceListing>,
@@ -198,16 +200,18 @@ pub async fn catalog_for_index(index: MarketplaceIndex) -> MarketplaceCatalog {
     let developers = index.developers;
     let mut packages = Vec::new();
     for package in index.packages {
-        let developer_name = developers
+        let developer = developers
             .iter()
-            .find(|developer| developer.id == package.developer_id)
-            .map(|developer| developer.name.clone());
+            .find(|developer| developer.id == package.developer_id);
+        let developer_name = developer.map(|developer| developer.name.clone());
+        let developer_verified = developer.is_some_and(|developer| developer.verified);
         let (listing, listing_error) = match fetch_listing(&package.listing_url).await {
             Ok(listing) => (Some(listing), None),
             Err(error) => (None, Some(error)),
         };
         packages.push(MarketplaceCatalogPackage {
             developer_name,
+            developer_verified,
             id: package.id,
             developer_id: package.developer_id,
             repo: package.repo,
@@ -269,6 +273,26 @@ pub fn developer_allows_key(
                 .package_signing_keys
                 .iter()
                 .any(|key| key == public_key)
+        })
+}
+
+pub fn verified_developer_for_key(
+    index: &MarketplaceIndex,
+    public_key: &str,
+) -> Option<VerifiedDeveloperDescriptor> {
+    index
+        .developers
+        .iter()
+        .find(|developer| {
+            developer.verified
+                && developer
+                    .package_signing_keys
+                    .iter()
+                    .any(|key| key == public_key)
+        })
+        .map(|developer| VerifiedDeveloperDescriptor {
+            id: developer.id.clone(),
+            name: developer.name.clone(),
         })
 }
 
