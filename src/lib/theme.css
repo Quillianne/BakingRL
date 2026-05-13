@@ -89,11 +89,17 @@ body {
 .visual-export {
   display: block;
   box-sizing: border-box;
+  contain: layout paint;
+  container-type: size;
   margin: 0;
   padding: 0;
   border: 0 !important;
   outline: 0 !important;
   background: transparent !important;
+}
+
+.overlay-renderer-host.editor .visual-export {
+  user-select: none;
 }
 
 .visual-export-error {

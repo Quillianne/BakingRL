@@ -894,17 +894,3 @@
   bind:this={host}
   aria-label="Visual export host"
 ></main>
-
-<style>
-  .overlay-renderer-host :global(.visual-export),
-  .overlay-renderer-host :global(.native-export) {
-    box-sizing: border-box;
-    contain: layout paint;
-    container-type: size;
-  }
-
-  .overlay-renderer-host.editor :global(.visual-export),
-  .overlay-renderer-host.editor :global(.native-export) {
-    user-select: none;
-  }
-</style>
