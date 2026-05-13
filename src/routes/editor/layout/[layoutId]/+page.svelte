@@ -7,6 +7,7 @@
   import type { EditorCommand } from "$lib/editor/CommandPalette.svelte";
   import EditorWorkspace from "$lib/editor/EditorWorkspace.svelte";
   import LayerItemsPanel from "$lib/editor/LayerItemsPanel.svelte";
+  import MockSequencePanel from "$lib/editor/MockSequencePanel.svelte";
   import {
     insertionPoint,
     moveItemToLayer,
@@ -18,7 +19,11 @@
   import { createLayoutThumbnail } from "$lib/layoutThumbnail";
   import VisualLibrary from "$lib/editor/VisualLibrary.svelte";
   import { routeReturnFromParams, storeRouteScrollRestore } from "$lib/returnState";
-  import { RL_TELEMETRY_EVENT_NAMES, telemetryFrameTemplate, type RlTelemetryEventName } from "$lib/rlTelemetry";
+  import {
+    MOCK_SEQUENCE_UPDATE_STATE_FPS,
+    mockTelemetrySequences,
+    type MockTelemetrySequence
+  } from "$lib/rlTelemetrySequences";
 
   const { data } = $props();
 
@@ -35,6 +40,12 @@
     enabled: boolean;
     exports: {
       visuals: VisualExportDescriptor[];
+    };
+  };
+
+  type AppSettings = {
+    overlay: {
+      update_state_throttle_fps: number;
     };
   };
 
@@ -87,6 +98,12 @@
     run: () => void | Promise<void>;
   };
 
+  type LayerDropPreview = {
+    layerId: string;
+    itemId: string | null;
+    position: ItemDropPosition;
+  };
+
   let packages = $state<PackageDescriptor[]>([]);
   let overlayLayouts = $state<OverlayLayoutCatalog | null>(null);
   let selectedItemId = $state("");
@@ -98,6 +115,9 @@
   let visualSearch = $state("");
   let message = $state("");
   let mockEvent = $state<{ id: number; event: unknown } | null>(null);
+  let activeMockSequenceId = $state("");
+  let visualLayerDropTarget = $state<LayerDropPreview | null>(null);
+  let mockSequenceUpdateFps = $state(MOCK_SEQUENCE_UPDATE_STATE_FPS);
   let stage = $state<HTMLElement>();
   let confirmRequest = $state<ConfirmRequest | null>(null);
   let layoutRevision = $state(0);
@@ -107,6 +127,8 @@
   let dragLayerId = $state("");
   let pluginInteractionMode = $state(false);
   let commandOpen = $state(false);
+  let mockEventId = 0;
+  let mockSequenceTimers: ReturnType<typeof setTimeout>[] = [];
 
   // Accordion state
   let showOverlay = $state(true);
@@ -133,6 +155,7 @@
       }))
     )
   );
+  const mockSequences = $derived(mockTelemetrySequences(mockSequenceUpdateFps));
   const editorCommands = $derived<EditorCommand[]>([
     ...visualExports.map((entry) => ({
       id: `visual:${entry.ref}`,
@@ -191,15 +214,24 @@
   async function refresh() {
     loadError = "";
     try {
-      [packages, overlayLayouts] = await Promise.all([
+      const [nextPackages, nextOverlayLayouts, appSettings] = await Promise.all([
         adapter.invoke<PackageDescriptor[]>("list_packages"),
-        adapter.invoke<OverlayLayoutCatalog>("get_overlay_layouts")
+        adapter.invoke<OverlayLayoutCatalog>("get_overlay_layouts"),
+        adapter.invoke<AppSettings>("get_app_settings")
       ]);
+      packages = nextPackages;
+      overlayLayouts = nextOverlayLayouts;
+      mockSequenceUpdateFps = normalizeMockSequenceFps(appSettings);
     } catch (error) {
       loadError = error instanceof Error ? error.message : String(error);
     } finally {
       loaded = true;
     }
+  }
+
+  function normalizeMockSequenceFps(settings: AppSettings | null | undefined) {
+    const fps = Number(settings?.overlay?.update_state_throttle_fps);
+    return Number.isFinite(fps) ? Math.max(1, Math.min(120, Math.round(fps))) : MOCK_SEQUENCE_UPDATE_STATE_FPS;
   }
 
   async function save(layoutToSave = layout) {
@@ -343,14 +375,32 @@
     void save();
   }
 
-  function addVisual(ref: string, placement?: PlacementPoint | null) {
-    if (!layout || !activeLayer || !ref) return;
+  function layerDropTargetForClient(clientX: number, clientY: number) {
+    const element = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
+    const itemRow = element?.closest<HTMLElement>(".item-row[data-editor-layer-id][data-editor-item-id]");
+    if (itemRow) {
+      const layer = layout?.layers.find((entry) => entry.id === itemRow.dataset.editorLayerId);
+      const item = layer?.items.find((entry) => entry.id === itemRow.dataset.editorItemId) ?? null;
+      if (!layer || layer.locked || !item) return null;
+      const rect = itemRow.getBoundingClientRect();
+      const position: ItemDropPosition = clientY < rect.top + rect.height / 2 ? "before" : "after";
+      return { layer, targetItem: item, position };
+    }
+
+    const layerRow = element?.closest<HTMLElement>(".layer-row[data-editor-layer-id]");
+    const layer = layerRow ? layout?.layers.find((entry) => entry.id === layerRow.dataset.editorLayerId) : null;
+    if (!layer || layer.locked) return null;
+    return { layer, targetItem: null, position: "end" as ItemDropPosition };
+  }
+
+  function createVisualItem(ref: string, targetLayer: OverlayLayer, placement?: PlacementPoint | null) {
+    if (!layout || !ref) return null;
     const selected = visualExports.find((entry) => entry.ref === ref);
-    if (!selected) return;
+    if (!selected) return null;
     const width = Math.round(Math.min(Math.max(24, Number(selected.visual.default_width) || 320), layout.width));
     const height = Math.round(Math.min(Math.max(18, Number(selected.visual.default_height) || 180), layout.height));
     const point = insertionPoint(layout, width, height, placement);
-    const item: OverlayItem = {
+    return {
       id: `item-${Date.now()}`,
       package_id: selected.package.id,
       export_name: selected.visual.name,
@@ -359,37 +409,84 @@
       y: point.y,
       width,
       height,
-      z_index: nextZIndex(activeLayer.items),
+      z_index: nextZIndex(targetLayer.items),
       visible: true,
       locked: false,
       opacity: 1,
       settings: {}
-    };
-    activeLayer.items = [...activeLayer.items, item];
+    } satisfies OverlayItem;
+  }
+
+  function addVisualToLayer(
+    ref: string,
+    targetLayer: OverlayLayer,
+    placement?: PlacementPoint | null,
+    targetItem: OverlayItem | null = null,
+    position: ItemDropPosition = "end"
+  ) {
+    if (!layout || !ref || targetLayer.locked) return;
+    const item = createVisualItem(ref, targetLayer, placement);
+    if (!item) return;
+    visualLayerDropTarget = null;
+    item.z_index = nextZIndex(targetLayer.items);
+    targetLayer.items = [...targetLayer.items, item];
+    if (targetItem && position !== "end") {
+      moveItemToLayer(targetLayer, item, targetLayer, targetItem, position);
+    }
     selectedItemId = item.id;
+    activeLayerId = targetLayer.id;
     void save();
+  }
+
+  function addVisual(ref: string, placement?: PlacementPoint | null) {
+    if (!activeLayer) return;
+    addVisualToLayer(ref, activeLayer, placement);
+  }
+
+  function updateVisualLayerDropTarget(_ref: string, event: PointerEvent) {
+    const target = layerDropTargetForClient(event.clientX, event.clientY);
+    visualLayerDropTarget = target
+      ? {
+          layerId: target.layer.id,
+          itemId: target.targetItem?.id ?? null,
+          position: target.position
+        }
+      : null;
+  }
+
+  function clearVisualLayerDropTarget() {
+    visualLayerDropTarget = null;
   }
 
   function duplicateSelected() {
     if (!selectedEntry) return;
-    const item = structuredClone(selectedEntry.item);
+    duplicateItem(selectedEntry.layer, selectedEntry.item);
+  }
+
+  function duplicateItem(layer: OverlayLayer, sourceItem: OverlayItem) {
+    const item = JSON.parse(JSON.stringify(sourceItem)) as OverlayItem;
     item.id = `item-${Date.now()}`;
     item.name = `${item.name} Copy`;
     item.x += 24;
     item.y += 24;
-    selectedEntry.layer.items = [...selectedEntry.layer.items, item];
+    item.z_index = nextZIndex(layer.items);
+    layer.items = [...layer.items, item];
     selectedItemId = item.id;
+    activeLayerId = layer.id;
     void save();
   }
 
   function deleteSelected() {
     if (!selectedEntry) return;
-    const itemName = selectedEntry.item.name;
+    requestDeleteItem(selectedEntry.layer, selectedEntry.item);
+  }
+
+  function requestDeleteItem(layer: OverlayLayer, item: OverlayItem) {
     askConfirmation({
       title: "Delete item",
-      message: `Delete "${itemName}" from "${selectedEntry.layer.name}"?`,
+      message: `Delete "${item.name}" from "${layer.name}"?`,
       confirmLabel: "Delete",
-      run: () => deleteSelectedConfirmed(selectedEntry.item.id)
+      run: () => deleteSelectedConfirmed(item.id)
     });
   }
 
@@ -507,6 +604,12 @@
   }
 
   function placeVisual(ref: string, event: PointerEvent) {
+    const layerTarget = layerDropTargetForClient(event.clientX, event.clientY);
+    if (layerTarget) {
+      addVisualToLayer(ref, layerTarget.layer, null, layerTarget.targetItem, layerTarget.position);
+      return;
+    }
+
     if (!stage || !ref) return;
     const rect = stage.getBoundingClientRect();
     if (
@@ -520,8 +623,42 @@
     addVisual(ref, pointForClient(event.clientX, event.clientY));
   }
 
-  function fireMock(eventName: RlTelemetryEventName) {
-    mockEvent = { id: Date.now(), event: telemetryFrameTemplate(eventName) };
+  function cloneMockFrame(frame: unknown) {
+    return JSON.parse(JSON.stringify(frame)) as unknown;
+  }
+
+  function emitMockFrame(frame: unknown) {
+    mockEvent = { id: ++mockEventId, event: cloneMockFrame(frame) };
+  }
+
+  function stopMockSequence() {
+    for (const timer of mockSequenceTimers) clearTimeout(timer);
+    mockSequenceTimers = [];
+    activeMockSequenceId = "";
+  }
+
+  function playMockSequence(sequence: MockTelemetrySequence) {
+    stopMockSequence();
+    if (!sequence.frames.length) return;
+
+    activeMockSequenceId = sequence.id;
+    const sequenceId = sequence.id;
+    let sequenceEndMs = 0;
+
+    for (const entry of sequence.frames) {
+      sequenceEndMs = Math.max(sequenceEndMs, entry.atMs);
+      const timer = setTimeout(() => {
+        if (activeMockSequenceId === sequenceId) emitMockFrame(entry.frame);
+      }, entry.atMs);
+      mockSequenceTimers.push(timer);
+    }
+
+    const endTimer = setTimeout(() => {
+      if (activeMockSequenceId !== sequenceId) return;
+      mockSequenceTimers = [];
+      activeMockSequenceId = "";
+    }, sequenceEndMs + 100);
+    mockSequenceTimers.push(endTimer);
   }
 
   onMount(() => {
@@ -540,6 +677,7 @@
       unlistenPackages = unlisten;
     });
     return () => {
+      stopMockSequence();
       unlistenOverlays?.();
       unlistenPackages?.();
     };
@@ -619,7 +757,14 @@
           </button>
           {#if showVisuals}
             <div class="accordion-body">
-              <VisualLibrary entries={visualExports} bind:search={visualSearch} onadd={addVisual} onplace={placeVisual} />
+              <VisualLibrary
+                entries={visualExports}
+                bind:search={visualSearch}
+                onadd={addVisual}
+                onplace={placeVisual}
+                ondragmove={updateVisualLayerDropTarget}
+                ondragend={clearVisualLayerDropTarget}
+              />
             </div>
           {/if}
         </section>
@@ -636,9 +781,7 @@
                 {layers}
                 {activeLayerId}
                 {selectedItemId}
-                allowEventLayer
                 onaddlayer={() => addLayer("normal")}
-                onaddeventlayer={() => addLayer("event")}
                 canDeleteLayer={(layer) => layer.kind !== "event"}
                 canMoveLayer={(layer) => layer.kind !== "event"}
                 onselectlayer={selectLayer}
@@ -652,24 +795,28 @@
                 ontoggleitemvisible={toggleItemVisible}
                 ontoggleitemlock={toggleItemLocked}
                 onreorderitem={reorderLayerItem}
+                onduplicateitem={duplicateItem}
+                ondeleteitem={requestDeleteItem}
+                externalDropTarget={visualLayerDropTarget}
               />
             </div>
           {/if}
         </section>
 
-        <!-- Mock Events -->
-        <section class="accordion mock-events-panel">
+        <!-- Mock Sequences -->
+        <section class="accordion mock-sequences-panel">
           <button class="accordion-header" onclick={() => showMocks = !showMocks}>
             <svg class:rotated={showMocks} xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
-            <h2>Mock Events</h2>
+            <h2>Mock Sequences</h2>
           </button>
           {#if showMocks}
             <div class="accordion-body">
-              <div class="mock-grid">
-                {#each RL_TELEMETRY_EVENT_NAMES as eventName}
-                  <button class="btn-outline small" onclick={() => fireMock(eventName)}>{eventName}</button>
-                {/each}
-              </div>
+              <MockSequencePanel
+                sequences={mockSequences}
+                activeSequenceId={activeMockSequenceId}
+                onplay={playMockSequence}
+                onstop={stopMockSequence}
+              />
             </div>
           {/if}
         </section>
@@ -907,19 +1054,6 @@
   }
 
   /* Buttons & Checkboxes */
-  .btn-outline {
-    background: transparent;
-    border: 1px solid var(--border-color);
-    color: var(--text-primary);
-    padding: 6px 12px;
-    border-radius: var(--radius-sm);
-    font-size: 13px;
-    cursor: pointer;
-    transition: var(--transition);
-  }
-  .btn-outline:hover { background: var(--editor-bg-panel-hover); }
-  .btn-outline.small { padding: 4px 8px; font-size: 12px; }
-
   .btn-secondary {
     background: var(--bg-panel-hover); border: 1px solid var(--border-color);
     color: var(--text-primary); padding: 8px; border-radius: var(--radius-sm);
@@ -959,8 +1093,6 @@
   /* Utility */
   .divider { height: 1px; background: var(--border-color); margin: 4px 0; }
   .bottom-actions { display: flex; gap: 8px; margin-top: 8px; }
-
-  .mock-grid { display: flex; flex-wrap: wrap; gap: 6px; }
 
   .empty-state { padding: 24px; text-align: center; color: var(--text-muted); font-size: 13px; }
   .empty-state.small { padding: 12px; }

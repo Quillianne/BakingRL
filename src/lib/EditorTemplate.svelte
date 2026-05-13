@@ -474,7 +474,19 @@
     left: 12px;
     overflow-y: auto;
     overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+    touch-action: pan-y;
     pointer-events: auto;
+  }
+
+  .side-panel.left :global(.accordion) {
+    flex: 0 0 auto;
+    max-height: none;
+  }
+
+  .side-panel.left :global(.accordion > .accordion-body) {
+    overflow: visible;
+    overscroll-behavior: auto;
   }
 
   .side-panel.right {

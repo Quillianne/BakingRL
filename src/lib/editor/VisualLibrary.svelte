@@ -30,7 +30,9 @@
     searchPlaceholder = "Search visuals...",
     emptyLabel = "No visuals available.",
     onadd,
-    onplace
+    onplace,
+    ondragmove,
+    ondragend
   }: {
     entries: VisualLibraryEntry[];
     search?: string;
@@ -38,6 +40,8 @@
     emptyLabel?: string;
     onadd: (ref: string) => void;
     onplace?: (ref: string, event: PointerEvent) => void;
+    ondragmove?: (ref: string, event: PointerEvent) => void;
+    ondragend?: () => void;
   } = $props();
 
   let pointerDrag = $state<PointerVisualDragState | null>(null);
@@ -75,6 +79,7 @@
     if (event?.currentTarget instanceof HTMLElement && event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
+    if (pointerDrag?.dragging) ondragend?.();
     pointerDrag = null;
   }
 
@@ -110,7 +115,9 @@
     }
     event.preventDefault();
     event.stopPropagation();
-    pointerDrag = { ...pointerDrag, currentX: event.clientX, currentY: event.clientY, dragging: true };
+    const nextDrag = { ...pointerDrag, currentX: event.clientX, currentY: event.clientY, dragging: true };
+    pointerDrag = nextDrag;
+    ondragmove?.(nextDrag.ref, event);
   }
 
   function endVisualPointerDrag(event: PointerEvent) {
@@ -159,30 +166,33 @@
             <small>{group.entries.length}</small>
           </header>
           {#each group.entries as entry (entry.ref)}
-            <button
-              class="visual-list-item"
-              class:dragging={dragPreview?.ref === entry.ref}
-              onpointerdown={(event) => startVisualPointerDrag(event, entry)}
-              onpointermove={moveVisualPointerDrag}
-              onpointerup={endVisualPointerDrag}
-              onpointercancel={clearPointerDrag}
-              onclick={(event) => clickVisual(event, entry)}
-              title={`${entry.visual.name} - ${entry.package.name}`}
-            >
-              <span class="item-icon">
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+            <div class="visual-list-item" class:dragging={dragPreview?.ref === entry.ref}>
+              <button
+                class="visual-grip"
+                type="button"
+                aria-label={`Drag ${entry.visual.name}`}
+                title="Drag to place"
+                onpointerdown={(event) => startVisualPointerDrag(event, entry)}
+                onpointermove={moveVisualPointerDrag}
+                onpointerup={endVisualPointerDrag}
+                onpointercancel={clearPointerDrag}
+              ></button>
+              <button
+                class="visual-pick"
+                type="button"
+                onclick={(event) => clickVisual(event, entry)}
+                title={`${entry.visual.name} - ${entry.package.name}`}
+              >
+                <span class="item-text">
+                  <span class="title">{entry.visual.name}</span>
+                  <span class="sub">{visualMeta(entry)}</span>
+                </span>
+                <svg class="add-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <line x1="12" y1="5" x2="12" y2="19"></line>
+                  <line x1="5" y1="12" x2="19" y2="12"></line>
                 </svg>
-              </span>
-              <span class="item-text">
-                <span class="title">{entry.visual.name}</span>
-                <span class="sub">{visualMeta(entry)}</span>
-              </span>
-              <svg class="add-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <line x1="12" y1="5" x2="12" y2="19"></line>
-                <line x1="5" y1="12" x2="19" y2="12"></line>
-              </svg>
-            </button>
+              </button>
+            </div>
           {/each}
         </section>
       {/each}
@@ -194,11 +204,7 @@
 
 {#if dragPreview}
   <div class="visual-drag-preview" style={dragPreviewStyle(dragPreview.currentX, dragPreview.currentY)} aria-hidden="true">
-    <span class="item-icon">
-      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-      </svg>
-    </span>
+    <span class="visual-drag-preview-grip"></span>
     <span class="item-text">
       <span class="title">{dragPreview.name}</span>
       <span class="sub">{dragPreview.packageName}</span>
@@ -283,20 +289,13 @@
     display: flex;
     width: 100%;
     align-items: center;
-    gap: 10px;
-    padding: 8px 10px;
+    gap: 6px;
+    padding: 5px;
     border: 1px solid transparent;
     border-radius: var(--radius-sm);
     background: color-mix(in srgb, var(--bg-panel-hover) 70%, transparent);
     color: var(--text-primary);
-    text-align: left;
-    cursor: pointer;
     transition: var(--transition);
-    touch-action: none;
-  }
-
-  .visual-list-item:active {
-    cursor: grabbing;
   }
 
   .visual-list-item:hover {
@@ -306,6 +305,66 @@
 
   .visual-list-item.dragging {
     opacity: 0.5;
+  }
+
+  .visual-grip {
+    display: grid;
+    width: 14px;
+    height: 28px;
+    flex: none;
+    place-items: center;
+    padding: 0;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+    cursor: grab;
+    opacity: 0;
+    touch-action: none;
+    transition: opacity 0.16s;
+  }
+
+  .visual-grip:active {
+    cursor: grabbing;
+  }
+
+  .visual-grip::before,
+  .visual-drag-preview-grip {
+    content: "";
+    width: 9px;
+    height: 10px;
+    background:
+      linear-gradient(var(--text-muted), var(--text-muted)) 0 1px / 9px 1px no-repeat,
+      linear-gradient(var(--text-muted), var(--text-muted)) 0 5px / 9px 1px no-repeat,
+      linear-gradient(var(--text-muted), var(--text-muted)) 0 9px / 9px 1px no-repeat;
+  }
+
+  .visual-list-item:hover .visual-grip,
+  .visual-list-item:focus-within .visual-grip,
+  .visual-list-item.dragging .visual-grip {
+    opacity: 1;
+  }
+
+  .visual-pick {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    align-items: center;
+    gap: 8px;
+    min-height: 28px;
+    padding: 3px 5px 3px 0;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .visual-pick:focus-visible {
+    outline: none;
+    background: color-mix(in srgb, var(--editor-bg-panel-hover) 80%, transparent);
   }
 
   .visual-drag-preview {
@@ -326,10 +385,8 @@
     transform: translate(12px, 10px) rotate(1deg);
   }
 
-  .item-icon {
-    display: flex;
+  .visual-drag-preview-grip {
     flex: none;
-    color: var(--accent);
   }
 
   .item-text {
@@ -362,7 +419,8 @@
     transition: opacity 0.2s;
   }
 
-  .visual-list-item:hover .add-icon {
+  .visual-list-item:hover .add-icon,
+  .visual-list-item:focus-within .add-icon {
     opacity: 1;
   }
 

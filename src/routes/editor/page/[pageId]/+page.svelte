@@ -8,6 +8,7 @@
   import type { EditorCommand } from "$lib/editor/CommandPalette.svelte";
   import EditorWorkspace from "$lib/editor/EditorWorkspace.svelte";
   import LayerItemsPanel from "$lib/editor/LayerItemsPanel.svelte";
+  import MockSequencePanel from "$lib/editor/MockSequencePanel.svelte";
   import {
     insertionPoint,
     moveItemToLayer,
@@ -25,6 +26,11 @@
     storePendingRouteReturn,
     storeRouteScrollRestore
   } from "$lib/returnState";
+  import {
+    MOCK_SEQUENCE_UPDATE_STATE_FPS,
+    mockTelemetrySequences,
+    type MockTelemetrySequence
+  } from "$lib/rlTelemetrySequences";
 
   const { data } = $props();
 
@@ -41,6 +47,12 @@
     enabled: boolean;
     exports: {
       visuals: VisualExportDescriptor[];
+    };
+  };
+
+  type AppSettings = {
+    overlay: {
+      update_state_throttle_fps: number;
     };
   };
 
@@ -95,6 +107,12 @@
     pages: PageLayout[];
   };
 
+  type LayerDropPreview = {
+    layerId: string;
+    itemId: string | null;
+    position: ItemDropPosition;
+  };
+
   let packages = $state<PackageDescriptor[]>([]);
   let pages = $state<PagesFile | null>(null);
   let selectedItemId = $state("");
@@ -102,6 +120,10 @@
   let visualSearch = $state("");
   let previewMode = $state(false);
   let message = $state("");
+  let mockEvent = $state<{ id: number; event: unknown } | null>(null);
+  let activeMockSequenceId = $state("");
+  let visualLayerDropTarget = $state<LayerDropPreview | null>(null);
+  let mockSequenceUpdateFps = $state(MOCK_SEQUENCE_UPDATE_STATE_FPS);
   let stage = $state<HTMLElement>();
   let snapEnabled = $state(true);
   let gridSize = $state(20);
@@ -110,10 +132,13 @@
   let panX = $state(0);
   let panY = $state(0);
   let commandOpen = $state(false);
+  let mockEventId = 0;
+  let mockSequenceTimers: ReturnType<typeof setTimeout>[] = [];
   let showApp = $state(true);
   let showAdd = $state(true);
   let showBackground = $state(false);
   let showLayers = $state(true);
+  let showMocks = $state(false);
   let showProperties = $state(true);
 
   const page = $derived(pages?.pages.find((entry) => entry.id === data.pageId) ?? null);
@@ -129,6 +154,7 @@
       }))
     )
   );
+  const mockSequences = $derived(mockTelemetrySequences(mockSequenceUpdateFps));
   const editorCommands = $derived<EditorCommand[]>([
     ...visualExports.map((entry) => ({
       id: `visual:${entry.ref}`,
@@ -197,8 +223,19 @@
   });
 
   async function refresh() {
-    packages = await invoke<PackageDescriptor[]>("list_packages");
-    pages = await invoke<PagesFile>("get_pages");
+    const [nextPackages, nextPages, appSettings] = await Promise.all([
+      invoke<PackageDescriptor[]>("list_packages"),
+      invoke<PagesFile>("get_pages"),
+      invoke<AppSettings>("get_app_settings")
+    ]);
+    packages = nextPackages;
+    pages = nextPages;
+    mockSequenceUpdateFps = normalizeMockSequenceFps(appSettings);
+  }
+
+  function normalizeMockSequenceFps(settings: AppSettings | null | undefined) {
+    const fps = Number(settings?.overlay?.update_state_throttle_fps);
+    return Number.isFinite(fps) ? Math.max(1, Math.min(120, Math.round(fps))) : MOCK_SEQUENCE_UPDATE_STATE_FPS;
   }
 
   async function save(pageToSave = page) {
@@ -284,14 +321,32 @@
     void save();
   }
 
-  function addVisual(ref: string, placement?: PlacementPoint | null) {
-    if (!page || !activeLayer || !ref) return;
+  function layerDropTargetForClient(clientX: number, clientY: number) {
+    const element = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
+    const itemRow = element?.closest<HTMLElement>(".item-row[data-editor-layer-id][data-editor-item-id]");
+    if (itemRow) {
+      const layer = page?.layers.find((entry) => entry.id === itemRow.dataset.editorLayerId);
+      const item = layer?.items.find((entry) => entry.id === itemRow.dataset.editorItemId) ?? null;
+      if (!layer || layer.locked || !item) return null;
+      const rect = itemRow.getBoundingClientRect();
+      const position: ItemDropPosition = clientY < rect.top + rect.height / 2 ? "before" : "after";
+      return { layer, targetItem: item, position };
+    }
+
+    const layerRow = element?.closest<HTMLElement>(".layer-row[data-editor-layer-id]");
+    const layer = layerRow ? page?.layers.find((entry) => entry.id === layerRow.dataset.editorLayerId) : null;
+    if (!layer || layer.locked) return null;
+    return { layer, targetItem: null, position: "end" as ItemDropPosition };
+  }
+
+  function createVisualItem(ref: string, targetLayer: PageLayer, placement?: PlacementPoint | null) {
+    if (!page || !ref) return null;
     const selected = visualExports.find((entry) => entry.ref === ref);
-    if (!selected) return;
+    if (!selected) return null;
     const width = Math.round(Math.min(Math.max(24, Number(selected.visual.default_width) || 320), page.width));
     const height = Math.round(Math.min(Math.max(18, Number(selected.visual.default_height) || 180), page.height));
     const point = insertionPoint(page, width, height, placement);
-    const item: PageItem = {
+    return {
       id: `item-${Date.now()}`,
       kind: "visual",
       package_id: selected.package.id,
@@ -301,15 +356,53 @@
       y: point.y,
       width,
       height,
-      z_index: nextZIndex(activeLayer.items),
+      z_index: nextZIndex(targetLayer.items),
       visible: true,
       locked: false,
       opacity: 1,
       settings: {}
-    };
-    activeLayer.items = [...activeLayer.items, item];
+    } satisfies PageItem;
+  }
+
+  function addVisualToLayer(
+    ref: string,
+    targetLayer: PageLayer,
+    placement?: PlacementPoint | null,
+    targetItem: PageItem | null = null,
+    position: ItemDropPosition = "end"
+  ) {
+    if (!page || !ref || targetLayer.locked) return;
+    const item = createVisualItem(ref, targetLayer, placement);
+    if (!item) return;
+    visualLayerDropTarget = null;
+    item.z_index = nextZIndex(targetLayer.items);
+    targetLayer.items = [...targetLayer.items, item];
+    if (targetItem && position !== "end") {
+      moveItemToLayer(targetLayer, item, targetLayer, targetItem, position);
+    }
     selectedItemId = item.id;
+    activeLayerId = targetLayer.id;
     void save();
+  }
+
+  function addVisual(ref: string, placement?: PlacementPoint | null) {
+    if (!activeLayer) return;
+    addVisualToLayer(ref, activeLayer, placement);
+  }
+
+  function updateVisualLayerDropTarget(_ref: string, event: PointerEvent) {
+    const target = layerDropTargetForClient(event.clientX, event.clientY);
+    visualLayerDropTarget = target
+      ? {
+          layerId: target.layer.id,
+          itemId: target.targetItem?.id ?? null,
+          position: target.position
+        }
+      : null;
+  }
+
+  function clearVisualLayerDropTarget() {
+    visualLayerDropTarget = null;
   }
 
   function addNative(kind: "text" | "image" | "shape") {
@@ -348,19 +441,29 @@
 
   function duplicateSelected() {
     if (!selectedEntry) return;
-    const item = structuredClone(selectedEntry.item);
+    duplicateItem(selectedEntry.layer, selectedEntry.item);
+  }
+
+  function duplicateItem(layer: PageLayer, sourceItem: PageItem) {
+    const item = JSON.parse(JSON.stringify(sourceItem)) as PageItem;
     item.id = `item-${Date.now()}`;
     item.name = `${item.name} Copy`;
     item.x += 24;
     item.y += 24;
-    selectedEntry.layer.items = [...selectedEntry.layer.items, item];
+    item.z_index = nextZIndex(layer.items);
+    layer.items = [...layer.items, item];
     selectedItemId = item.id;
+    activeLayerId = layer.id;
     void save();
   }
 
   function deleteSelected() {
     if (!selectedEntry) return;
-    selectedEntry.layer.items = selectedEntry.layer.items.filter((item) => item.id !== selectedEntry.item.id);
+    deleteItem(selectedEntry.layer, selectedEntry.item);
+  }
+
+  function deleteItem(layer: PageLayer, itemToDelete: PageItem) {
+    layer.items = layer.items.filter((item) => item.id !== itemToDelete.id);
     selectedItemId = "";
     void save();
   }
@@ -471,6 +574,12 @@
   }
 
   function placeVisual(ref: string, event: PointerEvent) {
+    const layerTarget = layerDropTargetForClient(event.clientX, event.clientY);
+    if (layerTarget) {
+      addVisualToLayer(ref, layerTarget.layer, null, layerTarget.targetItem, layerTarget.position);
+      return;
+    }
+
     if (!stage || !ref) return;
     const rect = stage.getBoundingClientRect();
     if (
@@ -482,6 +591,44 @@
       return;
     }
     addVisual(ref, pointForClient(event.clientX, event.clientY));
+  }
+
+  function cloneMockFrame(frame: unknown) {
+    return JSON.parse(JSON.stringify(frame)) as unknown;
+  }
+
+  function emitMockFrame(frame: unknown) {
+    mockEvent = { id: ++mockEventId, event: cloneMockFrame(frame) };
+  }
+
+  function stopMockSequence() {
+    for (const timer of mockSequenceTimers) clearTimeout(timer);
+    mockSequenceTimers = [];
+    activeMockSequenceId = "";
+  }
+
+  function playMockSequence(sequence: MockTelemetrySequence) {
+    stopMockSequence();
+    if (!sequence.frames.length) return;
+
+    activeMockSequenceId = sequence.id;
+    const sequenceId = sequence.id;
+    let sequenceEndMs = 0;
+
+    for (const entry of sequence.frames) {
+      sequenceEndMs = Math.max(sequenceEndMs, entry.atMs);
+      const timer = setTimeout(() => {
+        if (activeMockSequenceId === sequenceId) emitMockFrame(entry.frame);
+      }, entry.atMs);
+      mockSequenceTimers.push(timer);
+    }
+
+    const endTimer = setTimeout(() => {
+      if (activeMockSequenceId !== sequenceId) return;
+      mockSequenceTimers = [];
+      activeMockSequenceId = "";
+    }, sequenceEndMs + 100);
+    mockSequenceTimers.push(endTimer);
   }
 
   async function openPage() {
@@ -516,6 +663,7 @@
       unlistenPackages = unlisten;
     });
     return () => {
+      stopMockSequence();
       unlistenPages?.();
       unlistenPackages?.();
     };
@@ -534,6 +682,7 @@
       rendererSource="page"
       rendererMode={previewMode ? "page" : "editor"}
       editable={!previewMode}
+      {mockEvent}
       {layoutRevision}
       commands={editorCommands}
       bind:commandOpen
@@ -600,6 +749,8 @@
                   searchPlaceholder="Search plugin visuals..."
                   onadd={addVisual}
                   onplace={placeVisual}
+                  ondragmove={updateVisualLayerDropTarget}
+                  ondragend={clearVisualLayerDropTarget}
                 />
               </div>
             {/if}
@@ -657,6 +808,26 @@
                   ontoggleitemvisible={toggleItemVisible}
                   ontoggleitemlock={toggleItemLocked}
                   onreorderitem={reorderLayerItem}
+                  onduplicateitem={duplicateItem}
+                  ondeleteitem={deleteItem}
+                  externalDropTarget={visualLayerDropTarget}
+                />
+              </div>
+            {/if}
+          </section>
+
+          <section class="accordion mock-sequences-panel">
+            <button class="accordion-header" onclick={() => (showMocks = !showMocks)}>
+              <svg class:rotated={showMocks} xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>
+              <h2>Mock Sequences</h2>
+            </button>
+            {#if showMocks}
+              <div class="accordion-body">
+                <MockSequencePanel
+                  sequences={mockSequences}
+                  activeSequenceId={activeMockSequenceId}
+                  onplay={playMockSequence}
+                  onstop={stopMockSequence}
                 />
               </div>
             {/if}

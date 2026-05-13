@@ -125,11 +125,21 @@
   let panState = $state<PanState | null>(null);
   let contextMenu = $state<ContextMenuState | null>(null);
   let snapGuides = $state<SnapGuides>(emptySnapGuides());
+  let eventLayerActive = $state(false);
 
   const selectedEntry = $derived(findItem(selectedItemId));
 
   function allItems(): EditorItemEntry<WorkspaceItem, WorkspaceLayer>[] {
     return layers.flatMap((layer) => layer.items.map((item) => ({ layer, item })));
+  }
+
+  function eventLayerMasksNormalLayers() {
+    return rendererMode !== "page" && eventLayerActive;
+  }
+
+  function frameItems() {
+    const eventLayerMask = eventLayerMasksNormalLayers();
+    return allItems().filter((entry) => !eventLayerMask || entry.layer.kind === "event");
   }
 
   function findItem(itemId: string) {
@@ -431,10 +441,11 @@
       packageRevision={packageRuntime.revision}
       mode={rendererMode}
       {mockEvent}
+      onEventLayerActiveChange={(active) => (eventLayerActive = active)}
     />
     {#if editable}
       <div class="frames">
-        {#each allItems() as entry}
+        {#each frameItems() as entry}
           <div
             class="frame-box"
             class:selected={selectedItemId === entry.item.id}

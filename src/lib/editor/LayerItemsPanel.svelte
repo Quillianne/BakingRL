@@ -17,6 +17,12 @@
     currentY: number;
     dragging: boolean;
   };
+  type ItemContextMenuState = {
+    layerId: string;
+    itemId: string;
+    x: number;
+    y: number;
+  };
 
   let {
     layers,
@@ -40,7 +46,10 @@
     ondeletelayer,
     ontoggleitemvisible,
     ontoggleitemlock,
-    onreorderitem
+    onreorderitem,
+    onduplicateitem,
+    ondeleteitem,
+    externalDropTarget = null
   }: {
     layers: Layer[];
     activeLayerId?: string;
@@ -70,11 +79,16 @@
       targetItem: any | null,
       position: ItemDropPosition
     ) => void;
+    onduplicateitem?: (layer: any, item: any) => void;
+    ondeleteitem?: (layer: any, item: any) => void;
+    externalDropTarget?: ItemDropTarget | null;
   } = $props();
 
   let pointerDrag = $state<PointerDragState | null>(null);
   let dropTarget = $state<ItemDropTarget | null>(null);
+  let itemContextMenu = $state<ItemContextMenuState | null>(null);
   let panel: HTMLElement | undefined = $state();
+  const activeDropTarget = $derived(externalDropTarget ?? dropTarget);
   const dragPreview = $derived.by(() => {
     if (!pointerDrag?.dragging) return null;
     const layer = layerById(pointerDrag.layerId);
@@ -95,12 +109,52 @@
     return layer.locked !== true && item.locked !== true;
   }
 
+  function closeItemContextMenu() {
+    itemContextMenu = null;
+  }
+
   function clearPointerDrag(event?: PointerEvent) {
     if (event?.currentTarget instanceof HTMLElement && event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
     pointerDrag = null;
     dropTarget = null;
+  }
+
+  function openItemContextMenu(event: MouseEvent, layer: Layer, item: EditorItemModel) {
+    event.preventDefault();
+    event.stopPropagation();
+    closeItemContextMenu();
+    onselectitem(layer, item);
+    itemContextMenu = {
+      layerId: layer.id,
+      itemId: item.id,
+      x: event.clientX,
+      y: event.clientY
+    };
+  }
+
+  function itemContextMenuStyle() {
+    if (!itemContextMenu) return "";
+    return `left:${itemContextMenu.x}px;top:${itemContextMenu.y}px;`;
+  }
+
+  function contextMenuEntry() {
+    if (!itemContextMenu) return null;
+    const layer = layerById(itemContextMenu.layerId);
+    const item = layer ? itemById(layer, itemContextMenu.itemId) : null;
+    return layer && item ? { layer, item } : null;
+  }
+
+  function runItemContextAction(action: (layer: Layer, item: EditorItemModel) => void) {
+    const entry = contextMenuEntry();
+    closeItemContextMenu();
+    if (!entry) return;
+    action(entry.layer, entry.item);
+  }
+
+  function handleWindowKeydown(event: KeyboardEvent) {
+    if (event.key === "Escape") closeItemContextMenu();
   }
 
   function layerRowAtPoint(clientX: number, clientY: number) {
@@ -170,6 +224,7 @@
     if (event.button !== 0 || !canDragItem(layer, item)) return;
     event.preventDefault();
     event.stopPropagation();
+    closeItemContextMenu();
     if (event.currentTarget instanceof HTMLElement) {
       event.currentTarget.setPointerCapture(event.pointerId);
     }
@@ -224,11 +279,11 @@
   }
 
   function dropClass(layer: Layer, item: EditorItemModel, position: ItemDropPosition) {
-    return dropTarget?.layerId === layer.id && dropTarget.itemId === item.id && dropTarget.position === position;
+    return activeDropTarget?.layerId === layer.id && activeDropTarget.itemId === item.id && activeDropTarget.position === position;
   }
 
   function layerDropActive(layer: Layer) {
-    return dropTarget?.layerId === layer.id && dropTarget.itemId === null;
+    return activeDropTarget?.layerId === layer.id && activeDropTarget.itemId === null;
   }
 
   function itemDragging(layer: Layer, item: EditorItemModel) {
@@ -239,6 +294,8 @@
     return `left:${x}px;top:${y}px;`;
   }
 </script>
+
+<svelte:window onkeydown={handleWindowKeydown} />
 
 <section bind:this={panel} class="layer-panel" class:dragging={pointerDrag?.dragging === true} aria-label={title}>
   <header class="panel-head">
@@ -323,6 +380,7 @@
                 data-editor-layer-id={layer.id}
                 data-editor-item-id={item.id}
                 role="listitem"
+                oncontextmenu={(event) => openItemContextMenu(event, layer, item)}
               >
                 <button
                   class="item-grip"
@@ -335,7 +393,7 @@
                   onpointerup={endItemPointerDrag}
                   onpointercancel={clearPointerDrag}
                 ></button>
-                <button class="item-pick" type="button" onclick={() => onselectitem(layer, item)} title={item.name} aria-label={`Select ${item.name}`}>
+                <button class="item-pick" type="button" onclick={() => { closeItemContextMenu(); onselectitem(layer, item); }} title={item.name} aria-label={`Select ${item.name}`}>
                   <span class="item-name">{item.name}</span>
                   <span class="item-z">z{item.z_index}</span>
                 </button>
@@ -374,6 +432,23 @@
       <span class="drag-preview-layer">{dragPreview.layer.name}</span>
     </span>
     <span class="drag-preview-z">z{dragPreview.item.z_index}</span>
+  </div>
+{/if}
+
+{#if itemContextMenu && contextMenuEntry()}
+  <div class="layer-context-menu" style={itemContextMenuStyle()} role="menu">
+    {#if onduplicateitem}
+      <button role="menuitem" type="button" onclick={() => runItemContextAction(onduplicateitem)}>Duplicate</button>
+    {/if}
+    <button role="menuitem" type="button" onclick={() => runItemContextAction(ontoggleitemvisible)}>
+      {contextMenuEntry()?.item.visible ? "Hide" : "Show"}
+    </button>
+    <button role="menuitem" type="button" onclick={() => runItemContextAction(ontoggleitemlock)}>
+      {contextMenuEntry()?.item.locked ? "Unlock" : "Lock"}
+    </button>
+    {#if ondeleteitem}
+      <button role="menuitem" type="button" class="danger" onclick={() => runItemContextAction(ondeleteitem)}>Delete</button>
+    {/if}
   </div>
 {/if}
 
@@ -598,6 +673,46 @@
     color: var(--text-muted);
     font-size: 10px;
     font-variant-numeric: tabular-nums;
+  }
+
+  .layer-context-menu {
+    position: fixed;
+    z-index: 100001;
+    display: grid;
+    min-width: 150px;
+    overflow: hidden;
+    padding: 4px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--editor-bg-panel);
+    box-shadow: 0 14px 34px rgb(0 0 0 / 0.32);
+    pointer-events: auto;
+  }
+
+  .layer-context-menu button {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    height: 28px;
+    padding: 0 9px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 12px;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .layer-context-menu button:hover,
+  .layer-context-menu button:focus-visible {
+    outline: none;
+    background: var(--editor-bg-panel-hover);
+  }
+
+  .layer-context-menu button.danger {
+    color: var(--danger);
   }
 
   .item-row.locked .item-name::after {

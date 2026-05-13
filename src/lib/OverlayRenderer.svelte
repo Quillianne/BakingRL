@@ -16,7 +16,8 @@
     mode = "runtime",
     source = "overlay",
     mockEvent = null,
-    preview = false
+    preview = false,
+    onEventLayerActiveChange = undefined
   }: {
     layoutType?: LayoutType;
     layoutId?: string | null;
@@ -27,6 +28,7 @@
     source?: LayoutSource;
     mockEvent?: MockEvent;
     preview?: boolean;
+    onEventLayerActiveChange?: (active: boolean) => void;
   } = $props();
 
   type VisualExportDescriptor = {
@@ -225,6 +227,11 @@
   const activeLayoutSyncKey = $derived.by(() => layoutSyncKey(activeLayout));
 
   const eventLayerActive = $derived(eventActiveItems.size > 0);
+
+  $effect(() => {
+    onEventLayerActiveChange?.(eventLayerActive);
+  });
+
   const hostStyle = $derived.by(() => {
     let style = "";
     if (preview && activeLayout) {
@@ -384,7 +391,7 @@
 
   function itemVisible(layer: OverlayLayer, item: OverlayItem) {
     if (item.visible === false || layer.visible === false) return false;
-    if (mode === "runtime" && eventLayerActive && layer.kind !== "event") return false;
+    if (mode !== "page" && eventLayerActive && layer.kind !== "event") return false;
     return true;
   }
 
