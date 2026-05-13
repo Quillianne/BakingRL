@@ -1640,40 +1640,54 @@ pre {
   overflow: hidden;
 }
 
-.developer-runtime-card {
-  flex: 0 0 auto;
-  padding: 0;
+.runtime-version-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  max-width: 420px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--border-color));
+  border-radius: var(--radius-sm);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--accent) 13%, transparent), transparent 58%),
+    var(--bg-panel);
 }
 
-.developer-runtime-card .developer-tool-heading {
-  min-height: 34px;
-  padding: 7px 9px;
+.runtime-api-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
 }
 
-.developer-runtime-card.active .developer-tool-heading {
-  border-bottom: 1px solid var(--border-color);
-}
-
-.developer-runtime-card .package-detail-summary {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.runtime-compatibility {
-  padding: 7px 10px 9px;
-}
-
-.runtime-api-line {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 8px;
+.runtime-api-copy small {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
 }
 
-.runtime-api-line strong {
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-weight: 750;
+.runtime-api-copy strong {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 16px;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-api-badge {
+  padding: 5px 8px;
+  border: 1px solid color-mix(in srgb, var(--success) 34%, transparent);
+  border-radius: var(--radius-sm);
+  background: var(--success-bg);
+  color: var(--success);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
 }
 
 .developer-panel-body {
@@ -1705,6 +1719,7 @@ pre {
 .developer-tool-toggle {
   display: flex;
   min-width: 0;
+  min-height: 19px;
   flex: 1;
   align-items: center;
   gap: 9px;
@@ -1777,6 +1792,7 @@ pre {
 
 .developer-telemetry-panel .inline-actions,
 .developer-telemetry-panel .badge-row {
+  display: flex;
   flex: none;
   flex-wrap: nowrap;
 }
@@ -1784,6 +1800,21 @@ pre {
 .developer-telemetry-panel .badge-row button {
   flex: none;
   white-space: nowrap;
+}
+
+.developer-telemetry-panel .sort-option {
+  width: 34px;
+  min-width: 34px;
+  padding: 0;
+}
+
+.developer-telemetry-panel .sort-option svg {
+  flex: none;
+  color: currentColor;
+}
+
+.developer-telemetry-panel .sort-option text {
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
 .telemetry-event,
@@ -2721,6 +2752,10 @@ code {
 .badge-row,
 .badge {
   display: none;
+}
+
+.developer-telemetry-panel .badge-row {
+  display: flex;
 }
 
 .card-actions,

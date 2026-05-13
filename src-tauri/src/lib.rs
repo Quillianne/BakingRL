@@ -31,7 +31,7 @@ use std::env;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tauri::{
     Emitter, Manager, Monitor, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder,
@@ -597,11 +597,13 @@ pub fn run() {
 
             let ingestor_bus = bus.clone();
             let ingestor_app_handle = app_handle.clone();
+            let ingestor_plugin_host = plugin_host.clone();
             tauri::async_runtime::spawn(async move {
                 start_tcp_ingestor(
                     ingestor_bus,
                     ingestor_app_handle,
                     telemetry_status,
+                    ingestor_plugin_host,
                     telemetry.rocket_league_host,
                     telemetry.rocket_league_port,
                 )
@@ -611,29 +613,10 @@ pub fn run() {
             start_window_visibility_watcher(app_handle.clone(), plugin_host.clone());
 
             let mut rx = bus.subscribe();
-            let telemetry_settings = plugin_host.clone();
             tauri::async_runtime::spawn(async move {
                 use tauri::Emitter;
-                let mut last_update_state_emit: Option<Instant> = None;
                 while let Ok(event) = rx.recv().await {
                     if let BusEvent::GameData(data) = event {
-                        if data.event == "UpdateState" {
-                            let fps = telemetry_settings
-                                .get_app_settings()
-                                .overlay
-                                .update_rate_fps
-                                .max(1);
-                            let update_state_interval =
-                                Duration::from_millis((1000 / u64::from(fps)).max(1));
-                            let now = Instant::now();
-                            if last_update_state_emit
-                                .is_some_and(|last| now.duration_since(last) < update_state_interval)
-                            {
-                                continue;
-                            }
-                            last_update_state_emit = Some(now);
-                        }
-
                         if let Err(e) = app_handle.emit("bakingrl-telemetry", &(*data)) {
                             tracing::warn!("Failed to emit telemetry via IPC: {}", e);
                         }

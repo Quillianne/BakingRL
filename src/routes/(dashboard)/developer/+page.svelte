@@ -37,7 +37,6 @@
   type DeveloperToolPanel = "registry" | "errors" | "send";
 
   let activeToolPanel = $state<DeveloperToolPanel>("registry");
-  let runtimeInfoOpen = $state(false);
   let frameDialogOpen = $state(false);
   let frameDialogFrame = $state<GameEventFrame | null>(null);
   let frameDialogError = $state("");
@@ -268,33 +267,6 @@
 
   <div class="developer-layout">
     <div class="developer-column developer-tools-column">
-      <section class="studio-panel developer-panel developer-runtime-card" class:active={runtimeInfoOpen}>
-        <div class="panel-heading developer-tool-heading">
-          <button
-            class="developer-tool-toggle"
-            aria-expanded={runtimeInfoOpen}
-            aria-controls="developer-runtime-panel"
-            onclick={() => (runtimeInfoOpen = !runtimeInfoOpen)}
-          >
-            <svg class:rotated={runtimeInfoOpen} viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="9 18 15 12 9 6"></polyline>
-            </svg>
-            <span>
-              <strong>{dashboard.t("developer.runtimeTitle")} {dashboard.runtimeInfo?.runtimeApiVersion ?? "n/a"}</strong>
-            </span>
-          </button>
-        </div>
-
-        {#if runtimeInfoOpen}
-          <div id="developer-runtime-panel" class="developer-panel-body runtime-compatibility">
-            <div class="runtime-api-line">
-              <span>{dashboard.t("packages.compatibility")}</span>
-              <strong>{dashboard.runtimeInfo?.supportedRuntimeApi ?? "n/a"}</strong>
-            </div>
-          </div>
-        {/if}
-      </section>
-
       <section class="studio-panel developer-panel developer-tool-panel" class:active={activeToolPanel === "registry"}>
         <div class="panel-heading developer-tool-heading">
           <button
@@ -433,18 +405,32 @@
         <div class="inline-actions">
           <div class="badge-row" aria-label={dashboard.t("developer.sortLabel")}>
             <button
-              class="btn-outline"
-              class:active={dashboard.developerTelemetrySort === "recent"}
-              onclick={() => (dashboard.developerTelemetrySort = "recent")}
+              class="btn-outline sort-option"
+              class:active={dashboard.developerTelemetrySort === "arrival"}
+              onclick={() => (dashboard.developerTelemetrySort = "arrival")}
+              aria-pressed={dashboard.developerTelemetrySort === "arrival"}
+              aria-label={dashboard.t("developer.arrivalOrder")}
+              title={dashboard.t("developer.arrivalOrder")}
             >
-              {dashboard.t("developer.recent")}
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <path d="M12 6v6l4 2"></path>
+                <circle cx="12" cy="12" r="9"></circle>
+              </svg>
             </button>
             <button
-              class="btn-outline"
+              class="btn-outline sort-option"
               class:active={dashboard.developerTelemetrySort === "alpha"}
               onclick={() => (dashboard.developerTelemetrySort = "alpha")}
+              aria-pressed={dashboard.developerTelemetrySort === "alpha"}
+              aria-label={dashboard.t("developer.alphabeticalOrder")}
+              title={dashboard.t("developer.alphabeticalOrder")}
             >
-              A-Z
+              <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+                <text x="4" y="9" fill="currentColor" font-size="8" font-weight="800">A</text>
+                <text x="4" y="20" fill="currentColor" font-size="8" font-weight="800">Z</text>
+                <path d="M16 5v14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
+                <path d="m13 16 3 3 3-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+              </svg>
             </button>
           </div>
         </div>

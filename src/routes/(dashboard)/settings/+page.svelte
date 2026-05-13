@@ -180,8 +180,8 @@
             <h3>{dashboard.t("settings.overlay")}</h3>
             <div class="studio-grid settings-two-col">
               <div class="input-group">
-                <label for="overlayFps">{dashboard.t("settings.updateRate")}</label>
-                <input id="overlayFps" type="number" min="1" max="120" bind:value={draftSettings.overlay.update_rate_fps} />
+                <label for="updateStateThrottle">{dashboard.t("settings.updateStateThrottle")}</label>
+                <input id="updateStateThrottle" type="number" min="1" max="120" bind:value={draftSettings.overlay.update_state_throttle_fps} />
               </div>
 
               {#if draftSettings.overlay.use_monitor_size}
@@ -257,9 +257,12 @@
 
           <div class="settings-group">
             <h3>{dashboard.t("settings.about")}</h3>
-            <div class="runtime-api-line">
-              <span>{dashboard.t("developer.runtimeApiVersion")}</span>
-              <strong>{dashboard.runtimeInfo?.runtimeApiVersion ?? "n/a"}</strong>
+            <div class="runtime-version-card">
+              <span class="runtime-api-copy">
+                <small>{dashboard.t("developer.runtimeApiVersion")}</small>
+                <strong>{dashboard.runtimeInfo?.runtimeApiVersion ?? "n/a"}</strong>
+              </span>
+              <span class="runtime-api-badge">{dashboard.runtimeInfo?.supportedRuntimeApi ?? "n/a"}</span>
             </div>
           </div>
 

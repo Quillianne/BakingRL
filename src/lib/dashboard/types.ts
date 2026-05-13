@@ -403,7 +403,7 @@ export type AppSettings = {
   };
   overlay: {
     hide_when_game_unfocused: boolean;
-    update_rate_fps: number;
+    update_state_throttle_fps: number;
     use_monitor_size: boolean;
     monitor_id?: string | null;
     screen_width: number;
@@ -461,7 +461,7 @@ export type DeveloperTelemetryGroup = {
   lastReceivedAt: number;
 };
 
-export type DeveloperTelemetrySort = "recent" | "alpha";
+export type DeveloperTelemetrySort = "arrival" | "alpha";
 export type DeveloperFrameTemplate = RlTelemetryEventName;
 
 export type RuntimeErrorEvent = {

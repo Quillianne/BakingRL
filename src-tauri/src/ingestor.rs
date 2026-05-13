@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
@@ -8,6 +8,7 @@ use tracing::{error, info, warn};
 
 use crate::bus::{BusEvent, EventBus};
 use crate::models::{GameEvent, RocketLeagueEventPayload, TelemetryConnectionStatus};
+use crate::plugin_host::PluginHost;
 
 pub type TelemetryStatusState = Arc<Mutex<TelemetryConnectionStatus>>;
 
@@ -15,6 +16,7 @@ pub async fn start_tcp_ingestor(
     bus: Arc<EventBus>,
     app_handle: AppHandle,
     status_state: TelemetryStatusState,
+    plugin_host: Arc<PluginHost>,
     host: String,
     port: u16,
 ) {
@@ -40,6 +42,7 @@ pub async fn start_tcp_ingestor(
                 set_connection_status(&app_handle, &status_state, "connected", None, &host, port);
                 let mut read_buffer = [0_u8; 8192];
                 let mut json_buffer = String::new();
+                let mut rate_limiter = UpdateStateRateLimiter::default();
 
                 loop {
                     match stream.read(&mut read_buffer).await {
@@ -60,7 +63,7 @@ pub async fn start_tcp_ingestor(
                                 .push_str(&String::from_utf8_lossy(&read_buffer[..bytes_read]));
 
                             while let Some(message) = take_next_json_message(&mut json_buffer) {
-                                process_message(&bus, &message);
+                                process_message(&bus, &plugin_host, &mut rate_limiter, &message);
                             }
 
                             if json_buffer.len() > 1_048_576 {
@@ -128,7 +131,41 @@ fn set_connection_status(
     let _ = app_handle.emit("bakingrl-telemetry-status", status);
 }
 
-fn process_message(bus: &Arc<EventBus>, message: &str) {
+#[derive(Default)]
+struct UpdateStateRateLimiter {
+    last_publish: Option<Instant>,
+}
+
+impl UpdateStateRateLimiter {
+    fn should_publish(&mut self, plugin_host: &PluginHost, event_name: &str) -> bool {
+        if event_name != "UpdateState" {
+            return true;
+        }
+
+        let fps = plugin_host
+            .get_app_settings()
+            .overlay
+            .update_state_throttle_fps
+            .max(1);
+        let interval = Duration::from_millis((1000 / u64::from(fps)).max(1));
+        let now = Instant::now();
+        if self
+            .last_publish
+            .is_some_and(|last| now.duration_since(last) < interval)
+        {
+            return false;
+        }
+        self.last_publish = Some(now);
+        true
+    }
+}
+
+fn process_message(
+    bus: &Arc<EventBus>,
+    plugin_host: &PluginHost,
+    rate_limiter: &mut UpdateStateRateLimiter,
+    message: &str,
+) {
     let trimmed = message.trim().trim_start_matches('\u{feff}');
     if trimmed.is_empty() {
         return;
@@ -155,6 +192,9 @@ fn process_message(bus: &Arc<EventBus>, message: &str) {
                     .and_then(|e| e.as_str())
                     .unwrap_or("Unknown")
                     .to_string();
+                if !rate_limiter.should_publish(plugin_host, &event_name) {
+                    return;
+                }
                 let inner_data = val.get("Data").cloned().unwrap_or(serde_json::Value::Null);
 
                 let game_event = GameEvent {

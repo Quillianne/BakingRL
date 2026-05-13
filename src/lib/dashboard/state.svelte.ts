@@ -118,7 +118,7 @@ export class DashboardState {
   developerTelemetry = $state<DeveloperTelemetryEntry[]>([]);
   developerTelemetryGroups = $state<DeveloperTelemetryGroup[]>([]);
   developerErrors = $state<DeveloperErrorEntry[]>([]);
-  developerTelemetrySort = $state<DeveloperTelemetrySort>("recent");
+  developerTelemetrySort = $state<DeveloperTelemetrySort>("arrival");
   developerFrameTemplate = $state<DeveloperFrameTemplate>("UpdateState");
   developerFrameJson = $state(telemetryFrameTemplateJson("UpdateState"));
   toasts = $state<ToastMessage[]>([]);
