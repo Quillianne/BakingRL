@@ -443,7 +443,7 @@
               <details class="telemetry-event">
                 <summary>
                   <span class="event-title">{group.eventName}</span>
-                  <span>{group.count} {group.count === 1 ? dashboard.t("developer.frame") : dashboard.t("developer.frames")} · {group.latest.receivedAt}</span>
+                  <span class="telemetry-meta">{group.count} {group.count === 1 ? dashboard.t("developer.frame") : dashboard.t("developer.frames")} · {group.latest.receivedAt}</span>
                 </summary>
                 <pre>{dashboard.formatJson(group.latest.frame)}</pre>
               </details>

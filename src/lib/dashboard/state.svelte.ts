@@ -57,6 +57,7 @@ const TELEMETRY_HELP_LAUNCH_SHOWN_KEY = "bakingrl.telemetryHelp.launchShown";
 const PACKAGE_TOGGLE_ROLLBACK_MS = 5000;
 const PACKAGE_RELOAD_MIN_SPIN_MS = 450;
 const PACKAGE_FILE_OPENED_EVENT = "bakingrl-package-files-opened";
+const DEVELOPER_TELEMETRY_FLUSH_MS = 500;
 
 type PendingPackageToggle = {
   enabled: boolean;
@@ -117,6 +118,8 @@ export class DashboardState {
   registryEntries = $state<RegistryEntry[]>([]);
   developerTelemetry = $state<DeveloperTelemetryEntry[]>([]);
   developerTelemetryGroups = $state<DeveloperTelemetryGroup[]>([]);
+  developerTelemetryBuffer: DeveloperTelemetryEntry[] = [];
+  developerTelemetryFlushTimer: ReturnType<typeof setTimeout> | null = null;
   developerErrors = $state<DeveloperErrorEntry[]>([]);
   developerTelemetrySort = $state<DeveloperTelemetrySort>("arrival");
   developerFrameTemplate = $state<DeveloperFrameTemplate>("UpdateState");
@@ -1150,30 +1153,52 @@ export class DashboardState {
       eventName: frame.Event,
       frame
     };
-    this.developerTelemetry = [entry, ...this.developerTelemetry].slice(0, 80);
-    const existingGroup = this.developerTelemetryGroups.find((group) => group.eventName === entry.eventName);
-    if (!existingGroup) {
-      this.developerTelemetryGroups = [
-        ...this.developerTelemetryGroups,
-        {
-          eventName: entry.eventName,
-          latest: entry,
-          count: 1,
-          lastReceivedAt: entry.receivedAtMs
-        }
-      ];
-      return;
+    this.developerTelemetryBuffer.push(entry);
+    this.scheduleDeveloperTelemetryFlush();
+  }
+
+  scheduleDeveloperTelemetryFlush() {
+    if (this.developerTelemetryFlushTimer) return;
+    this.developerTelemetryFlushTimer = setTimeout(() => this.flushDeveloperTelemetry(), DEVELOPER_TELEMETRY_FLUSH_MS);
+  }
+
+  flushDeveloperTelemetry() {
+    const entries = this.developerTelemetryBuffer;
+    this.developerTelemetryBuffer = [];
+    this.developerTelemetryFlushTimer = null;
+    if (!entries.length) return;
+
+    this.developerTelemetry = [...entries].reverse().concat(this.developerTelemetry).slice(0, 80);
+
+    const groups = new Map(this.developerTelemetryGroups.map((group) => [group.eventName, group]));
+    for (const entry of entries) {
+      const existingGroup = groups.get(entry.eventName);
+      groups.set(
+        entry.eventName,
+        existingGroup
+          ? {
+              ...existingGroup,
+              latest: entry,
+              count: existingGroup.count + 1,
+              lastReceivedAt: entry.receivedAtMs
+            }
+          : {
+              eventName: entry.eventName,
+              latest: entry,
+              count: 1,
+              lastReceivedAt: entry.receivedAtMs
+            }
+      );
     }
-    this.developerTelemetryGroups = this.developerTelemetryGroups.map((group) =>
-      group.eventName === entry.eventName
-        ? {
-            ...group,
-            latest: entry,
-            count: group.count + 1,
-            lastReceivedAt: entry.receivedAtMs
-          }
-        : group
-    );
+    this.developerTelemetryGroups = [...groups.values()];
+  }
+
+  clearDeveloperTelemetryFlushTimer() {
+    if (this.developerTelemetryFlushTimer) {
+      clearTimeout(this.developerTelemetryFlushTimer);
+      this.developerTelemetryFlushTimer = null;
+    }
+    this.developerTelemetryBuffer = [];
   }
 
   errorMessage(error: unknown) {
@@ -1381,6 +1406,7 @@ export class DashboardState {
       unlistenTelemetry?.();
       unlistenRuntimeErrors?.();
       this.clearPackageToggleTimers();
+      this.clearDeveloperTelemetryFlushTimer();
     };
   }
 

@@ -1910,6 +1910,7 @@ pre {
 .registry-entry summary,
 .developer-error summary {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
   padding: 10px;
@@ -1932,6 +1933,20 @@ pre {
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
   font-size: 12px;
   font-weight: 750;
+}
+
+.telemetry-event .event-title {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.telemetry-meta {
+  flex: none;
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .frame-summary {
