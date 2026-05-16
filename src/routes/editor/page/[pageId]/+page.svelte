@@ -8,7 +8,6 @@
   import type { EditorCommand } from "$lib/editor/CommandPalette.svelte";
   import EditorWorkspace from "$lib/editor/EditorWorkspace.svelte";
   import LayerItemsPanel from "$lib/editor/LayerItemsPanel.svelte";
-  import MockSequencePanel from "$lib/editor/MockSequencePanel.svelte";
   import {
     insertionPoint,
     moveItemToLayer,
@@ -17,6 +16,7 @@
     type ItemDropPosition,
     type PlacementPoint
   } from "$lib/editor/model";
+  import { preserveScroll } from "$lib/editor/preserveScroll";
   import { createLayoutThumbnail } from "$lib/layoutThumbnail";
   import VisualLibrary from "$lib/editor/VisualLibrary.svelte";
   import {
@@ -26,11 +26,6 @@
     storePendingRouteReturn,
     storeRouteScrollRestore
   } from "$lib/returnState";
-  import {
-    MOCK_SEQUENCE_UPDATE_STATE_FPS,
-    mockTelemetrySequences,
-    type MockTelemetrySequence
-  } from "$lib/rlTelemetrySequences";
 
   const { data } = $props();
 
@@ -47,12 +42,6 @@
     enabled: boolean;
     exports: {
       visuals: VisualExportDescriptor[];
-    };
-  };
-
-  type AppSettings = {
-    overlay: {
-      update_state_throttle_fps: number;
     };
   };
 
@@ -120,10 +109,7 @@
   let visualSearch = $state("");
   let previewMode = $state(false);
   let message = $state("");
-  let mockEvent = $state<{ id: number; event: unknown } | null>(null);
-  let activeMockSequenceId = $state("");
   let visualLayerDropTarget = $state<LayerDropPreview | null>(null);
-  let mockSequenceUpdateFps = $state(MOCK_SEQUENCE_UPDATE_STATE_FPS);
   let stage = $state<HTMLElement>();
   let snapEnabled = $state(true);
   let gridSize = $state(20);
@@ -132,19 +118,17 @@
   let panX = $state(0);
   let panY = $state(0);
   let commandOpen = $state(false);
-  let mockEventId = 0;
-  let mockSequenceTimers: ReturnType<typeof setTimeout>[] = [];
   let showApp = $state(true);
   let showAdd = $state(true);
   let showBackground = $state(false);
   let showLayers = $state(true);
-  let showMocks = $state(false);
   let showProperties = $state(true);
 
   const page = $derived(pages?.pages.find((entry) => entry.id === data.pageId) ?? null);
   const layers = $derived(page ? sortedLayers(page) : []);
   const activeLayer = $derived(layers.find((layer) => layer.id === activeLayerId) ?? layers[0] ?? null);
   const selectedEntry = $derived(findItem(selectedItemId));
+  const propertiesScrollKey = $derived(`page:${page?.id ?? data.pageId}:properties:${selectedItemId || "none"}`);
   const visualExports = $derived(
     packages.filter((pkg) => pkg.enabled).flatMap((pkg) =>
       pkg.exports.visuals.map((visual) => ({
@@ -154,7 +138,6 @@
       }))
     )
   );
-  const mockSequences = $derived(mockTelemetrySequences(mockSequenceUpdateFps));
   const editorCommands = $derived<EditorCommand[]>([
     ...visualExports.map((entry) => ({
       id: `visual:${entry.ref}`,
@@ -223,19 +206,12 @@
   });
 
   async function refresh() {
-    const [nextPackages, nextPages, appSettings] = await Promise.all([
+    const [nextPackages, nextPages] = await Promise.all([
       invoke<PackageDescriptor[]>("list_packages"),
-      invoke<PagesFile>("get_pages"),
-      invoke<AppSettings>("get_app_settings")
+      invoke<PagesFile>("get_pages")
     ]);
     packages = nextPackages;
     pages = nextPages;
-    mockSequenceUpdateFps = normalizeMockSequenceFps(appSettings);
-  }
-
-  function normalizeMockSequenceFps(settings: AppSettings | null | undefined) {
-    const fps = Number(settings?.overlay?.update_state_throttle_fps);
-    return Number.isFinite(fps) ? Math.max(1, Math.min(120, Math.round(fps))) : MOCK_SEQUENCE_UPDATE_STATE_FPS;
   }
 
   async function save(pageToSave = page) {
@@ -593,44 +569,6 @@
     addVisual(ref, pointForClient(event.clientX, event.clientY));
   }
 
-  function cloneMockFrame(frame: unknown) {
-    return JSON.parse(JSON.stringify(frame)) as unknown;
-  }
-
-  function emitMockFrame(frame: unknown) {
-    mockEvent = { id: ++mockEventId, event: cloneMockFrame(frame) };
-  }
-
-  function stopMockSequence() {
-    for (const timer of mockSequenceTimers) clearTimeout(timer);
-    mockSequenceTimers = [];
-    activeMockSequenceId = "";
-  }
-
-  function playMockSequence(sequence: MockTelemetrySequence) {
-    stopMockSequence();
-    if (!sequence.frames.length) return;
-
-    activeMockSequenceId = sequence.id;
-    const sequenceId = sequence.id;
-    let sequenceEndMs = 0;
-
-    for (const entry of sequence.frames) {
-      sequenceEndMs = Math.max(sequenceEndMs, entry.atMs);
-      const timer = setTimeout(() => {
-        if (activeMockSequenceId === sequenceId) emitMockFrame(entry.frame);
-      }, entry.atMs);
-      mockSequenceTimers.push(timer);
-    }
-
-    const endTimer = setTimeout(() => {
-      if (activeMockSequenceId !== sequenceId) return;
-      mockSequenceTimers = [];
-      activeMockSequenceId = "";
-    }, sequenceEndMs + 100);
-    mockSequenceTimers.push(endTimer);
-  }
-
   async function openPage() {
     if (!page) return;
     await saveThumbnail();
@@ -663,7 +601,6 @@
       unlistenPackages = unlisten;
     });
     return () => {
-      stopMockSequence();
       unlistenPages?.();
       unlistenPackages?.();
     };
@@ -682,7 +619,6 @@
       rendererSource="page"
       rendererMode={previewMode ? "page" : "editor"}
       editable={!previewMode}
-      {mockEvent}
       {layoutRevision}
       commands={editorCommands}
       bind:commandOpen
@@ -816,22 +752,6 @@
             {/if}
           </section>
 
-          <section class="accordion mock-sequences-panel">
-            <button class="accordion-header" onclick={() => (showMocks = !showMocks)}>
-              <svg class:rotated={showMocks} xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>
-              <h2>Mock Sequences</h2>
-            </button>
-            {#if showMocks}
-              <div class="accordion-body">
-                <MockSequencePanel
-                  sequences={mockSequences}
-                  activeSequenceId={activeMockSequenceId}
-                  onplay={playMockSequence}
-                  onstop={stopMockSequence}
-                />
-              </div>
-            {/if}
-          </section>
       {/snippet}
 
       {#snippet rightPanel()}
@@ -841,7 +761,7 @@
               <h2>Properties</h2>
             </button>
             {#if showProperties}
-              <div class="accordion-body">
+              <div class="accordion-body" use:preserveScroll={propertiesScrollKey}>
                 {#if selectedEntry}
                   <label>Name<input bind:value={selectedEntry.item.name} onblur={() => save()} /></label>
                   <div class="split">
@@ -858,13 +778,14 @@
                     <label class="toggle"><input type="checkbox" bind:checked={selectedEntry.item.locked} onchange={() => save()} /> Locked</label>
                   </div>
                   {#if selectedEntry.item.kind === "visual" && selectedEntry.item.package_id && selectedEntry.item.export_name}
-                    <InstanceSettingsForm
-                      item={selectedEntry.item}
-                      packageId={selectedEntry.item.package_id}
-                      exportName={selectedEntry.item.export_name}
-                      oncommit={() => {
-                        refreshPreview();
-                        return save();
+                  <InstanceSettingsForm
+                    item={selectedEntry.item}
+                    packageId={selectedEntry.item.package_id}
+                    exportName={selectedEntry.item.export_name}
+                    onpreview={refreshPreview}
+                    oncommit={() => {
+                      refreshPreview();
+                      return save();
                       }}
                     />
                   {:else if selectedEntry.item.kind === "text"}

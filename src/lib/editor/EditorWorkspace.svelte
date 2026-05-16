@@ -15,7 +15,13 @@
     type EditorLayerModel,
     type PlacementPoint
   } from "$lib/editor/model";
-  import { emptySnapGuides, snapGuideStyle, snapItemPosition, type SnapGuides } from "$lib/editor/snapping";
+  import {
+    emptySnapGuides,
+    snapGuideStyle,
+    snapItemPosition,
+    snapItemResize,
+    type SnapGuides
+  } from "$lib/editor/snapping";
   import { packageRuntime } from "$lib/packageRuntime.svelte";
 
   type WorkspaceItem = EditorItemModel & {
@@ -34,7 +40,13 @@
   };
   type RendererMode = "runtime" | "editor" | "page";
   type RendererSource = "overlay" | "page" | "configuration";
-  type MockEvent = { id: number; event: unknown } | null;
+  type VisualEditorActionHandle = {
+    itemId: string;
+    actionId: string;
+    label: string;
+    disabled?: boolean;
+    run(): Promise<void>;
+  };
   type DragState = {
     mode: "move" | "resize";
     itemId: string;
@@ -64,7 +76,6 @@
     rendererSource = "overlay",
     rendererMode = "editor",
     editable = true,
-    mockEvent = null,
     layoutRevision = 0,
     commands = [],
     commandOpen = $bindable(false),
@@ -97,7 +108,6 @@
     rendererSource?: RendererSource;
     rendererMode?: RendererMode;
     editable?: boolean;
-    mockEvent?: MockEvent;
     layoutRevision?: number;
     commands?: EditorCommand[];
     commandOpen?: boolean;
@@ -126,8 +136,12 @@
   let contextMenu = $state<ContextMenuState | null>(null);
   let snapGuides = $state<SnapGuides>(emptySnapGuides());
   let eventLayerActive = $state(false);
+  let editorActions = $state<VisualEditorActionHandle[]>([]);
 
   const selectedEntry = $derived(findItem(selectedItemId));
+  const selectedEditorActions = $derived(
+    rendererMode === "editor" ? editorActions.filter((action) => action.itemId === selectedItemId) : []
+  );
 
   function allItems(): EditorItemEntry<WorkspaceItem, WorkspaceLayer>[] {
     return layers.flatMap((layer) => layer.items.map((item) => ({ layer, item })));
@@ -202,6 +216,12 @@
 
   function itemStyle(item: WorkspaceItem) {
     return editorItemStyle(item, canvas);
+  }
+
+  function frameStyle(entry: EditorItemEntry<WorkspaceItem, WorkspaceLayer>) {
+    const baseStyle = itemStyle(entry.item);
+    if (entry.item.id !== selectedItemId) return baseStyle;
+    return `${baseStyle}z-index:100000;`;
   }
 
   function guideStyle(axis: "x" | "y", value: number | null) {
@@ -285,6 +305,10 @@
         maxWidth: canvas.width,
         maxHeight: canvas.height
       });
+      snapGuides = snapItemResize(entry.item, canvas, allItems().map((entry) => entry.item), {
+        enabled: snapEnabled,
+        gridSize
+      });
     }
     clampItem(entry.item);
     refreshPreview();
@@ -325,6 +349,11 @@
   function runContextAction(action: () => void) {
     contextMenu = null;
     action();
+  }
+
+  function runEditorAction(action: VisualEditorActionHandle) {
+    if (action.disabled) return;
+    void action.run().catch((error) => console.error(error));
   }
 
   function toggleSelectedLock() {
@@ -440,7 +469,7 @@
       {layoutRevision}
       packageRevision={packageRuntime.revision}
       mode={rendererMode}
-      {mockEvent}
+      onEditorActionsChange={(actions) => (editorActions = actions)}
       onEventLayerActiveChange={(active) => (eventLayerActive = active)}
     />
     {#if editable}
@@ -453,7 +482,7 @@
             class:locked={entry.item.locked || entry.layer.locked}
             role="button"
             tabindex="0"
-            style={itemStyle(entry.item)}
+            style={frameStyle(entry)}
             onpointerdown={(event) => startDrag(event, entry.item, "move")}
             oncontextmenu={(event) => openContextMenu(event, entry.item)}
             title={entry.item.name}
@@ -485,6 +514,20 @@
   {/snippet}
 
   {#snippet rightPanel()}
+    {#if selectedEditorActions.length}
+      <section class="editor-actions-panel">
+        <header>
+          <h2>Editor Actions</h2>
+        </header>
+        <div class="editor-actions-list">
+          {#each selectedEditorActions as action (action.itemId + ":" + action.actionId)}
+            <button type="button" class="editor-action-button" disabled={action.disabled} onclick={() => runEditorAction(action)}>
+              {action.label}
+            </button>
+          {/each}
+        </div>
+      </section>
+    {/if}
     {@render rightPanel()}
   {/snippet}
 
@@ -511,7 +554,7 @@
   .frames {
     position: absolute;
     inset: 0;
-    z-index: 100;
+    z-index: 240;
     pointer-events: none;
   }
 
@@ -520,22 +563,28 @@
     box-sizing: border-box;
     padding: 0;
     border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
-    background: color-mix(in srgb, var(--accent) 8%, transparent);
+    outline: 1px solid rgba(0, 0, 0, 0.34);
+    outline-offset: -1px;
+    background: transparent;
     color: var(--text-primary);
     cursor: move;
     pointer-events: auto;
     touch-action: none;
-    transition: border-color 0.1s, background-color 0.1s;
+    transition: border-color 0.1s, background-color 0.1s, box-shadow 0.1s;
   }
 
   .frame-box:hover {
     border-color: color-mix(in srgb, var(--accent) 78%, transparent);
-    background: color-mix(in srgb, var(--accent) 12%, transparent);
   }
 
   .frame-box.selected {
     border: 2px solid var(--accent);
-    background: color-mix(in srgb, var(--accent) 16%, transparent);
+    outline: 2px solid rgba(0, 0, 0, 0.58);
+    outline-offset: 1px;
+    box-shadow:
+      0 0 0 1px rgba(255, 255, 255, 0.72),
+      0 0 0 4px color-mix(in srgb, var(--accent) 24%, transparent),
+      0 0 18px color-mix(in srgb, var(--accent) 36%, transparent);
   }
 
   .frame-box.hidden {
@@ -545,7 +594,6 @@
 
   .frame-box.locked {
     border-color: color-mix(in srgb, var(--warn) 58%, transparent);
-    background: color-mix(in srgb, var(--warn) 6%, transparent);
   }
 
   .frame-box.locked.selected {
@@ -593,6 +641,7 @@
     position: absolute;
     right: -7px;
     bottom: -7px;
+    z-index: 2;
     width: 14px;
     height: 14px;
     padding: 0;
@@ -603,6 +652,12 @@
     opacity: 0;
     touch-action: none;
     transition: opacity 0.1s;
+  }
+
+  .resize-handle::before {
+    content: "";
+    position: absolute;
+    inset: -10px;
   }
 
   .frame-box.locked .resize-handle {
@@ -647,5 +702,58 @@
 
   .context-menu button.danger {
     color: var(--danger);
+  }
+
+  .editor-actions-panel {
+    display: flex;
+    flex: 0 0 auto;
+    flex-direction: column;
+    gap: 10px;
+    overflow: hidden;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    background: var(--editor-bg-panel);
+    color: var(--text-primary);
+    pointer-events: auto;
+    box-shadow: var(--shadow-sm);
+  }
+
+  .editor-actions-panel header {
+    padding: 10px 12px 0;
+  }
+
+  .editor-actions-panel h2 {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 700;
+  }
+
+  .editor-actions-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 0 12px 12px;
+  }
+
+  .editor-action-button {
+    flex: 1 1 auto;
+    min-width: 96px;
+    padding: 7px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--bg-dark) 35%, transparent);
+    color: var(--text-primary);
+    font-size: 12px;
+    font-weight: 650;
+    cursor: pointer;
+  }
+
+  .editor-action-button:hover:not(:disabled) {
+    background: var(--editor-bg-panel-hover);
+  }
+
+  .editor-action-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
   }
 </style>

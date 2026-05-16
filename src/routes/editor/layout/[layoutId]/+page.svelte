@@ -7,7 +7,6 @@
   import type { EditorCommand } from "$lib/editor/CommandPalette.svelte";
   import EditorWorkspace from "$lib/editor/EditorWorkspace.svelte";
   import LayerItemsPanel from "$lib/editor/LayerItemsPanel.svelte";
-  import MockSequencePanel from "$lib/editor/MockSequencePanel.svelte";
   import {
     insertionPoint,
     moveItemToLayer,
@@ -16,14 +15,10 @@
     type ItemDropPosition,
     type PlacementPoint
   } from "$lib/editor/model";
+  import { preserveScroll } from "$lib/editor/preserveScroll";
   import { createLayoutThumbnail } from "$lib/layoutThumbnail";
   import VisualLibrary from "$lib/editor/VisualLibrary.svelte";
   import { routeReturnFromParams, storeRouteScrollRestore } from "$lib/returnState";
-  import {
-    MOCK_SEQUENCE_UPDATE_STATE_FPS,
-    mockTelemetrySequences,
-    type MockTelemetrySequence
-  } from "$lib/rlTelemetrySequences";
 
   const { data } = $props();
 
@@ -40,12 +35,6 @@
     enabled: boolean;
     exports: {
       visuals: VisualExportDescriptor[];
-    };
-  };
-
-  type AppSettings = {
-    overlay: {
-      update_state_throttle_fps: number;
     };
   };
 
@@ -114,10 +103,7 @@
   let gridSize = $state(20);
   let visualSearch = $state("");
   let message = $state("");
-  let mockEvent = $state<{ id: number; event: unknown } | null>(null);
-  let activeMockSequenceId = $state("");
   let visualLayerDropTarget = $state<LayerDropPreview | null>(null);
-  let mockSequenceUpdateFps = $state(MOCK_SEQUENCE_UPDATE_STATE_FPS);
   let stage = $state<HTMLElement>();
   let confirmRequest = $state<ConfirmRequest | null>(null);
   let layoutRevision = $state(0);
@@ -125,16 +111,13 @@
   let panX = $state(0);
   let panY = $state(0);
   let dragLayerId = $state("");
-  let pluginInteractionMode = $state(false);
+  let previewMode = $state(false);
   let commandOpen = $state(false);
-  let mockEventId = 0;
-  let mockSequenceTimers: ReturnType<typeof setTimeout>[] = [];
 
   // Accordion state
   let showOverlay = $state(true);
   let showVisuals = $state(false);
   let showLayers = $state(true);
-  let showMocks = $state(false);
   let showSettings = $state(true);
 
   const layout = $derived(overlayLayouts?.layouts.find((entry) => entry.id === data.layoutId) ?? null);
@@ -146,6 +129,7 @@
       null
   );
   const selectedEntry = $derived(findItem(selectedItemId));
+  const propertiesScrollKey = $derived(`layout:${layout?.id ?? data.layoutId}:properties:${selectedItemId || "none"}`);
   const visualExports = $derived(
     packages.filter((pkg) => pkg.enabled).flatMap((pkg) =>
       pkg.exports.visuals.map((visual) => ({
@@ -155,7 +139,6 @@
       }))
     )
   );
-  const mockSequences = $derived(mockTelemetrySequences(mockSequenceUpdateFps));
   const editorCommands = $derived<EditorCommand[]>([
     ...visualExports.map((entry) => ({
       id: `visual:${entry.ref}`,
@@ -165,11 +148,11 @@
       run: () => addVisual(entry.ref)
     })),
     {
-      id: "toggle-interact",
-      label: pluginInteractionMode ? "Edit mode" : "Interact mode",
+      id: "toggle-preview",
+      label: previewMode ? "Edit mode" : "Preview",
       detail: "Canvas",
       keywords: "plugin preview test",
-      run: () => (pluginInteractionMode = !pluginInteractionMode)
+      run: () => (previewMode = !previewMode)
     },
     {
       id: "duplicate-selected",
@@ -214,24 +197,17 @@
   async function refresh() {
     loadError = "";
     try {
-      const [nextPackages, nextOverlayLayouts, appSettings] = await Promise.all([
+      const [nextPackages, nextOverlayLayouts] = await Promise.all([
         adapter.invoke<PackageDescriptor[]>("list_packages"),
-        adapter.invoke<OverlayLayoutCatalog>("get_overlay_layouts"),
-        adapter.invoke<AppSettings>("get_app_settings")
+        adapter.invoke<OverlayLayoutCatalog>("get_overlay_layouts")
       ]);
       packages = nextPackages;
       overlayLayouts = nextOverlayLayouts;
-      mockSequenceUpdateFps = normalizeMockSequenceFps(appSettings);
     } catch (error) {
       loadError = error instanceof Error ? error.message : String(error);
     } finally {
       loaded = true;
     }
-  }
-
-  function normalizeMockSequenceFps(settings: AppSettings | null | undefined) {
-    const fps = Number(settings?.overlay?.update_state_throttle_fps);
-    return Number.isFinite(fps) ? Math.max(1, Math.min(120, Math.round(fps))) : MOCK_SEQUENCE_UPDATE_STATE_FPS;
   }
 
   async function save(layoutToSave = layout) {
@@ -623,44 +599,6 @@
     addVisual(ref, pointForClient(event.clientX, event.clientY));
   }
 
-  function cloneMockFrame(frame: unknown) {
-    return JSON.parse(JSON.stringify(frame)) as unknown;
-  }
-
-  function emitMockFrame(frame: unknown) {
-    mockEvent = { id: ++mockEventId, event: cloneMockFrame(frame) };
-  }
-
-  function stopMockSequence() {
-    for (const timer of mockSequenceTimers) clearTimeout(timer);
-    mockSequenceTimers = [];
-    activeMockSequenceId = "";
-  }
-
-  function playMockSequence(sequence: MockTelemetrySequence) {
-    stopMockSequence();
-    if (!sequence.frames.length) return;
-
-    activeMockSequenceId = sequence.id;
-    const sequenceId = sequence.id;
-    let sequenceEndMs = 0;
-
-    for (const entry of sequence.frames) {
-      sequenceEndMs = Math.max(sequenceEndMs, entry.atMs);
-      const timer = setTimeout(() => {
-        if (activeMockSequenceId === sequenceId) emitMockFrame(entry.frame);
-      }, entry.atMs);
-      mockSequenceTimers.push(timer);
-    }
-
-    const endTimer = setTimeout(() => {
-      if (activeMockSequenceId !== sequenceId) return;
-      mockSequenceTimers = [];
-      activeMockSequenceId = "";
-    }, sequenceEndMs + 100);
-    mockSequenceTimers.push(endTimer);
-  }
-
   onMount(() => {
     void refresh();
     let unlistenOverlays: (() => void) | undefined;
@@ -677,7 +615,6 @@
       unlistenPackages = unlisten;
     });
     return () => {
-      stopMockSequence();
       unlistenOverlays?.();
       unlistenPackages?.();
     };
@@ -702,9 +639,8 @@
       {layers}
       centerKey={layout.id}
       canvasAriaLabel="Layout editor canvas"
-      rendererMode={pluginInteractionMode ? "page" : "editor"}
-      editable={!pluginInteractionMode}
-      {mockEvent}
+      rendererMode={previewMode ? "runtime" : "editor"}
+      editable={!previewMode}
       {layoutRevision}
       commands={editorCommands}
       bind:commandOpen
@@ -803,23 +739,6 @@
           {/if}
         </section>
 
-        <!-- Mock Sequences -->
-        <section class="accordion mock-sequences-panel">
-          <button class="accordion-header" onclick={() => showMocks = !showMocks}>
-            <svg class:rotated={showMocks} xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
-            <h2>Mock Sequences</h2>
-          </button>
-          {#if showMocks}
-            <div class="accordion-body">
-              <MockSequencePanel
-                sequences={mockSequences}
-                activeSequenceId={activeMockSequenceId}
-                onplay={playMockSequence}
-                onstop={stopMockSequence}
-              />
-            </div>
-          {/if}
-        </section>
       {/snippet}
 
       {#snippet rightPanel()}
@@ -830,7 +749,7 @@
             <h2>Properties</h2>
           </button>
           {#if showSettings}
-            <div class="accordion-body">
+            <div class="accordion-body" use:preserveScroll={propertiesScrollKey}>
               {#if selectedEntry}
                 <div class="properties-panel">
                   <div class="prop-group">
@@ -879,6 +798,7 @@
                     item={selectedEntry.item}
                     packageId={selectedEntry.item.package_id}
                     exportName={selectedEntry.item.export_name}
+                    onpreview={refreshPreview}
                     oncommit={() => {
                       refreshPreview();
                       return save();
@@ -906,8 +826,8 @@
               <div class="divider"></div>
               <div class="workspace-settings">
                 <label class="checkbox-label">
-                  <input type="checkbox" bind:checked={pluginInteractionMode} />
-                  <span class="checkmark"></span> Interact
+                  <input type="checkbox" bind:checked={previewMode} />
+                  <span class="checkmark"></span> Preview
                 </label>
                 <label class="checkbox-label">
                   <input type="checkbox" bind:checked={snapEnabled} />

@@ -5,7 +5,6 @@
   type RendererMode = "runtime" | "editor" | "page";
   type LayoutType = "ingame" | "stream";
   type LayoutSource = "overlay" | "page" | "configuration";
-  type MockEvent = { id: number; event: unknown } | null;
 
   const {
     layoutType = "ingame",
@@ -15,8 +14,8 @@
     packageRevision = 0,
     mode = "runtime",
     source = "overlay",
-    mockEvent = null,
     preview = false,
+    onEditorActionsChange = undefined,
     onEventLayerActiveChange = undefined
   }: {
     layoutType?: LayoutType;
@@ -26,8 +25,8 @@
     packageRevision?: number;
     mode?: RendererMode;
     source?: LayoutSource;
-    mockEvent?: MockEvent;
     preview?: boolean;
+    onEditorActionsChange?: (actions: VisualEditorActionHandle[]) => void;
     onEventLayerActiveChange?: (active: boolean) => void;
   } = $props();
 
@@ -167,6 +166,10 @@
     exportName: string;
     item: OverlayItem;
     settings: Record<string, unknown>;
+    mode: "runtime" | "editor";
+    editor?: {
+      emit(eventName: string, payload?: unknown): void;
+    };
     setActive(active: boolean): void;
     bus: {
       subscribe(eventName: string, callback: (event: unknown) => void): () => void;
@@ -186,10 +189,21 @@
     diagnostics: Diagnostics;
   };
 
+  type VisualEditorAction = {
+    id: string;
+    label: string;
+    disabled?: boolean;
+    run(context: VisualContext): void | Promise<void>;
+  };
+
   type VisualExport = {
     mount(context: VisualContext): void | (() => void) | Promise<void | (() => void)>;
     update?(context: VisualContext): void | Promise<void>;
     unmount?(): void | Promise<void>;
+    editor?: {
+      mount?(context: VisualContext): void | (() => void) | Promise<void | (() => void)>;
+      actions?(context: VisualContext): VisualEditorAction[] | Promise<VisualEditorAction[]>;
+    };
   };
 
   type VisualModule = {
@@ -197,6 +211,15 @@
     mount?: VisualExport["mount"];
     update?: VisualExport["update"];
     unmount?: VisualExport["unmount"];
+    editor?: VisualExport["editor"];
+  };
+
+  type VisualEditorActionHandle = {
+    itemId: string;
+    actionId: string;
+    label: string;
+    disabled?: boolean;
+    run(): Promise<void>;
   };
 
   type MountedItem = {
@@ -206,7 +229,6 @@
 
   let host: HTMLElement;
   let latestEvent: unknown = null;
-  let lastMockEventId = 0;
   let packages = $state<PackageDescriptor[]>([]);
   let overlayLayouts = $state<OverlayLayoutCatalog | null>(null);
   let pages = $state<PagesFile | null>(null);
@@ -215,6 +237,7 @@
   let telemetrySubscribers = new Set<(event: unknown) => void>();
   let componentSourceCache = new Map<string, ComponentExportSource>();
   let settingsCache = new Map<string, Record<string, unknown>>();
+  let editorActionHandles = new Map<string, VisualEditorActionHandle[]>();
   let moduleVersion = 0;
   let observedPackageRevision: number | null = null;
   let previewScale = $state(1);
@@ -227,6 +250,7 @@
   const activeLayoutSyncKey = $derived.by(() => layoutSyncKey(activeLayout));
 
   const eventLayerActive = $derived(eventActiveItems.size > 0);
+  const visualContextMode = $derived.by((): "runtime" | "editor" => (mode === "editor" ? "editor" : "runtime"));
 
   $effect(() => {
     onEventLayerActiveChange?.(eventLayerActive);
@@ -270,6 +294,8 @@
   $effect(() => {
     layoutRevision;
     activeLayoutSyncKey;
+    visualContextMode;
+    if (visualContextMode === "editor") latestEvent = null;
     if (activeLayout) {
       void syncMountedItems(activeLayout);
     }
@@ -283,13 +309,6 @@
     if (packageRevision === observedPackageRevision) return;
     observedPackageRevision = packageRevision;
     invalidateMountedModules();
-  });
-
-  $effect(() => {
-    if (mockEvent && mockEvent.id !== lastMockEventId) {
-      lastMockEventId = mockEvent.id;
-      publishTelemetry(mockEvent.event);
-    }
   });
 
   $effect(() => {
@@ -367,13 +386,46 @@
 
   function subscribe(callback: (event: unknown) => void) {
     telemetrySubscribers.add(callback);
-    if (latestEvent) callback(latestEvent);
+    if (latestEvent) notifyTelemetrySubscriber(callback, latestEvent);
     return () => telemetrySubscribers.delete(callback);
+  }
+
+  function notifyTelemetrySubscriber(callback: (event: unknown) => void, event: unknown) {
+    try {
+      callback(event);
+    } catch (error) {
+      console.warn("Plugin telemetry subscriber failed.", error);
+    }
   }
 
   function publishTelemetry(event: unknown) {
     latestEvent = event;
-    for (const callback of telemetrySubscribers) callback(event);
+    for (const callback of telemetrySubscribers) notifyTelemetrySubscriber(callback, event);
+  }
+
+  function publishEditorTelemetry(eventName: string, payload: unknown) {
+    if (visualContextMode !== "editor") return;
+    const name = String(eventName ?? "").trim();
+    if (!name) return;
+    publishTelemetry({ Event: name, Data: payload ?? null });
+  }
+
+  function notifyEditorActionsChanged() {
+    onEditorActionsChange?.([...editorActionHandles.values()].flat());
+  }
+
+  function setEditorActions(itemId: string, actions: VisualEditorActionHandle[]) {
+    if (actions.length) {
+      editorActionHandles.set(itemId, actions);
+    } else {
+      editorActionHandles.delete(itemId);
+    }
+    notifyEditorActionsChanged();
+  }
+
+  function clearEditorActions(itemId: string) {
+    if (!editorActionHandles.delete(itemId)) return;
+    notifyEditorActionsChanged();
   }
 
   function matchesPattern(patterns: string[] | undefined, value: string) {
@@ -487,6 +539,10 @@
       export_name: item.export_name ?? null,
       settings: settingsObject(item)
     });
+  }
+
+  function mountedContextMode() {
+    return visualContextMode;
   }
 
   async function getPackageSettings(packageId: string) {
@@ -604,15 +660,19 @@
     root.dataset.layerId = layer.id;
     root.dataset.layerKind = layer.kind;
     root.dataset.mountSignature = visualMountSignature(item);
+    root.dataset.contextMode = mountedContextMode();
     applyItemStyle(root, layer, item, layout);
     host.appendChild(root);
 
     let disposed = false;
     let visualCleanup: void | (() => void);
+    let editorCleanup: void | (() => void);
     let visualModule: VisualExport | undefined;
     const busCleanups = new Set<() => void>();
     const cleanupMountedVisual = () => {
       disposed = true;
+      clearEditorActions(item.id);
+      if (typeof editorCleanup === "function") editorCleanup();
       if (typeof visualCleanup === "function") visualCleanup();
       void visualModule?.unmount?.();
       for (const cleanup of busCleanups) cleanup();
@@ -631,10 +691,12 @@
       visualModule = visualMod.default ?? (visualMod.mount ? {
         mount: visualMod.mount,
         update: visualMod.update,
-        unmount: visualMod.unmount
+        unmount: visualMod.unmount,
+        editor: visualMod.editor
       } : undefined);
-      const mountVisual = visualModule?.mount;
-      if (!mountVisual) {
+      const loadedVisual = visualModule;
+      const mountVisual = loadedVisual?.mount;
+      if (!loadedVisual || !mountVisual) {
         throw new Error(`Visual export '${mountedPackage.id}/${item.export_name}' does not export mount().`);
       }
 
@@ -656,6 +718,14 @@
         exportName: nextItem.export_name ?? mountedVisual.name,
         item: nextItem,
         settings: nextSettings,
+        mode: mountedContextMode(),
+        editor: mountedContextMode() === "editor"
+          ? {
+              emit(eventName, payload) {
+                publishEditorTelemetry(eventName, payload);
+              }
+            }
+          : undefined,
         setActive(active) {
           if (nextLayer.kind !== "event") return;
           const nextActiveItems = new Set(eventActiveItems);
@@ -743,22 +813,63 @@
         diagnostics
       });
 
-      const mountResult = await mountVisual(createContext(layer, item, settings));
+      const mountContext = createContext(layer, item, settings);
+      const mountResult = await mountVisual(mountContext);
 
       if (disposed) {
         if (typeof mountResult === "function") mountResult();
         return;
       }
       visualCleanup = mountResult;
+      if (mountedContextMode() === "editor") {
+        const editorMountResult = await loadedVisual.editor?.mount?.(mountContext);
+        if (disposed) {
+          if (typeof editorMountResult === "function") editorMountResult();
+          return;
+        }
+        editorCleanup = editorMountResult;
+        const actions = await loadedVisual.editor?.actions?.(mountContext);
+        if (disposed) return;
+        setEditorActions(
+          item.id,
+          (actions ?? []).map((action) => ({
+            itemId: item.id,
+            actionId: String(action.id),
+            label: String(action.label),
+            disabled: action.disabled,
+            async run() {
+              await action.run(mountContext);
+            }
+          }))
+        );
+      } else {
+        clearEditorActions(item.id);
+      }
       mountedItems.set(item.id, {
         cleanup: cleanupMountedVisual,
         async update(nextLayer, nextItem, nextLayout) {
-          if (!visualModule?.update) return;
+          if (!loadedVisual.update) return;
           const nextPackageSettings = await getPackageSettings(mountedPackage.id);
           const nextSettings = { ...nextPackageSettings, ...settingsObject(nextItem) };
+          const nextContext = createContext(nextLayer, nextItem, nextSettings);
           root.dataset.mountSignature = visualMountSignature(nextItem);
           applyItemStyle(root, nextLayer, nextItem, nextLayout);
-          await visualModule.update(createContext(nextLayer, nextItem, nextSettings));
+          await loadedVisual.update(nextContext);
+          if (mountedContextMode() === "editor") {
+            const actions = await loadedVisual.editor?.actions?.(nextContext);
+            setEditorActions(
+              nextItem.id,
+              (actions ?? []).map((action) => ({
+                itemId: nextItem.id,
+                actionId: String(action.id),
+                label: String(action.label),
+                disabled: action.disabled,
+                async run() {
+                  await action.run(nextContext);
+                }
+              }))
+            );
+          }
         }
       });
     } catch (error) {
@@ -787,6 +898,13 @@
     for (const { layer, item } of itemEntries) {
       const root = itemRoot(item.id);
       if (root) {
+        if (itemKind(item) === "visual" && root.dataset.contextMode !== mountedContextMode()) {
+          const mounted = mountedItems.get(item.id);
+          mounted?.cleanup();
+          mountedItems.delete(item.id);
+          await mountItem(layer, item, layout);
+          continue;
+        }
         if (itemKind(item) === "visual" && root.dataset.mountSignature !== visualMountSignature(item)) {
           const mounted = mountedItems.get(item.id);
           if (mounted?.update) {
@@ -834,7 +952,9 @@
     let unlistenPages: (() => void) | undefined;
     let unlistenSettings: (() => void) | undefined;
 
-    void adapter.listen("bakingrl-telemetry", publishTelemetry).then((unlisten) => {
+    void adapter.listen("bakingrl-telemetry", (event) => {
+      if (visualContextMode !== "editor") publishTelemetry(event);
+    }).then((unlisten) => {
       unlistenTelemetry = unlisten;
     });
     void adapter.listen<PackageDescriptor[]>("bakingrl-packages-changed", (event) => {
@@ -886,6 +1006,8 @@
       if (pollInterval) clearInterval(pollInterval);
       for (const mounted of mountedItems.values()) mounted.cleanup();
       mountedItems.clear();
+      editorActionHandles.clear();
+      onEditorActionsChange?.([]);
       telemetrySubscribers.clear();
       componentSourceCache.clear();
       settingsCache.clear();
@@ -897,7 +1019,19 @@
   class="overlay-renderer-host"
   class:editor={mode === "editor"}
   class:page={mode === "page"}
+  class:embedded={layoutOverride !== null}
   style={hostStyle}
   bind:this={host}
   aria-label="Visual export host"
 ></main>
+
+<style>
+  .overlay-renderer-host.embedded {
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 0;
+    width: 100%;
+    height: 100%;
+  }
+</style>

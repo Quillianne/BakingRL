@@ -49,11 +49,13 @@
     item,
     packageId = null,
     exportName = null,
+    onpreview = () => {},
     oncommit
   }: {
     item: SettingsItem;
     packageId?: string | null;
     exportName?: string | null;
+    onpreview?: () => void | Promise<void>;
     oncommit: () => void | Promise<void>;
   } = $props();
 
@@ -166,7 +168,7 @@
     return item.settings && typeof item.settings === "object" && !Array.isArray(item.settings) ? item.settings : {};
   }
 
-  function updateField(field: SettingsField, rawValue: string | number | boolean | unknown[]) {
+  function updateField(field: SettingsField, rawValue: string | number | boolean | unknown[], commit = true) {
     const next = { ...settingsObject() };
     if (field.type === "array") {
       next[field.key] = Array.isArray(rawValue) ? rawValue : [];
@@ -183,12 +185,12 @@
       next[field.key] = String(rawValue);
     }
     item.settings = next;
-    void oncommit();
+    void (commit ? oncommit() : onpreview());
   }
 
-  function updateOptionField(field: SettingsField, rawValue: string) {
+  function updateOptionField(field: SettingsField, rawValue: string, commit = true) {
     const option = field.options.find((entry) => String(entry.value) === rawValue);
-    updateField(field, option?.value ?? rawValue);
+    updateField(field, option?.value ?? rawValue, commit);
   }
 
   function arrayValues(field: SettingsField) {
@@ -273,6 +275,7 @@
               min={field.minimum}
               max={field.maximum}
               value={String(fieldValue(field))}
+              oninput={(event) => updateField(field, event.currentTarget.value, false)}
               onblur={(event) => updateField(field, event.currentTarget.value)}
             />
           {:else if field.format === "color"}
@@ -282,6 +285,7 @@
               value={String(fieldValue(field))}
               minlength={field.minLength}
               maxlength={field.maxLength}
+              oninput={(event) => updateField(field, event.currentTarget.value, false)}
               onblur={(event) => updateField(field, event.currentTarget.value)}
             />
           {/if}

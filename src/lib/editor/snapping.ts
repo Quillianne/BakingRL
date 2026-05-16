@@ -48,6 +48,21 @@ export function snapItemPosition(
   return { x: xSnap.guide, y: ySnap.guide };
 }
 
+export function snapItemResize(
+  item: SnapItem,
+  canvas: SnapCanvas,
+  items: SnapItem[],
+  options: SnapOptions
+): SnapGuides {
+  if (!options.enabled) return emptySnapGuides();
+
+  const rightSnap = snapAxis(item.x + item.width, xResizeCandidates(item, canvas, items), options);
+  const bottomSnap = snapAxis(item.y + item.height, yResizeCandidates(item, canvas, items), options);
+  item.width = rightSnap.value - item.x;
+  item.height = bottomSnap.value - item.y;
+  return { x: rightSnap.guide, y: bottomSnap.guide };
+}
+
 export function snapGuideStyle(axis: "x" | "y", value: number | null, canvas: SnapCanvas | null) {
   if (!canvas || value === null) return "";
   return axis === "x" ? `left:${(value / canvas.width) * 100}%;` : `top:${(value / canvas.height) * 100}%;`;
@@ -108,4 +123,42 @@ function yCandidates(item: SnapItem, canvas: SnapCanvas, items: SnapItem[]) {
   }
 
   return candidates;
+}
+
+function xResizeCandidates(item: SnapItem, canvas: SnapCanvas, items: SnapItem[]) {
+  const candidates: SnapCandidate[] = [
+    { position: 0, guide: 0 },
+    { position: canvas.width / 2, guide: canvas.width / 2 },
+    { position: canvas.width, guide: canvas.width }
+  ];
+
+  for (const other of items) {
+    if (other.id === item.id) continue;
+    candidates.push(
+      { position: other.x, guide: other.x },
+      { position: other.x + other.width, guide: other.x + other.width },
+      { position: other.x + other.width / 2, guide: other.x + other.width / 2 }
+    );
+  }
+
+  return candidates.filter((candidate) => candidate.position > item.x);
+}
+
+function yResizeCandidates(item: SnapItem, canvas: SnapCanvas, items: SnapItem[]) {
+  const candidates: SnapCandidate[] = [
+    { position: 0, guide: 0 },
+    { position: canvas.height / 2, guide: canvas.height / 2 },
+    { position: canvas.height, guide: canvas.height }
+  ];
+
+  for (const other of items) {
+    if (other.id === item.id) continue;
+    candidates.push(
+      { position: other.y, guide: other.y },
+      { position: other.y + other.height, guide: other.y + other.height },
+      { position: other.y + other.height / 2, guide: other.y + other.height / 2 }
+    );
+  }
+
+  return candidates.filter((candidate) => candidate.position > item.y);
 }
