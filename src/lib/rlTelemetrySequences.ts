@@ -46,6 +46,7 @@ const HARD_STATE_BOUNDARY_EVENTS = new Set<RlTelemetryEventName>([
   "MatchEnded",
   "MatchInitialized",
   "PodiumStart",
+  "ReplayWillEnd",
   "RoundStarted"
 ]);
 const SMOOTH_NUMBER_KEYS = new Set(["Boost", "Elapsed", "Frame", "Speed", "TimeSeconds"]);
@@ -83,6 +84,7 @@ type UpdateOptions = {
   elapsed?: number;
   ballSpeed?: number;
   ballTeam?: number;
+  overtime?: boolean;
   replay?: boolean;
   target?: RlPlayerRef | null;
   winnerTeamNum?: number | null;
@@ -175,7 +177,7 @@ function updateState(options: UpdateOptions): RlUpdateStatePayload {
     Game: {
       Teams: options.teams ?? teams(options.blueScore ?? 0, options.orangeScore ?? 0),
       TimeSeconds: options.timeSeconds,
-      bOvertime: false,
+      bOvertime: options.overtime ?? false,
       Frame: options.frame ?? Math.max(0, Math.round((300 - options.timeSeconds) * 60)),
       Elapsed: options.elapsed ?? Math.max(0, 300 - options.timeSeconds),
       Ball: { Speed: options.ballSpeed ?? 0, TeamNum: options.ballTeam ?? 255 },
@@ -229,6 +231,25 @@ function goalScored(
     BallLastTouch: {
       Player: scorer,
       Speed: goalSpeed
+    }
+  };
+}
+
+function replayGoalScored(
+  ballLastTouch: RlPlayerRef,
+  impactLocation: RlLocation,
+  ballLastTouchSpeed = 0,
+  matchGuid: string | null = MATCH_GUID
+): RlGoalScoredPayload {
+  return {
+    ...optionalMatchGuid(matchGuid),
+    GoalSpeed: 0,
+    GoalTime: 0,
+    ImpactLocation: impactLocation,
+    Scorer: { Name: "", Shortcut: 0, TeamNum: 0 },
+    BallLastTouch: {
+      Player: ballLastTouch,
+      Speed: ballLastTouchSpeed
     }
   };
 }
@@ -513,7 +534,8 @@ const MOCK_TELEMETRY_SEQUENCE_FIXTURES: MockTelemetrySequenceFixture[] = [
     name: "Join game + countdown",
     description: "Players arrive, teams fill, countdown starts, then the round begins.",
     frames: [
-      at(0, "MatchCreated", simple()),
+      at(0, "ClockUpdatedSeconds", { MatchGuid: "", TimeSeconds: 300, bOvertime: false }),
+      at(120, "MatchCreated", simple("")),
       at(350, "MatchInitialized", simple()),
       at(700, "UpdateState", updateState({ timeSeconds: 300, blueScore: 0, orangeScore: 0, target: BLUE_1 })),
       at(1200, "UpdateState", updateState({
@@ -529,8 +551,6 @@ const MOCK_TELEMETRY_SEQUENCE_FIXTURES: MockTelemetrySequenceFixture[] = [
         }
       })),
       at(1700, "CountdownBegin", simple()),
-      at(2600, "ClockUpdatedSeconds", { MatchGuid: MATCH_GUID, TimeSeconds: 300, bOvertime: false }),
-      at(3600, "ClockUpdatedSeconds", { MatchGuid: MATCH_GUID, TimeSeconds: 299, bOvertime: false }),
       at(4200, "RoundStarted", simple()),
       at(4550, "UpdateState", updateState({
         timeSeconds: 299,
@@ -540,7 +560,8 @@ const MOCK_TELEMETRY_SEQUENCE_FIXTURES: MockTelemetrySequenceFixture[] = [
           blue1: { Speed: 960, Boost: 94, bBoosting: true },
           orange1: { Speed: 980, Boost: 96, bBoosting: true }
         }
-      }))
+      })),
+      at(5200, "ClockUpdatedSeconds", { MatchGuid: MATCH_GUID, TimeSeconds: 299, bOvertime: false })
     ]
   },
   {
@@ -671,9 +692,11 @@ const MOCK_TELEMETRY_SEQUENCE_FIXTURES: MockTelemetrySequenceFixture[] = [
   {
     id: "goal-replay-countdown",
     name: "Goal + replay + next countdown",
-    description: "Goal scored, replay starts and ends, score updates, then a new countdown begins.",
+    description: "Goal statfeed, goal event, GoalReplay lifecycle, then a new countdown begins.",
     frames: [
-      at(0, "UpdateState", updateState({
+      at(0, "CountdownBegin", simple()),
+      at(300, "RoundStarted", simple()),
+      at(600, "UpdateState", updateState({
         timeSeconds: 76,
         blueScore: 2,
         orangeScore: 2,
@@ -684,25 +707,50 @@ const MOCK_TELEMETRY_SEQUENCE_FIXTURES: MockTelemetrySequenceFixture[] = [
           blue2: { Score: 310, Assists: 1, Boost: 70 }
         }
       })),
-      at(300, "BallHit", ballHit(BLUE_2, 1180, 1320, loc(-650, 1800, 180))),
-      at(650, "GoalScored", goalScored(BLUE_1, BLUE_2, 1550, 76, loc(0, 5120, 140))),
-      at(850, "StatfeedEvent", statfeed("Goal", "Goal", BLUE_1, BLUE_2)),
-      at(1200, "GoalReplayStart", simple()),
+      at(900, "BallHit", ballHit(BLUE_2, 1180, 1320, loc(-650, 1800, 180))),
+      at(1200, "StatfeedEvent", statfeed("Goal", "Goal", BLUE_1, BLUE_2)),
+      at(1250, "StatfeedEvent", statfeed("Assist", "Assist", BLUE_2, BLUE_1)),
+      at(1350, "GoalScored", goalScored(BLUE_1, BLUE_2, 1550, 76, loc(0, 5120, 140))),
       at(1800, "UpdateState", updateState({
         timeSeconds: 76,
         blueScore: 3,
         orangeScore: 2,
-        ballSpeed: 320,
-        replay: true,
+        ballSpeed: 520,
         target: BLUE_1,
         playerOverrides: {
           blue1: { Score: 520, Goals: 2, Shots: 4, Boost: 64 },
           blue2: { Score: 360, Assists: 2, Boost: 70 }
         }
       })),
+      at(2200, "GoalReplayStart", simple()),
+      at(2400, "UpdateState", updateState({
+        timeSeconds: 76,
+        blueScore: 3,
+        orangeScore: 2,
+        ballSpeed: 320,
+        replay: true,
+        target: null,
+        playerOverrides: {
+          blue1: { Score: 520, Goals: 2, Shots: 4, Boost: 64 },
+          blue2: { Score: 360, Assists: 2, Boost: 70 }
+        }
+      })),
       at(4200, "GoalReplayWillEnd", simple()),
+      at(4950, "GoalScored", replayGoalScored(BLUE_1, loc(0, 5120, 140), 1550)),
       at(5000, "GoalReplayEnd", simple()),
-      at(5600, "CountdownBegin", simple()),
+      at(5050, "CountdownBegin", simple()),
+      at(5600, "UpdateState", updateState({
+        timeSeconds: 76,
+        blueScore: 3,
+        orangeScore: 2,
+        ballSpeed: 0,
+        replay: false,
+        target: BLUE_1,
+        playerOverrides: {
+          blue1: { Score: 520, Goals: 2, Shots: 4, Boost: 100 },
+          blue2: { Score: 360, Assists: 2, Boost: 100 }
+        }
+      })),
       at(6500, "ClockUpdatedSeconds", { MatchGuid: MATCH_GUID, TimeSeconds: 76, bOvertime: false }),
       at(7300, "RoundStarted", simple()),
       at(7600, "UpdateState", updateState({
@@ -864,16 +912,30 @@ const MOCK_TELEMETRY_SEQUENCE_FIXTURES: MockTelemetrySequenceFixture[] = [
         }
       })),
       at(16000, "ClockUpdatedSeconds", { MatchGuid: MATCH_GUID, TimeSeconds: 18, bOvertime: false }),
-      at(16000, "GoalScored", goalScored(BLUE_1, BLUE_2, 1560, 18, loc(0, 5120, 140))),
-      at(16200, "StatfeedEvent", statfeed("Goal", "Goal", BLUE_1, BLUE_2)),
-      at(16500, "GoalReplayStart", simple()),
+      at(16100, "StatfeedEvent", statfeed("Goal", "Goal", BLUE_1, BLUE_2)),
+      at(16200, "StatfeedEvent", statfeed("Assist", "Assist", BLUE_2, BLUE_1)),
+      at(16300, "GoalScored", goalScored(BLUE_1, BLUE_2, 1560, 18, loc(0, 5120, 140))),
       at(17000, "UpdateState", updateState({
+        timeSeconds: 18,
+        blueScore: 1,
+        orangeScore: 0,
+        ballSpeed: 460,
+        replay: false,
+        target: BLUE_1,
+        playerOverrides: {
+          blue1: { Score: 150, Goals: 1, Shots: 1, Saves: 1, Touches: 1, Boost: 32 },
+          blue2: { Score: 70, Assists: 1, Demos: 1, Boost: 48 },
+          orange2: { bDemolished: false, Boost: 100, Speed: 0 }
+        }
+      })),
+      at(17300, "GoalReplayStart", simple()),
+      at(17600, "UpdateState", updateState({
         timeSeconds: 18,
         blueScore: 1,
         orangeScore: 0,
         ballSpeed: 280,
         replay: true,
-        target: BLUE_1,
+        target: null,
         playerOverrides: {
           blue1: { Score: 150, Goals: 1, Shots: 1, Saves: 1, Touches: 1, Boost: 32 },
           blue2: { Score: 70, Assists: 1, Demos: 1, Boost: 48 },
@@ -886,7 +948,7 @@ const MOCK_TELEMETRY_SEQUENCE_FIXTURES: MockTelemetrySequenceFixture[] = [
         orangeScore: 0,
         ballSpeed: 240,
         replay: true,
-        target: BLUE_2,
+        target: null,
         playerOverrides: {
           blue1: { Score: 150, Goals: 1, Shots: 1, Saves: 1, Touches: 1, Boost: 32 },
           blue2: { Score: 70, Assists: 1, Demos: 1, Boost: 48 },
@@ -899,7 +961,7 @@ const MOCK_TELEMETRY_SEQUENCE_FIXTURES: MockTelemetrySequenceFixture[] = [
         orangeScore: 0,
         ballSpeed: 180,
         replay: true,
-        target: BLUE_1,
+        target: null,
         playerOverrides: {
           blue1: { Score: 150, Goals: 1, Shots: 1, Saves: 1, Touches: 1, Boost: 32 },
           blue2: { Score: 70, Assists: 1, Demos: 1, Boost: 48 },
@@ -907,6 +969,7 @@ const MOCK_TELEMETRY_SEQUENCE_FIXTURES: MockTelemetrySequenceFixture[] = [
         }
       })),
       at(20000, "GoalReplayWillEnd", simple()),
+      at(20900, "GoalScored", replayGoalScored(BLUE_1, loc(0, 5120, 140), 1560)),
       at(21000, "GoalReplayEnd", simple()),
       at(21600, "CountdownBegin", simple()),
       at(22600, "ClockUpdatedSeconds", { MatchGuid: MATCH_GUID, TimeSeconds: 18, bOvertime: false }),
@@ -976,6 +1039,7 @@ const MOCK_TELEMETRY_SEQUENCE_FIXTURES: MockTelemetrySequenceFixture[] = [
           blue2: { Score: 70, Assists: 1, Demos: 1, Boost: 74, Speed: 0 }
         }
       })),
+      at(42000, "ClockUpdatedSeconds", { MatchGuid: MATCH_GUID, TimeSeconds: 0, bOvertime: false }),
       at(42100, "MatchEnded", matchEnded(0)),
       at(43000, "PodiumStart", simple()),
       at(44300, "MatchDestroyed", simple())
@@ -991,6 +1055,7 @@ const MOCK_TELEMETRY_SEQUENCE_FIXTURES: MockTelemetrySequenceFixture[] = [
       at(2000, "ClockUpdatedSeconds", { MatchGuid: MATCH_GUID, TimeSeconds: 8, bOvertime: false }),
       at(7000, "UpdateState", updateState({ timeSeconds: 3, blueScore: 4, orangeScore: 3, ballSpeed: 420, target: BLUE_2 })),
       at(10000, "UpdateState", updateState({ timeSeconds: 0, blueScore: 4, orangeScore: 3, ballSpeed: 0, target: null, winnerTeamNum: 0 })),
+      at(10200, "ClockUpdatedSeconds", { MatchGuid: MATCH_GUID, TimeSeconds: 0, bOvertime: false }),
       at(10300, "MatchEnded", matchEnded(0)),
       at(11200, "PodiumStart", simple()),
       at(12500, "MatchDestroyed", simple())
@@ -1006,9 +1071,102 @@ const MOCK_TELEMETRY_SEQUENCE_FIXTURES: MockTelemetrySequenceFixture[] = [
       at(2000, "ClockUpdatedSeconds", { MatchGuid: MATCH_GUID, TimeSeconds: 8, bOvertime: false }),
       at(7000, "UpdateState", updateState({ timeSeconds: 3, blueScore: 2, orangeScore: 3, ballSpeed: 310, target: BLUE_1 })),
       at(10000, "UpdateState", updateState({ timeSeconds: 0, blueScore: 2, orangeScore: 3, ballSpeed: 0, target: null, winnerTeamNum: 1 })),
+      at(10200, "ClockUpdatedSeconds", { MatchGuid: MATCH_GUID, TimeSeconds: 0, bOvertime: false }),
       at(10300, "MatchEnded", matchEnded(1)),
       at(11200, "PodiumStart", simple()),
       at(12500, "MatchDestroyed", simple())
+    ]
+  },
+  {
+    id: "overtime-goal-win",
+    name: "Overtime goal win",
+    description: "Regulation ends tied, overtime begins, Orange scores, replay winds down, then match end and podium fire.",
+    frames: [
+      at(0, "UpdateState", updateState({ timeSeconds: 0, blueScore: 2, orangeScore: 2, ballSpeed: 640, target: BLUE_1 })),
+      at(300, "CountdownBegin", simple()),
+      at(650, "UpdateState", updateState({
+        timeSeconds: 0,
+        blueScore: 2,
+        orangeScore: 2,
+        overtime: true,
+        ballSpeed: 0,
+        target: BLUE_1,
+        playerOverrides: {
+          blue1: { Score: 420, Goals: 1, Boost: 100, Speed: 0 },
+          orange1: { Score: 480, Goals: 1, Boost: 100, Speed: 0 }
+        }
+      })),
+      at(1300, "RoundStarted", simple()),
+      at(1800, "UpdateState", updateState({
+        timeSeconds: 0,
+        blueScore: 2,
+        orangeScore: 2,
+        overtime: true,
+        ballSpeed: 780,
+        target: ORANGE_1,
+        playerOverrides: {
+          blue1: { Score: 420, Goals: 1, Boost: 82, Speed: 1180 },
+          orange1: { Score: 480, Goals: 1, Boost: 76, Speed: 1300, bBoosting: true }
+        }
+      })),
+      at(2800, "ClockUpdatedSeconds", { MatchGuid: MATCH_GUID, TimeSeconds: 1, bOvertime: true }),
+      at(3800, "ClockUpdatedSeconds", { MatchGuid: MATCH_GUID, TimeSeconds: 2, bOvertime: true }),
+      at(4800, "BallHit", ballHit(ORANGE_2, 920, 1420, loc(220, -4600, 220))),
+      at(5200, "StatfeedEvent", statfeed("Goal", "Goal", ORANGE_1, ORANGE_2)),
+      at(5250, "StatfeedEvent", statfeed("OvertimeGoal", "Overtime Goal", ORANGE_1)),
+      at(5300, "StatfeedEvent", statfeed("Assist", "Assist", ORANGE_2, ORANGE_1)),
+      at(5400, "GoalScored", goalScored(ORANGE_1, ORANGE_2, 1420, 2, loc(0, -5120, 140))),
+      at(5900, "UpdateState", updateState({
+        timeSeconds: 2,
+        blueScore: 2,
+        orangeScore: 3,
+        overtime: true,
+        ballSpeed: 420,
+        target: ORANGE_1,
+        playerOverrides: {
+          blue1: { Score: 420, Goals: 1, Boost: 64, Speed: 820 },
+          orange1: { Score: 580, Goals: 2, Boost: 44, Speed: 980 },
+          orange2: { Score: 340, Assists: 1, Boost: 52, Speed: 760 }
+        }
+      })),
+      at(7100, "GoalReplayStart", simple()),
+      at(7600, "UpdateState", updateState({
+        timeSeconds: 2,
+        blueScore: 2,
+        orangeScore: 3,
+        overtime: true,
+        ballSpeed: 260,
+        replay: true,
+        target: null,
+        playerOverrides: {
+          blue1: { Score: 420, Goals: 1, Boost: 64, Speed: 0 },
+          orange1: { Score: 580, Goals: 2, Boost: 44, Speed: 0 },
+          orange2: { Score: 340, Assists: 1, Boost: 52, Speed: 0 }
+        }
+      })),
+      at(9000, "GoalReplayWillEnd", simple()),
+      at(9600, "StatfeedEvent", statfeed("Win", "Win", ORANGE_1)),
+      at(9650, "StatfeedEvent", statfeed("MVP", "MVP", ORANGE_1)),
+      at(9680, "GoalScored", replayGoalScored(ORANGE_1, loc(0, -5120, 140), 1420)),
+      at(9700, "GoalReplayEnd", simple()),
+      at(9750, "ClockUpdatedSeconds", { MatchGuid: MATCH_GUID, TimeSeconds: 0, bOvertime: true }),
+      at(9800, "MatchEnded", matchEnded(1)),
+      at(10000, "UpdateState", updateState({
+        timeSeconds: 0,
+        blueScore: 2,
+        orangeScore: 3,
+        overtime: true,
+        ballSpeed: 0,
+        target: null,
+        winnerTeamNum: 1,
+        playerOverrides: {
+          blue1: { Score: 420, Goals: 1, Boost: 64, Speed: 0 },
+          orange1: { Score: 580, Goals: 2, Boost: 44, Speed: 0 },
+          orange2: { Score: 340, Assists: 1, Boost: 52, Speed: 0 }
+        }
+      })),
+      at(10800, "PodiumStart", simple()),
+      at(12000, "MatchDestroyed", simple())
     ]
   },
   {
