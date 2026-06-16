@@ -5,26 +5,26 @@
 
   const dashboard = getDashboardContext();
 
-  type PackageExportRow = {
+  type PackageContributionRow = {
     name: string;
     meta?: string;
   };
 
-  type PackageExportSection = {
+  type PackageContributionSection = {
     title: string;
     count: number;
-    rows: PackageExportRow[];
+    rows: PackageContributionRow[];
   };
 
-  type PackageDetailTab = "exports" | "permissions";
+  type PackageDetailTab = "contributions" | "permissions";
 
   let detailPackageId = $state<string | null>(null);
-  let activeDetailTab = $state<PackageDetailTab>("exports");
+  let activeDetailTab = $state<PackageDetailTab>("contributions");
   const detailPackage = $derived(dashboard.packages.find((pkg) => pkg.id === detailPackageId) ?? null);
 
   function openPackageDetails(pkg: PackageDescriptor) {
     detailPackageId = pkg.id;
-    activeDetailTab = "exports";
+    activeDetailTab = "contributions";
   }
 
   function closePackageDetails() {
@@ -47,56 +47,46 @@
     }
   }
 
-  function packageExportSections(pkg: PackageDescriptor): PackageExportSection[] {
-    const sections: PackageExportSection[] = [
+  function packageContributionSections(pkg: PackageDescriptor): PackageContributionSection[] {
+    const sections: PackageContributionSection[] = [
       {
         title: dashboard.t("packages.visuals"),
-        count: pkg.exports.visuals.length,
-        rows: pkg.exports.visuals.map((visual) => ({
+        count: pkg.contributions.visuals.length,
+        rows: pkg.contributions.visuals.map((visual) => ({
           name: visual.name,
           meta: `${visual.default_width}x${visual.default_height}`
         }))
       },
       {
-        title: dashboard.t("packages.components"),
-        count: pkg.exports.components.length,
-        rows: pkg.exports.components.map((component) => ({ name: component.name }))
-      },
-      {
         title: dashboard.t("packages.services"),
-        count: pkg.exports.services.length,
-        rows: pkg.exports.services.map((service) => ({
+        count: pkg.contributions.services.length,
+        rows: pkg.contributions.services.map((service) => ({
           name: service.name,
           meta: `${service.methods.length} ${dashboard.t("packages.methods")}`
         }))
       },
       {
-        title: dashboard.t("packages.connectors"),
-        count: pkg.exports.connectors.length,
-        rows: pkg.exports.connectors.map((connector) => ({ name: connector.name }))
-      },
-      {
         title: dashboard.t("packages.assets"),
-        count: pkg.exports.assets.length,
-        rows: pkg.exports.assets.map((asset) => ({ name: asset.name }))
+        count: pkg.contributions.assets.length,
+        rows: pkg.contributions.assets.map((asset) => ({ name: asset.name }))
       },
       {
         title: dashboard.t("packages.schemas"),
-        count: pkg.exports.schemas.length,
-        rows: pkg.exports.schemas.map((schema) => ({ name: schema.name }))
+        count: pkg.contributions.schemas.length,
+        rows: pkg.contributions.schemas.map((schema) => ({ name: schema.name }))
       },
       {
         title: dashboard.t("packages.pageTemplates"),
-        count: pkg.exports.pages.length,
-        rows: pkg.exports.pages.map((page) => ({
+        count: pkg.contributions.pages.length,
+        rows: pkg.contributions.pages.map((page) => ({
           name: page.title ?? page.name,
           meta: page.path
         }))
       },
       {
         title: dashboard.t("packages.layoutTemplates"),
-        count: pkg.exports.layouts.length,
-        rows: pkg.exports.layouts.map((layoutTemplate) => ({
+        count: pkg.contributions.overlays.length,
+        rows: pkg.contributions.overlays.map((layoutTemplate) => ({
           name: layoutTemplate.title ?? layoutTemplate.name,
           meta: layoutTemplate.path
         }))
@@ -129,7 +119,7 @@
           <article
             class="studio-card package-card"
             class:disabled={!dashboard.isPackageEnabled(pkg)}
-            title={`${dashboard.permissionTotal(pkg.effective_permissions)} ${dashboard.t("common.permissions")} · ${dashboard.exportCount(pkg)} ${dashboard.t("packages.elements")}`}
+            title={`${dashboard.permissionTotal(pkg.effective_permissions)} ${dashboard.t("common.permissions")} · ${dashboard.contributionCount(pkg)} ${dashboard.t("packages.elements")}`}
           >
             <div class="package-head">
               <div class="package-meta">
@@ -140,7 +130,7 @@
                     {dashboard.packageDisplayStateLabel(pkg)}
                   </span>
                   <div class="package-card-tools">
-                    {#if pkg.exports.configuration || (pkg.settings && pkg.has_public_settings)}
+                    {#if pkg.contributions.configuration || (pkg.settings && pkg.has_public_settings)}
                       <button
                         class="icon-button"
                         onclick={() => openPackageConfiguration(pkg)}
@@ -323,7 +313,7 @@
           <span>{dashboard.t("common.permissions")}</span>
         </div>
         <div class="package-detail-stat">
-          <strong>{dashboard.exportCount(detailPackage)}</strong>
+          <strong>{dashboard.contributionCount(detailPackage)}</strong>
           <span>{dashboard.t("packages.elements")}</span>
         </div>
         <div class="package-detail-stat">
@@ -333,34 +323,34 @@
       </div>
 
       <div class="package-detail-tabs" role="tablist" aria-label={dashboard.t("packages.details")}>
-        <button class="btn-outline" class:active={activeDetailTab === "exports"} onclick={() => (activeDetailTab = "exports")}>
-          {dashboard.t("common.exports")}
+        <button class="btn-outline" class:active={activeDetailTab === "contributions"} onclick={() => (activeDetailTab = "contributions")}>
+          {dashboard.t("common.contributions")}
         </button>
         <button class="btn-outline" class:active={activeDetailTab === "permissions"} onclick={() => (activeDetailTab = "permissions")}>
           {dashboard.t("common.permissions")}
         </button>
       </div>
 
-      {#if activeDetailTab === "exports"}
+      {#if activeDetailTab === "contributions"}
         <section class="package-detail-section">
           <div class="package-detail-section-head">
-            <h3>{dashboard.t("packages.exportsTitle")}</h3>
-            <span class="section-count">{dashboard.exportCount(detailPackage)}</span>
+            <h3>{dashboard.t("packages.contributionsTitle")}</h3>
+            <span class="section-count">{dashboard.contributionCount(detailPackage)}</span>
           </div>
-          {#if dashboard.exportCount(detailPackage) > 0}
-            <div class="export-section-grid">
-              {#each packageExportSections(detailPackage) as section}
-                <section class="export-section-card">
-                  <div class="export-section-head">
+          {#if dashboard.contributionCount(detailPackage) > 0}
+            <div class="contribution-section-grid">
+              {#each packageContributionSections(detailPackage) as section}
+                <section class="contribution-section-card">
+                  <div class="contribution-section-head">
                     <h4>{section.title}</h4>
                     <span>{section.count}</span>
                   </div>
-                  <ul class="export-items">
+                  <ul class="contribution-items">
                     {#each section.rows as row}
-                      <li class="export-item">
-                        <span class="export-name">{row.name}</span>
+                      <li class="contribution-item">
+                        <span class="contribution-name">{row.name}</span>
                         {#if row.meta}
-                          <span class="export-meta">{row.meta}</span>
+                          <span class="contribution-meta">{row.meta}</span>
                         {/if}
                       </li>
                     {/each}
@@ -369,7 +359,7 @@
               {/each}
             </div>
           {:else}
-            <p class="permission-none">{dashboard.t("packages.noExports")}</p>
+            <p class="permission-none">{dashboard.t("packages.noContributions")}</p>
           {/if}
         </section>
       {:else if activeDetailTab === "permissions"}

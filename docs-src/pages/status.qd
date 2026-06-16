@@ -9,15 +9,15 @@ outside the repository.
 
 ## Current Direction
 
-BakingRL is moving toward a clean v2 architecture:
+BakingRL is now centered on the trusted plugin v3 architecture:
 
 - host application in `BakingRL`;
 - SDK and generator in `BakingRLSDK`;
 - first-party plugins in `BakingRLPlugins`;
 - Quarkdown documentation for generated public docs;
-- package-based plugin distribution.
-- runtime API compatibility checks before package activation.
-- private fixed-size package configuration pages.
+- package-based plugin distribution;
+- runtime API compatibility checks before package activation;
+- extension host, webview, sidecar, diagnostics, and safe mode supervision.
 
 ## Documentation Direction
 

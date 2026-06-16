@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use zip::ZipArchive;
 
-use super::manifest::PluginPackageManifestV2;
+use super::manifest::PluginPackageManifest;
 
 const MANIFEST_FILE: &str = "bakingrl.plugin.json";
 const HASHES_FILE: &str = "manifest.hashes.json";
@@ -25,7 +25,7 @@ pub struct BundleHashes {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct BundleInspection {
-    pub manifest: PluginPackageManifestV2,
+    pub manifest: PluginPackageManifest,
     pub hashes_present: bool,
     pub signature_present: bool,
     pub signature_verified: bool,
@@ -119,7 +119,7 @@ fn inspect_archive<R: Read + Seek>(
 ) -> Result<BundleInspection, String> {
     let mut file_count = 0usize;
     let mut uncompressed_size = 0u64;
-    let mut manifest: Option<PluginPackageManifestV2> = None;
+    let mut manifest: Option<PluginPackageManifest> = None;
     let mut hashes_present = false;
     let mut signature_present = false;
     let mut hashes_raw: Option<Vec<u8>> = None;
@@ -147,9 +147,8 @@ fn inspect_archive<R: Read + Seek>(
             let mut raw = String::new();
             file.read_to_string(&mut raw)
                 .map_err(|e| format!("Unable to read bundle manifest: {e}"))?;
-            let parsed: PluginPackageManifestV2 = serde_json::from_str(&raw)
-                .map_err(|e| format!("Bundle manifest is invalid JSON: {e}"))?;
-            parsed.validate()?;
+            let parsed = PluginPackageManifest::parse(&raw)
+                .map_err(|e| format!("Bundle manifest is invalid: {e}"))?;
             manifest = Some(parsed);
         } else if entry_name == HASHES_FILE {
             hashes_present = true;
@@ -317,17 +316,20 @@ mod tests {
 
     fn valid_manifest() -> String {
         serde_json::json!({
-            "schema": "bakingrl.plugin/2",
+            "schema": "bakingrl.plugin/3",
             "id": "com.example.bundle",
             "name": "Bundle",
             "version": "1.0.0",
-            "exports": {
+            "contributes": {
                 "visuals": {
                     "scoreboard": {
                         "entry": "dist/visuals/scoreboard.js",
                         "defaultSize": [600, 90]
                     }
                 }
+            },
+            "compatibility": {
+                "runtimeApi": "1.0.0"
             }
         })
         .to_string()
@@ -387,7 +389,7 @@ mod tests {
         );
 
         let inspection = inspect_bundle(&bundle_path).unwrap();
-        assert_eq!(inspection.manifest.id, "com.example.bundle");
+        assert_eq!(inspection.manifest.id(), "com.example.bundle");
         assert_eq!(inspection.file_count, 2);
     }
 

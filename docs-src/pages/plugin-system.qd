@@ -3,170 +3,165 @@
 .include {docs}
 .doclang {en}
 
-The plugin system is the most important boundary in BakingRL. A plugin is not a
-folder of arbitrary code that the app trusts. It is a package with a manifest,
-declared exports, declared permissions, and host-controlled runtime entry
-points.
+BakingRL plugin v3 is a trusted extension system. A package is still installed,
+inspected, enabled, disabled, and supervised by the host, but its runtime is no
+longer designed as a strict sandbox. The product goal is closer to VS Code or
+Figma: plugins can be powerful, can own meaningful workflows, and can combine
+browser UI, host APIs, and native helper processes.
 
-## Core Concepts
+The public plugin contract is `bakingrl.plugin/3`, `kind: "trusted"`,
+`runtimeApi: "1.0.0"`, and SDK package version `1.0.1`.
 
-## Package
+## What A V3 Plugin Can Do
 
-A package is the distributable unit. It has:
+A v3 package can contribute:
 
-- a stable package ID;
-- a version;
-- a `bakingrl.plugin.json` manifest;
-- built JavaScript entry files;
-- optional assets;
-- optional schemas;
-- optional bundle metadata such as hashes and signatures.
+- commands that can be registered by the extension host;
+- services registered from `activate(context)`;
+- visuals rendered inside pages, overlays, and OBS layouts;
+- webviews, pages, views, overlays, configuration surfaces, assets, and schemas;
+- native sidecars launched as package-local processes;
+- bus events and registry snapshots under declared namespaces;
+- diagnostics visible to the host developer tooling.
 
-Packages are installed into BakingRL's app-data package directory or imported
-from a `.brlp` bundle.
+Discovery, descriptors, runtime startup, and frontend surfaces come from
+`contributes`.
 
-## Manifest
+## Runtime Shape
 
-The manifest describes what the package provides. The host reads the manifest
-before loading code.
+V3 runtime is split into three parts.
 
-The manifest answers:
+## Extension Host
 
-- What is the package ID?
-- Which exports exist?
-- Which files are entry points?
-- What permissions are requested?
-- Which settings and schemas are available?
-- Which page templates can be imported?
-- Which overlay layout templates can be imported?
+Each plugin can run one Node extension host process. The host launches the
+plugin's `runtime.extensionHost.entry` and calls:
 
-## Exports
+```ts
+export async function activate(context) {}
+export async function deactivate() {}
+```
 
-Exports are named capabilities. BakingRL supports these categories:
+The extension host receives a typed context with:
 
-- `visuals`: browser modules mounted into overlays or pages.
-- `components`: reusable visual modules loaded by other visuals.
-- `services`: backend modules exposing callable methods.
-- `connectors`: backend modules with explicit network permissions.
-- `pages`: importable page templates.
-- `layouts`: importable overlay layout templates.
-- `configuration`: one private fixed-size package configuration page.
+- `commands`;
+- `services`;
+- `bus`;
+- `registry`;
+- `storage`;
+- `secrets`;
+- `webviews`;
+- `overlays`;
+- `sidecars`;
+- `telemetry`;
+- `diagnostics`.
 
-An export is always loaded by the host. Plugins do not directly load each other.
+The process communicates with the Rust host through newline-delimited
+JSON-RPC on stdio. `stderr` is reserved for plugin logs.
 
-## Visuals
+## Webviews And Browser UI
 
-Visuals render UI. They receive a DOM root and a context object. They can:
+Plugin pages, configuration panels, overlays, and webviews are packaged browser
+entries. They render inside host-owned windows, iframes, pages, or overlay
+surfaces. Browser code talks to the host through the SDK bridge instead of
+reading local files directly.
 
-- subscribe to telemetry events;
-- read settings;
-- request package assets;
-- load components through the host;
-- call services through the host;
-- log diagnostics.
+This keeps routing, window lifecycle, OBS URLs, and editor ownership in the
+host while still allowing rich plugin-authored UI.
 
-Visuals should be deterministic and should clean up subscriptions during
-unmount.
+## Native Sidecars
 
-## Components
+Rust or other native plugin code must run as a sidecar process. It is never
+loaded into the Tauri process.
 
-Components are shared visual building blocks. A scoreboard visual might load a
-team badge component, for example. Component loading goes through the host so
-the host can resolve package references and enforce boundaries.
+Sidecars are declared in `runtime.sidecars` or
+`runtime.extensionHost.sidecars`:
+
+```json
+{
+  "helper": {
+    "command": "bin/helper",
+    "args": [],
+    "env": {},
+    "platforms": ["darwin"],
+    "protocol": "jsonrpc-stdio",
+    "activation": "manual"
+  }
+}
+```
+
+The supported protocol is `jsonrpc-stdio`. Activation can be `manual`,
+`onActivation`, or `onStartup`.
+
+## Event Bus
+
+The event bus is the normal way to share live state:
+
+- Rocket League telemetry events keep their event names, such as `UpdateState`
+  or `GoalScored`.
+- Plugin events should use `plugin.<package-id>.*`.
+- A package can always read and publish its own `plugin.<package-id>.*`
+  namespace in the trusted v3 host.
+- Cross-package reads should still be declared under
+  `capabilities.permissions.bus.read`.
+
+Extension hosts use:
+
+```ts
+context.bus.subscribe("plugin.com.example.package.state", callback);
+context.bus.emit("plugin.com.example.package.state", snapshot);
+```
+
+Visuals use the browser bridge for the same event stream.
 
 ## Services
 
-Services run backend logic. They are useful for stateful operations that should
-not live inside a visual. A service can expose methods such as `snapshot`,
-`reset`, or `recordMatch`.
+Services are registered from the extension host, not loaded from legacy
+manifest exports:
 
-Services should expose narrow methods instead of broad generic access to host
-state.
+```ts
+context.services.register("state", {
+  snapshot() {
+    return currentState;
+  }
+});
+```
 
-## Connectors
+The manifest `contributes.services` is discovery metadata and a schema surface.
+The live implementation is the object registered from `activate(context)`.
 
-Connectors are service-like exports designed for external systems. Examples:
+## Capabilities
 
-- OBS WebSocket integration.
-- Twitch API integration.
-- Tournament platform API integration.
+`capabilities.permissions` is declarative and visible to the host UI. It is not
+meant to be a heavy sandbox, but the host still uses it for operational
+boundaries:
 
-Connectors must declare network permissions. The host checks HTTP and WebSocket
-requests against those declarations.
+- bus read and publish scopes;
+- registry read and write scopes;
+- storage access;
+- network and native sidecar visibility.
 
-## Pages
+The trusted v3 model optimizes for power and observability. A broken plugin
+should be easy to identify, stop, restart, or disable.
 
-Pages are reusable layouts or templates that users can import into BakingRL.
-They are not free-form app routes. The host owns page creation, page editing,
-and page rendering.
+## Operational Guardrails
 
-Users can create blank pages or import package page templates. Imported pages
-become normal host-owned page layouts: the host assigns fresh IDs, timestamps,
-and template provenance, then users can edit size, background, layers, visual
-items, text, images, and shapes.
+The host keeps these guardrails:
 
-Pages can open inside the main app window or in a separate Tauri window. This
-open target is user-owned page state, not a package routing privilege.
-
-## Configuration Pages
-
-Packages can declare one private configuration page. It is exposed from the
-package configuration action. It is not listed in the public page template
-importer, and its private visuals are not available from normal page or overlay
-editors.
-
-The host fixes every package configuration page to `1200x740`. Package authors
-can design custom controls and visuals for that page, but they cannot change
-the canvas size or use the configuration export as a public route.
-
-## Overlay Layouts
-
-Overlay layout templates are reusable layout definitions that users can import
-into BakingRL. They are not overlay runtimes themselves. After import, they
-become normal host-owned layouts, so routing to the in-game overlay or OBS
-stream output, editing, OBS URLs, and runtime rendering stay controlled by the
-host.
-
-Users can also create blank overlay layouts with an explicit canvas size. The
-host tracks separate active layout IDs for the in-game overlay and the OBS
-stream output. Importing or duplicating a layout creates host-owned state with
-fresh IDs and timestamps.
-
-## Host APIs
-
-Plugins interact with BakingRL through explicit APIs:
-
-- event bus;
-- registry;
-- settings;
-- assets;
-- diagnostics;
-- component loading;
-- service RPC;
-- connector network wrappers.
-
-If a plugin needs a capability that is not available through one of these
-surfaces, the host or SDK should be extended deliberately instead of adding a
-local workaround.
-
-## Runtime Diagnostics
-
-Backend plugin exports run in revocable host-managed runtimes. Service and
-connector failures are surfaced to the frontend as `bakingrl-runtime-error`
-events with a kind, source, message, and timestamp. The dashboard records those
-events in Developer Tools and shows an error toast during the current session.
-
-Runtime diagnostics are observability for users and contributors; they are not
-a plugin API contract. Plugins should still expose their own narrow diagnostic
-methods or logs when they need stable external behavior.
+- safe mode disables extension hosts, sidecars, plugin services, and plugin UI;
+- plugin diagnostics are collected by package and source;
+- stdout/stderr logs are visible as runtime diagnostics;
+- crash loop detection blocks restart after repeated crashes;
+- packages can be stopped, restarted, or reloaded;
+- marketplace metadata can carry hashes, signatures, capabilities, and trust
+  state.
 
 ## What Plugins Must Not Assume
 
-- The host repository contains plugin source.
-- The package is loaded from a fixed absolute path.
-- Another package can be imported directly.
-- Local filesystem access is unrestricted.
-- Network access is unrestricted.
-- Runtime internals are stable public APIs.
+- Service implementations exist only when registered from `activate(context)`.
+- Native code can be loaded into the Tauri process.
+- Another package can be imported directly from the filesystem.
+- Host routes, OBS routes, page IDs, and overlay IDs are plugin-owned.
+- Runtime internals are stable unless they are part of the SDK contract.
 
-The manifest and SDK contracts are the public boundary.
+The public boundary is the manifest v3 contract, the SDK types, and the host
+runtime API version.

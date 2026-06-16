@@ -3,138 +3,201 @@
 .include {docs}
 .doclang {en}
 
-BakingRL packages are described by `bakingrl.plugin.json`.
+BakingRL packages are described by `bakingrl.plugin.json`. Current active
+packages should use `schema: "bakingrl.plugin/3"` and `kind: "trusted"`.
 
-## Minimal Manifest
+## Minimal Trusted V3 Manifest
 
 ```json
 {
-  "schema": "bakingrl.plugin/2",
-  "id": "com.example.my-package",
-  "name": "My Package",
+  "schema": "bakingrl.plugin/3",
+  "id": "com.example.extension",
+  "name": "Example Extension",
   "version": "1.0.0",
+  "kind": "trusted",
   "compatibility": {
-    "runtimeApi": "0.4.0",
-    "sdk": "0.4.0"
+    "runtimeApi": "1.0.0",
+    "sdk": "1.0.1"
   },
-  "exports": {
-    "visuals": {
-      "scoreboard": {
-        "entry": "dist/visuals/scoreboard.js",
-        "defaultSize": [760, 128],
-        "settings": "schemas/scoreboard-settings.json"
-      }
+  "activation": {
+    "events": ["onStartup"]
+  },
+  "runtime": {
+    "extensionHost": {
+      "entry": "dist/extension/index.js"
     },
-    "layouts": {
-      "stream": {
-        "path": "templates/stream-layout.json",
-        "title": "Stream Layout"
-      }
+    "sidecars": {}
+  },
+  "contributes": {
+    "commands": {},
+    "services": {},
+    "visuals": {},
+    "views": {},
+    "pages": {},
+    "overlays": {},
+    "webviews": {},
+    "configuration": {},
+    "assets": {},
+    "schemas": {}
+  },
+  "capabilities": {
+    "permissions": {
+      "bus": {
+        "read": [],
+        "publish": ["plugin.com.example.extension.*"]
+      },
+      "registry": {
+        "read": [],
+        "write": ["plugin.com.example.extension.*"]
+      },
+      "network": {
+        "http": [],
+        "websocket": []
+      },
+      "storage": ["plugin://self/*"]
     }
+  },
+  "diagnostics": {
+    "enabled": true
   }
 }
 ```
 
-## Runtime Compatibility
+## Required Fields
 
-Current host runtime API support is `>=0.4.0 <0.5.0`. Packages must declare
-`compatibility.runtimeApi`; packages that omit it or target an unsupported API
-are visible in the package manager, but they are disabled and cannot be
-enabled until rebuilt.
+`schema`
 
-## Package ID
+Must be `bakingrl.plugin/3`.
 
-The package ID is a stable identity. It should not change after publication.
-Use a reverse-DNS style convention:
+`id`
 
-```txt
-com.bakingrl.scoreboard
-com.example.match-tools
+Stable package identity. Use reverse-DNS style values such as
+`com.bakingrl.cast-package` or `com.example.scoreboard`.
+
+`kind`
+
+Current v3 packages use `trusted`.
+
+`compatibility.runtimeApi`
+
+Must target the host runtime API. Current runtime API is `1.0.0`; the host
+accepts compatible `1.x` packages.
+
+`activation`
+
+Declares when the extension can start. Current packages commonly use
+`onStartup`.
+
+`runtime.extensionHost.entry`
+
+Package-relative built ESM module loaded in a Node extension host process.
+
+`contributes`
+
+Declarative package surface used for discovery, descriptors, runtime startup,
+and UI.
+
+`capabilities`
+
+Visible package capability metadata. Host-mediated permission declarations live
+under `capabilities.permissions`.
+
+## Contributes
+
+`contributes` is an object whose maps describe what the package adds to the
+product:
+
+- `commands`: command IDs discoverable by the host.
+- `services`: services that will be registered from `activate(context)`.
+- `visuals`: browser visuals for pages, overlays, and OBS layouts.
+- `views`: future host-owned view surfaces.
+- `pages`: importable page templates.
+- `overlays`: importable overlay layout templates.
+- `webviews`: plugin-authored browser panels.
+- `configuration`: package configuration UI.
+- `assets`: static files.
+- `schemas`: JSON schemas for settings, methods, or metadata.
+
+Services are discovered from the manifest, but live service implementations are
+registered by extension host code:
+
+```ts
+context.services.register("state", {
+  snapshot() {
+    return currentState;
+  }
+});
 ```
 
-## Export References
+## Extension Host
 
-Runtime references usually combine package ID and export name:
+The extension host entry exports `activate(context)` and optionally
+`deactivate()`:
 
-```txt
-com.bakingrl.scoreboard/scoreboard
-com.example.match-tools/liveStats
+```ts
+export async function activate(context) {
+  context.bus.subscribe("UpdateState", (event) => {
+    context.diagnostics.info("received telemetry", event);
+  });
+}
+
+export async function deactivate() {}
 ```
 
-The host resolves these references. Plugins should not resolve package paths
-manually.
+The runtime context provides commands, services, bus, registry, storage,
+secrets metadata, webviews, overlays, sidecars, telemetry, and diagnostics.
 
-## Layout Templates
+## Bus And Registry Namespaces
 
-`exports.layouts` contains importable overlay layout templates. A layout
-template is a JSON layout definition that BakingRL imports into its
-host-owned overlay layout list. It is not an overlay runtime, an OBS source, or
-an app route. After import, users can route the resulting layout to the
-in-game overlay, the OBS stream output, or edit it like any other layout.
+Package-owned runtime state should use:
 
-## Page Templates
+```txt
+plugin.<package-id>.*
+```
 
-`exports.pages` contains importable page templates. A page template is a JSON
-page layout definition that BakingRL imports into its host-owned page list. It
-is not an arbitrary SvelteKit route or a plugin-owned window.
+For example:
 
-After import, users can edit the page like any other page. The host assigns a
-new page ID, clears favorite state, records template provenance, and normalizes
-timestamps and layer/item IDs.
+```txt
+plugin.com.bakingrl.cast-package.state
+plugin.com.bakingrl.cast-package.sequence
+```
 
-## Configuration Page
+Trusted v3 packages can read and publish their own package namespace. Reads of
+another package's namespace should be declared explicitly in
+`capabilities.permissions.bus.read` or `capabilities.permissions.registry.read`.
 
-`exports.configuration` declares one private fixed-size package configuration
-page. It opens from the package configuration action, not from the public
-page-template importer. Private configuration visuals are only available inside
-that page.
+## Sidecars
 
-BakingRL forces configuration pages to `1200x740`:
+Native plugin code is a process, not a loaded library. Sidecars are declared as
+an object map:
 
 ```json
 {
-  "exports": {
-    "configuration": {
-      "path": "pages/configuration.json",
-      "title": "Package Settings",
-      "visuals": {
-        "settingsPanel": {
-          "entry": "dist/configuration/settings-panel.js",
-          "defaultSize": [1200, 740]
-        }
+  "runtime": {
+    "sidecars": {
+      "helper": {
+        "command": "bin/helper",
+        "args": [],
+        "env": {},
+        "platforms": ["darwin"],
+        "protocol": "jsonrpc-stdio",
+        "activation": "manual"
       }
     }
   }
 }
 ```
+
+`command` is package-relative. `protocol` is currently `jsonrpc-stdio`.
+Activation can be `manual`, `onActivation`, or `onStartup`.
 
 ## Package Settings And Secrets
 
-Top-level `settings` points to a package-level JSON Schema. If a package has no
-custom `exports.configuration` page, BakingRL renders a host-owned form from
-that schema. Non-sensitive values are exposed to plugin runtimes through
-`context.settings`.
+Top-level `settings` can point to a package-level JSON Schema. Non-sensitive
+values are exposed through `context.settings`.
 
-String fields marked with `x-bakingrl-secret: true` are stored in the OS
-keychain, never returned by `context.settings`, and are only readable by
-connectors through `context.secrets`.
-`context.secrets.configured(key)` reads a host-maintained non-secret state.
-`context.secrets.get(key)` reads the keychain on first access and then uses an
-in-memory host cache until the app exits.
-
-## Imported Template State
-
-Page and layout templates should describe reusable structure, not persistent
-host identity. BakingRL normalizes imported templates and may replace:
-
-- `id`;
-- layer and item IDs;
-- `created_at_ms`;
-- `updated_at_ms`;
-- `template_source`.
-
-Authors should rely on package/export references and item settings for
-portable behavior, not on template IDs remaining unchanged after import.
+Fields marked with `x-bakingrl-secret: true` are stored by the host and should
+not be written to bundle files, logs, or normal settings JSON.
 
 ## Bundle Layout
 
@@ -151,65 +214,10 @@ signature.ed25519
 ```
 
 Only built runtime files should be required at install time. Source files,
-tests, and local build caches should not be part of production bundles unless
-there is a deliberate reason.
+tests, local caches, signing keys, and secrets should not be included.
 
 ## `.brlp` Archives
 
-`.brlp` files are package bundles. The host treats them as untrusted input and
-must reject unsafe archive contents:
-
-- absolute paths;
-- `../` path traversal;
-- symlinks;
-- oversized files;
-- unsupported manifest versions;
-- invalid hashes;
-- invalid signatures.
-
-## Settings And Schemas
-
-Settings are package-controlled defaults exposed through host UI and runtime
-contexts. Schemas make settings and service methods inspectable and safer to
-edit.
-
-For visual exports, `settings` points to a JSON Schema object used by BakingRL
-to build a typed instance-settings form in the layout and page editors. The
-schema should use an object with `properties`. The host currently supports
-simple object properties: `string`, `number`, `integer`, `boolean`, primitive
-`enum`/`oneOf`/`anyOf`, array fields with primitive options, numeric and string
-bounds, and `format: "color"`.
-
-```json
-{
-  "type": "object",
-  "title": "Scoreboard Settings",
-  "properties": {
-    "accent": {
-      "type": "string",
-      "format": "color",
-      "default": "#38bdf8"
-    },
-    "showBoost": {
-      "type": "boolean",
-      "default": true
-    },
-    "density": {
-      "type": "string",
-      "default": "comfortable",
-      "oneOf": [
-        { "const": "compact", "title": "Compact" },
-        { "const": "comfortable", "title": "Comfortable" }
-      ]
-    }
-  }
-}
-```
-
-Prefer explicit schemas for:
-
-- visual settings;
-- component props;
-- service method inputs;
-- connector settings;
-- page template inputs.
+`.brlp` files are package bundles. The host inspects archive contents before
+installing them and should reject unsafe paths, unsupported schemas, hash
+mismatches, and invalid signatures.

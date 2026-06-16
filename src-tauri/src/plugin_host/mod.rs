@@ -1,12 +1,13 @@
-mod connector_runtime;
 mod descriptors;
+mod diagnostics;
+pub(crate) mod extension_host_runtime;
 mod json_store;
 mod layout_documents;
 mod package_files;
-mod runtime_module_loader;
 mod runtime_specs;
-mod service_runtime;
+mod service_registry;
 mod settings_contract;
+pub(crate) mod sidecar_runtime;
 
 use std::collections::HashMap;
 use std::fs;
@@ -26,27 +27,31 @@ use crate::models::{
     AppSettings, OverlayLayout, OverlayLayoutsFile, PackageSettingsFile, PackageStateFile,
     PageLayout, PagesFile,
 };
-use crate::plugin_v2::bundle::BundleInspection;
-use crate::plugin_v2::install::{
+use crate::plugin_package::bundle::BundleInspection;
+use crate::plugin_package::install::{
     download_bundle_to_file, inspect_bundle_file, install_bundle_from_file,
     parse_install_deep_link, InstallReceipt,
 };
-use crate::plugin_v2::manifest::PluginPackageManifestV2;
-use crate::plugin_v2::manifest::{HOST_RUNTIME_API_RANGE, HOST_RUNTIME_API_VERSION};
-use crate::plugin_v2::marketplace::{
+use crate::plugin_package::manifest::{
+    ConfigurationContributionV3, PluginContributesV3, PluginPackageManifest,
+};
+use crate::plugin_package::manifest::{HOST_RUNTIME_API_RANGE, HOST_RUNTIME_API_VERSION};
+use crate::plugin_package::marketplace::{
     catalog_for_index, developer_allows_key, fetch_verified_marketplace_index,
     find_marketplace_version, read_cached_marketplace_index, verified_developer_for_key,
     write_marketplace_cache, MarketplaceApprovedVersion, MarketplaceCatalog, MarketplaceIndex,
     OFFICIAL_MARKETPLACE_URL,
 };
-use crate::plugin_v2::permissions::EffectivePackagePermissionsV2;
+use crate::plugin_package::permissions::EffectivePackagePermissions;
 use crate::registry::Registry;
-use connector_runtime::ConnectorRuntimeManager;
 use descriptors::{apply_graph_diagnostics, compatibility_for_manifest, descriptor_for_manifest};
 pub use descriptors::{
-    ComponentExportSource, PackageDescriptor, PackageExportsDescriptor, PackageImportsDescriptor,
-    PackageStatus, PreparedPackageInstall,
+    PackageContributionsDescriptor, PackageDescriptor, PackageStatus, PreparedPackageInstall,
 };
+pub use diagnostics::{
+    PluginDiagnosticEvent, PluginDiagnosticInput, PluginDiagnosticSeverity, PluginDiagnosticsStore,
+};
+use extension_host_runtime::{ExtensionHostRuntimeManager, ExtensionHostRuntimeSpec};
 use json_store::{read_json_or_default, write_json};
 use layout_documents::{
     default_overlay_layouts, ensure_active_layout_ids, new_overlay_layout, new_page_layout,
@@ -55,11 +60,11 @@ use layout_documents::{
 };
 use package_files::{
     find_first_bundle, format_command_error, is_remote_package_source, parse_export_ref,
-    read_binary_package_file, read_json_package_file, read_package_file,
-    safe_installed_package_dir, safe_package_relative_path,
+    read_binary_package_file, read_json_package_file, safe_installed_package_dir,
+    safe_package_relative_path,
 };
-use runtime_specs::{connector_specs_for_records, service_specs_for_records};
-use service_runtime::ServiceRuntimeManager;
+use runtime_specs::{extension_host_specs_for_records, sidecar_specs_for_records};
+use service_registry::ServiceCallRouter;
 use settings_contract::{
     delete_package_secret as delete_keychain_package_secret, merge_package_settings,
     merge_package_settings_with_schema, package_secret_configured, read_package_settings_schema,
@@ -67,6 +72,7 @@ use settings_contract::{
     set_package_secret_configured, write_package_secret,
 };
 pub use settings_contract::{PackageConfigurationState, PackageSecretDescriptor};
+use sidecar_runtime::{SidecarRuntimeManager, SidecarRuntimeSpec};
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -78,7 +84,7 @@ pub struct RuntimeInfo {
 #[derive(Debug)]
 struct PackageRecord {
     descriptor: PackageDescriptor,
-    manifest: PluginPackageManifestV2,
+    manifest: PluginPackageManifest,
 }
 
 #[derive(Debug, Clone)]
@@ -89,6 +95,21 @@ struct PendingPackageDeletion {
 struct PackageRemovalStart {
     packages: Vec<PackageDescriptor>,
     started: bool,
+}
+
+fn first_configuration<'a>(
+    contributes: &'a PluginContributesV3,
+) -> Option<&'a ConfigurationContributionV3> {
+    contributes.configuration.values().next()
+}
+
+fn first_configuration_page<'a>(
+    contributes: &'a PluginContributesV3,
+) -> Option<&'a ConfigurationContributionV3> {
+    contributes
+        .configuration
+        .values()
+        .find(|configuration| configuration.path.is_some())
 }
 
 pub struct PluginHost {
@@ -104,8 +125,12 @@ pub struct PluginHost {
     marketplace_cache_path: PathBuf,
     records: Mutex<HashMap<String, PackageRecord>>,
     deleting_packages: Mutex<HashMap<String, PendingPackageDeletion>>,
-    service_runtimes: ServiceRuntimeManager,
-    connector_runtimes: ConnectorRuntimeManager,
+    diagnostics: PluginDiagnosticsStore,
+    service_router: ServiceCallRouter,
+    #[allow(dead_code)]
+    extension_host_runtimes: ExtensionHostRuntimeManager,
+    #[allow(dead_code)]
+    sidecar_runtimes: SidecarRuntimeManager,
 }
 
 impl PluginHost {
@@ -138,8 +163,10 @@ impl PluginHost {
             marketplace_cache_path: app_data.join("marketplace_cache.json"),
             records: Mutex::new(HashMap::new()),
             deleting_packages: Mutex::new(HashMap::new()),
-            service_runtimes: ServiceRuntimeManager::default(),
-            connector_runtimes: ConnectorRuntimeManager::default(),
+            diagnostics: PluginDiagnosticsStore::default(),
+            service_router: ServiceCallRouter::default(),
+            extension_host_runtimes: ExtensionHostRuntimeManager::default(),
+            sidecar_runtimes: SidecarRuntimeManager::default(),
         })
     }
 
@@ -190,6 +217,18 @@ impl PluginHost {
         packages
     }
 
+    pub fn diagnostics(&self) -> PluginDiagnosticsStore {
+        self.diagnostics.clone()
+    }
+
+    pub fn list_diagnostics(&self) -> Vec<PluginDiagnosticEvent> {
+        self.diagnostics.list()
+    }
+
+    pub fn clear_diagnostics(&self) {
+        self.diagnostics.clear();
+    }
+
     pub fn reload_packages(&self) -> Vec<PackageDescriptor> {
         info!("Reloading plugin packages from {:?}", self.packages_dir);
         let state = self.load_state();
@@ -213,7 +252,17 @@ impl PluginHost {
                         Ok(record) => {
                             records.insert(record.descriptor.id.clone(), record);
                         }
-                        Err(err) => warn!("Package {:?} ignored: {}", path, err),
+                        Err(err) => {
+                            warn!("Package {:?} ignored: {}", path, err);
+                            self.diagnostics.push(PluginDiagnosticInput {
+                                package_id: None,
+                                source: path.to_string_lossy().to_string(),
+                                severity: PluginDiagnosticSeverity::Error,
+                                phase: "discovery".to_string(),
+                                message: err,
+                                crash_count: None,
+                            });
+                        }
                     }
                 }
             }
@@ -221,29 +270,15 @@ impl PluginHost {
         }
 
         apply_graph_diagnostics(&mut records);
-        let runtime_isolation = self.load_app_settings().security.plugin_runtime_isolation;
+        let settings = self.load_app_settings();
         let package_settings = self.load_package_settings();
-        let service_specs =
-            service_specs_for_records(&records, &runtime_isolation, &package_settings);
-        self.service_runtimes.reload_with_app_handle(
-            service_specs,
-            self.bus.clone(),
-            self.registry.clone(),
-            self.app_handle.clone(),
-        );
-        let connector_specs = connector_specs_for_records(
+        let extension_host_specs = extension_host_specs_for_records(
             &records,
-            &runtime_isolation,
             &package_settings,
             &self.package_settings_path,
         );
-        self.connector_runtimes.reload_with_app_handle(
-            connector_specs,
-            self.bus.clone(),
-            self.registry.clone(),
-            self.service_runtimes.router(),
-            self.app_handle.clone(),
-        );
+        let sidecar_specs = sidecar_specs_for_records(&records);
+        self.reload_runtimes_with_specs(&settings, extension_host_specs, sidecar_specs);
         *self.records.lock().unwrap() = records;
         let packages = self.list_packages();
         self.emit_packages_changed(&packages);
@@ -251,33 +286,153 @@ impl PluginHost {
     }
 
     fn reload_runtimes_from_current_records(&self) {
-        let runtime_isolation = self.load_app_settings().security.plugin_runtime_isolation;
+        let settings = self.load_app_settings();
         let package_settings = self.load_package_settings();
-        let (service_specs, connector_specs) = {
+        let (extension_host_specs, sidecar_specs) = {
             let records = self.records.lock().unwrap();
             (
-                service_specs_for_records(&records, &runtime_isolation, &package_settings),
-                connector_specs_for_records(
+                extension_host_specs_for_records(
                     &records,
-                    &runtime_isolation,
                     &package_settings,
                     &self.package_settings_path,
                 ),
+                sidecar_specs_for_records(&records),
             )
         };
-        self.service_runtimes.reload_with_app_handle(
-            service_specs,
+        self.reload_runtimes_with_specs(&settings, extension_host_specs, sidecar_specs);
+    }
+
+    fn reload_runtimes_with_specs(
+        &self,
+        settings: &AppSettings,
+        extension_host_specs: Vec<ExtensionHostRuntimeSpec>,
+        sidecar_specs: Vec<SidecarRuntimeSpec>,
+    ) {
+        if settings.security.plugins_safe_mode {
+            self.diagnostics.push(PluginDiagnosticInput {
+                package_id: None,
+                source: "host".to_string(),
+                severity: PluginDiagnosticSeverity::Warning,
+                phase: "activation".to_string(),
+                message: "Plugin safe mode is enabled; plugin runtimes are stopped.".to_string(),
+                crash_count: None,
+            });
+            let _ = self.extension_host_runtimes.reload_with_app_handle(
+                Vec::new(),
+                self.app_handle.clone(),
+                self.bus.clone(),
+                self.registry.clone(),
+                self.service_router.clone(),
+                self.sidecar_runtimes.controller(),
+                self.diagnostics.clone(),
+            );
+            let _ = self
+                .sidecar_runtimes
+                .reload_with_app_handle(Vec::new(), self.app_handle.clone());
+            return;
+        }
+
+        if settings.security.disable_plugin_activation {
+            self.diagnostics.push(PluginDiagnosticInput {
+                package_id: None,
+                source: "host".to_string(),
+                severity: PluginDiagnosticSeverity::Warning,
+                phase: "activation".to_string(),
+                message: "Plugin activation is disabled; extension hosts and sidecars are stopped."
+                    .to_string(),
+                crash_count: None,
+            });
+            let _ = self.extension_host_runtimes.reload_with_app_handle(
+                Vec::new(),
+                self.app_handle.clone(),
+                self.bus.clone(),
+                self.registry.clone(),
+                self.service_router.clone(),
+                self.sidecar_runtimes.controller(),
+                self.diagnostics.clone(),
+            );
+            let _ = self
+                .sidecar_runtimes
+                .reload_with_app_handle(Vec::new(), self.app_handle.clone());
+            return;
+        }
+        if let Err(err) = self
+            .sidecar_runtimes
+            .reload_with_app_handle(sidecar_specs, self.app_handle.clone())
+        {
+            warn!("Unable to reload sidecar runtimes: {}", err);
+        }
+        if let Err(err) = self.extension_host_runtimes.reload_with_app_handle(
+            extension_host_specs,
+            self.app_handle.clone(),
             self.bus.clone(),
             self.registry.clone(),
-            self.app_handle.clone(),
-        );
-        self.connector_runtimes.reload_with_app_handle(
-            connector_specs,
-            self.bus.clone(),
-            self.registry.clone(),
-            self.service_runtimes.router(),
-            self.app_handle.clone(),
-        );
+            self.service_router.clone(),
+            self.sidecar_runtimes.controller(),
+            self.diagnostics.clone(),
+        ) {
+            warn!("Unable to reload extension host runtimes: {}", err);
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn reload_v3_extension_hosts(
+        &self,
+        specs: Vec<ExtensionHostRuntimeSpec>,
+    ) -> Result<(), String> {
+        self.extension_host_runtimes
+            .reload_with_app_handle(
+                specs,
+                self.app_handle.clone(),
+                self.bus.clone(),
+                self.registry.clone(),
+                self.service_router.clone(),
+                self.sidecar_runtimes.controller(),
+                self.diagnostics.clone(),
+            )
+            .map_err(|err| err.to_string())
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn start_v3_extension_host(
+        &self,
+        spec: ExtensionHostRuntimeSpec,
+    ) -> Result<(), String> {
+        self.extension_host_runtimes
+            .start_with_app_handle(
+                spec,
+                self.app_handle.clone(),
+                self.bus.clone(),
+                self.registry.clone(),
+                self.service_router.clone(),
+                self.sidecar_runtimes.controller(),
+                self.diagnostics.clone(),
+            )
+            .map_err(|err| err.to_string())
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn stop_v3_extension_host(&self, package_id: &str) -> bool {
+        self.extension_host_runtimes.stop(package_id)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn reload_v3_sidecars(&self, specs: Vec<SidecarRuntimeSpec>) -> Result<(), String> {
+        self.sidecar_runtimes
+            .reload_with_app_handle(specs, self.app_handle.clone())
+            .map_err(|err| err.to_string())
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn start_v3_sidecar(&self, spec: SidecarRuntimeSpec) -> Result<(), String> {
+        self.sidecar_runtimes
+            .start_with_app_handle(spec, self.app_handle.clone())
+            .map_err(|err| err.to_string())
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn stop_v3_sidecar(&self, package_id: &str, sidecar_name: &str) -> bool {
+        self.sidecar_runtimes.stop(package_id, sidecar_name)
     }
 
     pub fn inspect_package_bundle(&self, path: String) -> Result<BundleInspection, String> {
@@ -556,6 +711,18 @@ impl PluginHost {
         if self.is_package_deleting(&package_id) {
             return Err(format!("Package '{package_id}' is being removed."));
         }
+        let settings = self.load_app_settings();
+        if enabled && settings.security.disable_plugin_activation {
+            self.diagnostics.push(PluginDiagnosticInput {
+                package_id: Some(package_id.clone()),
+                source: "host".to_string(),
+                severity: PluginDiagnosticSeverity::Warning,
+                phase: "activation".to_string(),
+                message: "Plugin activation is disabled by host settings.".to_string(),
+                crash_count: None,
+            });
+            return Err("Plugin activation is disabled by host settings.".to_string());
+        }
 
         {
             let records = self.records.lock().unwrap();
@@ -683,9 +850,8 @@ impl PluginHost {
         if !record.descriptor.enabled {
             return Err(format!("Package '{package_id}' is disabled."));
         }
-        let export = record
-            .manifest
-            .exports
+        let contributes = record.manifest.normalized_contributes_v3();
+        let export = contributes
             .visuals
             .get(export_name)
             .ok_or_else(|| format!("Visual export '{package_id}/{export_name}' does not exist."))?;
@@ -708,9 +874,8 @@ impl PluginHost {
         if !record.descriptor.enabled {
             return Err(format!("Package '{package_id}' is disabled."));
         }
-        let export = record
-            .manifest
-            .exports
+        let contributes = record.manifest.normalized_contributes_v3();
+        let export = contributes
             .visuals
             .get(export_name)
             .ok_or_else(|| format!("Visual export '{package_id}/{export_name}' does not exist."))?;
@@ -739,50 +904,6 @@ impl PluginHost {
         read_binary_package_file(Path::new(&record.descriptor.path), &safe_path)
     }
 
-    pub fn read_component_export_source(
-        &self,
-        caller_package_id: &str,
-        component_ref: &str,
-    ) -> Result<ComponentExportSource, String> {
-        let (provider_package_id, export_name) = parse_export_ref(component_ref)?;
-        let records = self.records.lock().unwrap();
-        let caller = self.require_enabled_record(&records, caller_package_id)?;
-        if provider_package_id != caller_package_id
-            && !caller
-                .manifest
-                .imports
-                .components
-                .iter()
-                .any(|import| import == component_ref)
-        {
-            return Err(format!(
-                "Package '{caller_package_id}' did not declare component import '{component_ref}'."
-            ));
-        }
-        let provider = self.require_enabled_record(&records, provider_package_id)?;
-        let export = provider
-            .manifest
-            .exports
-            .components
-            .get(export_name)
-            .ok_or_else(|| format!("Component export '{component_ref}' does not exist."))?;
-        let package_root = Path::new(&provider.descriptor.path);
-        let source = read_package_file(package_root, &export.entry)
-            .map_err(|e| format!("Unable to read component export source: {e}"))?;
-        let props_schema = export
-            .props
-            .as_deref()
-            .map(|path| read_json_package_file(package_root, path))
-            .transpose()?;
-        Ok(ComponentExportSource {
-            package_id: provider_package_id.to_string(),
-            export_name: export_name.to_string(),
-            entry: export.entry.clone(),
-            source,
-            props_schema,
-        })
-    }
-
     pub fn validate_service_call(
         &self,
         caller_package_id: &str,
@@ -791,23 +912,10 @@ impl PluginHost {
     ) -> Result<(), String> {
         let (provider_package_id, export_name) = parse_export_ref(service_ref)?;
         let records = self.records.lock().unwrap();
-        let caller = self.require_enabled_record(&records, caller_package_id)?;
-        if provider_package_id != caller_package_id
-            && !caller
-                .manifest
-                .imports
-                .services
-                .iter()
-                .any(|import| import == service_ref)
-        {
-            return Err(format!(
-                "Package '{caller_package_id}' did not declare service import '{service_ref}'."
-            ));
-        }
+        self.require_enabled_record(&records, caller_package_id)?;
         let provider = self.require_enabled_record(&records, provider_package_id)?;
-        let export = provider
-            .manifest
-            .exports
+        let contributes = provider.manifest.normalized_contributes_v3();
+        let export = contributes
             .services
             .get(export_name)
             .ok_or_else(|| format!("Service export '{service_ref}' does not exist."))?;
@@ -827,7 +935,7 @@ impl PluginHost {
         input: serde_json::Value,
     ) -> Result<serde_json::Value, String> {
         self.validate_service_call(caller_package_id, service_ref, method)?;
-        self.service_runtimes
+        self.service_router
             .call(service_ref, method.to_string(), input)
             .await
     }
@@ -896,8 +1004,9 @@ impl PluginHost {
         fs::write(&self.app_settings_path, raw)
             .map_err(|e| format!("Failed to write app settings: {e}"))?;
         self.apply_overlay_window_settings(&settings);
-        if previous_settings.security.plugin_runtime_isolation
-            != settings.security.plugin_runtime_isolation
+        if previous_settings.security.plugins_safe_mode != settings.security.plugins_safe_mode
+            || previous_settings.security.disable_plugin_activation
+                != settings.security.disable_plugin_activation
         {
             self.reload_runtimes_from_current_records();
         }
@@ -1031,11 +1140,8 @@ impl PluginHost {
             })
             .collect::<Vec<_>>();
         let secret_store_available = secret_store_error.is_none();
-        let title = record
-            .manifest
-            .exports
-            .configuration
-            .as_ref()
+        let contributes = record.manifest.normalized_contributes_v3();
+        let title = first_configuration(&contributes)
             .and_then(|configuration| configuration.title.clone())
             .or_else(|| {
                 schema
@@ -1048,7 +1154,7 @@ impl PluginHost {
         Ok(PackageConfigurationState {
             package_id,
             title,
-            has_custom_page: record.manifest.exports.configuration.is_some(),
+            has_custom_page: first_configuration_page(&contributes).is_some(),
             schema,
             values,
             secrets,
@@ -1116,16 +1222,15 @@ impl PluginHost {
     pub fn get_package_configuration_page(&self, package_id: String) -> Result<PageLayout, String> {
         let records = self.records.lock().unwrap();
         let record = self.require_enabled_record(&records, &package_id)?;
-        let configuration = record
-            .manifest
-            .exports
-            .configuration
-            .as_ref()
-            .ok_or_else(|| {
-                format!("Package '{package_id}' does not expose a configuration page.")
-            })?;
+        let contributes = record.manifest.normalized_contributes_v3();
+        let configuration = first_configuration_page(&contributes).ok_or_else(|| {
+            format!("Package '{package_id}' does not expose a configuration page.")
+        })?;
+        let configuration_path = configuration.path.as_deref().ok_or_else(|| {
+            format!("Package '{package_id}' does not expose a configuration page.")
+        })?;
         let package_root = Path::new(&record.descriptor.path);
-        let raw = read_json_package_file(package_root, &configuration.path)?;
+        let raw = read_json_package_file(package_root, configuration_path)?;
         let mut page: PageLayout = serde_json::from_value(raw).map_err(|e| {
             format!("Configuration page for package '{package_id}' is invalid: {e}")
         })?;
@@ -1250,16 +1355,17 @@ impl PluginHost {
         let mut layout = {
             let records = self.records.lock().unwrap();
             let record = self.require_enabled_record(&records, &package_id)?;
-            let export = record
-                .manifest
-                .exports
-                .layouts
-                .get(&export_name)
-                .ok_or_else(|| {
-                    format!("Layout template '{package_id}/{export_name}' does not exist.")
-                })?;
+            let contributes = record.manifest.normalized_contributes_v3();
+            let export = contributes.overlays.get(&export_name).ok_or_else(|| {
+                format!("Layout template '{package_id}/{export_name}' does not exist.")
+            })?;
             let package_root = Path::new(&record.descriptor.path);
-            let raw = read_json_package_file(package_root, &export.path)?;
+            let template_path = export.path.as_deref().ok_or_else(|| {
+                format!(
+                    "Layout contribution '{package_id}/{export_name}' is a webview entry, not an importable layout template."
+                )
+            })?;
+            let raw = read_json_package_file(package_root, template_path)?;
             let mut layout: OverlayLayout = serde_json::from_value(raw).map_err(|e| {
                 format!("Layout template '{package_id}/{export_name}' is invalid: {e}")
             })?;
@@ -1368,16 +1474,17 @@ impl PluginHost {
         let mut page = {
             let records = self.records.lock().unwrap();
             let record = self.require_enabled_record(&records, &package_id)?;
-            let export = record
-                .manifest
-                .exports
-                .pages
-                .get(&export_name)
-                .ok_or_else(|| {
-                    format!("Page template '{package_id}/{export_name}' does not exist.")
-                })?;
+            let contributes = record.manifest.normalized_contributes_v3();
+            let export = contributes.pages.get(&export_name).ok_or_else(|| {
+                format!("Page template '{package_id}/{export_name}' does not exist.")
+            })?;
             let package_root = Path::new(&record.descriptor.path);
-            let raw = read_json_package_file(package_root, &export.path)?;
+            let template_path = export.path.as_deref().ok_or_else(|| {
+                format!(
+                    "Page contribution '{package_id}/{export_name}' is a webview entry, not an importable page template."
+                )
+            })?;
+            let raw = read_json_package_file(package_root, template_path)?;
             let mut page: PageLayout = serde_json::from_value(raw).map_err(|e| {
                 format!("Page template '{package_id}/{export_name}' is invalid: {e}")
             })?;
@@ -1441,18 +1548,14 @@ impl PluginHost {
             let record = records
                 .get(&package_id)
                 .ok_or_else(|| format!("Package '{package_id}' is not installed."))?;
-            if record.manifest.exports.configuration.is_none()
-                && !record.descriptor.has_public_settings
+            let contributes = record.manifest.normalized_contributes_v3();
+            if first_configuration(&contributes).is_none() && !record.descriptor.has_public_settings
             {
                 return Err(format!(
                     "Package '{package_id}' does not expose configuration settings."
                 ));
             }
-            record
-                .manifest
-                .exports
-                .configuration
-                .as_ref()
+            first_configuration(&contributes)
                 .and_then(|configuration| configuration.title.clone())
                 .unwrap_or_else(|| format!("{} Settings", record.descriptor.name))
         };
@@ -1530,11 +1633,10 @@ impl PluginHost {
         let manifest_path = package_dir.join("bakingrl.plugin.json");
         let manifest_str = fs::read_to_string(&manifest_path)
             .map_err(|e| format!("bakingrl.plugin.json unreadable: {e}"))?;
-        let manifest: PluginPackageManifestV2 = serde_json::from_str(&manifest_str)
+        let manifest = PluginPackageManifest::parse(&manifest_str)
             .map_err(|e| format!("bakingrl.plugin.json invalid: {e}"))?;
-        manifest.validate()?;
-        let effective_permissions = EffectivePackagePermissionsV2::for_manifest(&manifest)?;
-        let enabled = state.enabled.get(&manifest.id).copied().unwrap_or(false);
+        let effective_permissions = EffectivePackagePermissions::for_package_manifest(&manifest)?;
+        let enabled = state.enabled.get(manifest.id()).copied().unwrap_or(false);
         let descriptor = descriptor_for_manifest(
             &manifest,
             package_dir.to_string_lossy().to_string(),
@@ -1683,13 +1785,13 @@ impl PluginHost {
         developer_id: &str,
         approved_version: &MarketplaceApprovedVersion,
     ) -> Result<(), String> {
-        if inspection.manifest.id != package_id {
+        if inspection.manifest.id() != package_id {
             return Err(
                 "Downloaded marketplace bundle package id does not match the approved entry."
                     .to_string(),
             );
         }
-        if inspection.manifest.version != version {
+        if inspection.manifest.version() != version {
             return Err(
                 "Downloaded marketplace bundle version does not match the approved entry."
                     .to_string(),
@@ -1717,19 +1819,13 @@ impl PluginHost {
             );
         }
         let effective_permissions =
-            EffectivePackagePermissionsV2::for_manifest(&inspection.manifest)?;
+            EffectivePackagePermissions::for_package_manifest(&inspection.manifest)?;
         if effective_permissions != approved_version.review.permissions {
             return Err(
                 "Marketplace bundle permissions do not match the reviewed permissions.".to_string(),
             );
         }
-        if inspection
-            .manifest
-            .author
-            .as_deref()
-            .unwrap_or_default()
-            .is_empty()
-        {
+        if inspection.manifest.author().unwrap_or_default().is_empty() {
             warn!(
                 "Marketplace package {}@{} from developer {} has no manifest author",
                 package_id, version, developer_id
@@ -1800,6 +1896,14 @@ impl PluginHost {
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_millis() as u64)
             .unwrap_or_default();
+        self.diagnostics.push(PluginDiagnosticInput {
+            package_id: Some(package_id.to_string()),
+            source: "host".to_string(),
+            severity: PluginDiagnosticSeverity::Error,
+            phase: "operation".to_string(),
+            message: message.to_string(),
+            crash_count: None,
+        });
         let payload = serde_json::json!({
             "kind": "package",
             "source": package_id,
@@ -1913,7 +2017,7 @@ pub fn list_packages(host: State<'_, Arc<PluginHost>>) -> Vec<PackageDescriptor>
 pub fn inspect_package_bundle(
     host: State<'_, Arc<PluginHost>>,
     path: String,
-) -> Result<crate::plugin_v2::bundle::BundleInspection, String> {
+) -> Result<crate::plugin_package::bundle::BundleInspection, String> {
     host.inspect_package_bundle(path)
 }
 
@@ -2009,6 +2113,16 @@ pub fn get_runtime_info() -> RuntimeInfo {
 }
 
 #[tauri::command]
+pub fn list_plugin_diagnostics(host: State<'_, Arc<PluginHost>>) -> Vec<PluginDiagnosticEvent> {
+    host.list_diagnostics()
+}
+
+#[tauri::command]
+pub fn clear_plugin_diagnostics(host: State<'_, Arc<PluginHost>>) {
+    host.clear_diagnostics();
+}
+
+#[tauri::command]
 pub async fn reload_packages(
     host: State<'_, Arc<PluginHost>>,
 ) -> Result<Vec<PackageDescriptor>, String> {
@@ -2054,15 +2168,6 @@ pub fn read_visual_export_source(
     export_name: String,
 ) -> Result<String, String> {
     host.read_visual_export_source(&package_id, &export_name)
-}
-
-#[tauri::command]
-pub fn read_component_export_source(
-    host: State<'_, Arc<PluginHost>>,
-    caller_package_id: String,
-    component_ref: String,
-) -> Result<ComponentExportSource, String> {
-    host.read_component_export_source(&caller_package_id, &component_ref)
 }
 
 #[tauri::command]

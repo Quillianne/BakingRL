@@ -322,23 +322,12 @@ impl Default for ObsSettings {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum PluginRuntimeIsolation {
-    Export,
-    Package,
-}
-
-impl Default for PluginRuntimeIsolation {
-    fn default() -> Self {
-        Self::Package
-    }
-}
-
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SecuritySettings {
     #[serde(default)]
-    pub plugin_runtime_isolation: PluginRuntimeIsolation,
+    pub plugins_safe_mode: bool,
+    #[serde(default)]
+    pub disable_plugin_activation: bool,
     #[serde(default = "default_require_trusted_remote_packages")]
     pub require_trusted_remote_packages: bool,
     #[serde(default)]
@@ -352,7 +341,8 @@ fn default_require_trusted_remote_packages() -> bool {
 impl Default for SecuritySettings {
     fn default() -> Self {
         Self {
-            plugin_runtime_isolation: PluginRuntimeIsolation::default(),
+            plugins_safe_mode: false,
+            disable_plugin_activation: false,
             require_trusted_remote_packages: default_require_trusted_remote_packages(),
             trusted_package_public_keys: Vec::new(),
         }
@@ -362,7 +352,10 @@ impl Default for SecuritySettings {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct OverlaySettings {
     pub hide_when_game_unfocused: bool,
-    #[serde(default = "default_update_state_throttle_fps", alias = "update_rate_fps")]
+    #[serde(
+        default = "default_update_state_throttle_fps",
+        alias = "update_rate_fps"
+    )]
     pub update_state_throttle_fps: u16,
     #[serde(default = "default_use_monitor_size")]
     pub use_monitor_size: bool,

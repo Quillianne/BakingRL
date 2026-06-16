@@ -1444,7 +1444,7 @@ pre {
 }
 
 .package-detail-section-head,
-.export-section-head {
+.contribution-section-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1452,7 +1452,7 @@ pre {
 }
 
 .package-detail-section-head h3,
-.export-section-head h4 {
+.contribution-section-head h4 {
   margin: 0;
   color: var(--text-primary);
 }
@@ -1462,7 +1462,7 @@ pre {
 }
 
 .section-count,
-.export-section-head span {
+.contribution-section-head span {
   display: inline-grid;
   place-items: center;
   min-width: 24px;
@@ -1476,13 +1476,13 @@ pre {
   font-weight: 750;
 }
 
-.export-section-grid {
+.contribution-section-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 10px;
 }
 
-.export-section-card {
+.contribution-section-card {
   display: flex;
   min-width: 0;
   flex-direction: column;
@@ -1493,13 +1493,13 @@ pre {
   background: color-mix(in srgb, var(--bg-dark) 28%, transparent);
 }
 
-.export-section-head h4 {
+.contribution-section-head h4 {
   color: var(--text-muted);
   font-size: 11px;
   text-transform: uppercase;
 }
 
-.export-items {
+.contribution-items {
   display: grid;
   gap: 7px;
   margin: 0;
@@ -1507,7 +1507,7 @@ pre {
   list-style: none;
 }
 
-.export-item {
+.contribution-item {
   display: grid;
   gap: 3px;
   min-width: 0;
@@ -1517,14 +1517,14 @@ pre {
   background: color-mix(in srgb, var(--bg-panel-hover) 46%, transparent);
 }
 
-.export-name {
+.contribution-name {
   color: var(--text-secondary);
   font-size: 12px;
   font-weight: 700;
   overflow-wrap: anywhere;
 }
 
-.export-meta {
+.contribution-meta {
   color: var(--text-muted);
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
   font-size: 11px;
@@ -1642,35 +1642,6 @@ pre {
   cursor: pointer;
   font-size: 13px;
   font-weight: 700;
-}
-
-.exports-list {
-  display: grid;
-  gap: 8px;
-  margin-top: 10px;
-}
-
-.exports-list h4 {
-  margin: 0 0 4px;
-  color: var(--text-muted);
-  font-size: 11px;
-  text-transform: uppercase;
-}
-
-.exports-list ul {
-  display: grid;
-  gap: 4px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.exports-list li {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  color: var(--text-secondary);
-  font-size: 12px;
 }
 
 .install-panel {

@@ -214,7 +214,7 @@ export class DashboardState {
     return this.packages
       .filter((pkg) => pkg.enabled)
       .flatMap((pkg) =>
-        pkg.exports.pages.map((page) => ({
+        pkg.contributions.pages.map((page) => ({
           package: pkg,
           page
         }))
@@ -225,7 +225,7 @@ export class DashboardState {
     return this.packages
       .filter((pkg) => pkg.enabled)
       .flatMap((pkg) =>
-        pkg.exports.layouts.map((layoutTemplate) => ({
+        pkg.contributions.overlays.map((layoutTemplate) => ({
           package: pkg,
           layoutTemplate
         }))
@@ -510,17 +510,14 @@ export class DashboardState {
 
   runtimeApiCompatibility(runtimeApi: string | null | undefined) {
     const targetVersion = parseRuntimeApiVersion(runtimeApi);
-    const hostVersion = parseRuntimeApiVersion(this.runtimeInfo?.runtimeApiVersion ?? "0.4.0");
+    const hostVersion = parseRuntimeApiVersion(this.runtimeInfo?.runtimeApiVersion ?? "1.0.0");
     if (!targetVersion || !hostVersion) {
       return "unknown_runtime_api" as const;
     }
-    if (targetVersion.major === hostVersion.major && targetVersion.minor === hostVersion.minor) {
+    if (targetVersion.major === hostVersion.major) {
       return "compatible" as const;
     }
-    if (
-      targetVersion.major < hostVersion.major ||
-      (targetVersion.major === hostVersion.major && targetVersion.minor < hostVersion.minor)
-    ) {
+    if (targetVersion.major < hostVersion.major) {
       return "incompatible" as const;
     }
     return "requires_newer_host" as const;
@@ -548,7 +545,7 @@ export class DashboardState {
   inspectionCompatibilityMessage(inspection: BundleInspection) {
     const runtimeApi = inspection.manifest.compatibility?.runtimeApi;
     const sdk = inspection.manifest.compatibility?.sdk;
-    const hostRange = this.runtimeInfo?.supportedRuntimeApi ?? ">=0.4.0 <0.5.0";
+    const hostRange = this.runtimeInfo?.supportedRuntimeApi ?? ">=1.0.0 <2.0.0";
     if (!runtimeApi) return this.t("packages.missingRuntimeApiMessage");
     const sdkPart = sdk ? ` · SDK ${sdk}` : "";
     return this.tx("packages.runtimeApiMessage", { runtimeApi, hostRange }) + sdkPart;
@@ -1055,16 +1052,17 @@ export class DashboardState {
     }
   }
 
-  exportCount(pkg: PackageDescriptor) {
+  contributionCount(pkg: PackageDescriptor) {
     return (
-      pkg.exports.visuals.length +
-      pkg.exports.components.length +
-      pkg.exports.services.length +
-      pkg.exports.connectors.length +
-      pkg.exports.assets.length +
-      pkg.exports.schemas.length +
-      pkg.exports.pages.length +
-      pkg.exports.layouts.length
+      pkg.contributions.commands.length +
+      pkg.contributions.visuals.length +
+      pkg.contributions.services.length +
+      pkg.contributions.views.length +
+      pkg.contributions.assets.length +
+      pkg.contributions.schemas.length +
+      pkg.contributions.pages.length +
+      pkg.contributions.overlays.length +
+      pkg.contributions.webviews.length
     );
   }
 
@@ -1072,18 +1070,19 @@ export class DashboardState {
     return JSON.stringify(value, null, 2);
   }
 
-  inspectionExportCount(inspection: BundleInspection) {
-    const exports = inspection.manifest.exports;
+  inspectionContributionCount(inspection: BundleInspection) {
+    const contributes = inspection.manifest.contributes ?? {};
     return (
-      Object.keys(exports.visuals ?? {}).length +
-      Object.keys(exports.components ?? {}).length +
-      Object.keys(exports.services ?? {}).length +
-      Object.keys(exports.connectors ?? {}).length +
-      Object.keys(exports.assets ?? {}).length +
-      Object.keys(exports.schemas ?? {}).length +
-      Object.keys(exports.pages ?? {}).length +
-      Object.keys(exports.layouts ?? {}).length +
-      (exports.configuration ? 1 : 0)
+      Object.keys(contributes.commands ?? {}).length +
+      Object.keys(contributes.visuals ?? {}).length +
+      Object.keys(contributes.services ?? {}).length +
+      Object.keys(contributes.views ?? {}).length +
+      Object.keys(contributes.assets ?? {}).length +
+      Object.keys(contributes.schemas ?? {}).length +
+      Object.keys(contributes.pages ?? {}).length +
+      Object.keys(contributes.overlays ?? {}).length +
+      Object.keys(contributes.webviews ?? {}).length +
+      Object.keys(contributes.configuration ?? {}).length
     );
   }
 

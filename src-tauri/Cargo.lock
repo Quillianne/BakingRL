@@ -358,6 +358,7 @@ dependencies = [
  "notify",
  "reqwest",
  "security-framework 3.7.0",
+ "semver",
  "serde",
  "serde_json",
  "sha2",
@@ -369,6 +370,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-single-instance",
  "tempfile",
+ "thiserror 2.0.18",
  "tokio",
  "tokio-tungstenite",
  "tower-http",
@@ -376,6 +378,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "walkdir",
+ "which 8.0.3",
  "zip",
 ]
 
@@ -6665,6 +6668,15 @@ dependencies = [
  "home",
  "rustix 0.38.44",
  "winsafe",
+]
+
+[[package]]
+name = "which"
+version = "8.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c789537cf2f7f55be8e6192f92e464174ee55f91af622777f7f1ceb0dbccd03e"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

@@ -31,12 +31,6 @@ struct ObsGatewayState {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ComponentSourceRequest {
-    component_ref: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct ServiceCallRequest {
     service_ref: String,
     method: String,
@@ -92,10 +86,6 @@ pub fn start_obs_gateway(
             .route(
                 "/api/package-modules/{token}/{cache_key}/{package_id}/{*path}",
                 get(read_package_module_with_path_token),
-            )
-            .route(
-                "/api/packages/{package_id}/components/source",
-                post(read_component_export_source),
             )
             .route(
                 "/api/packages/{package_id}/services/call",
@@ -229,23 +219,6 @@ fn package_file_response(state: &ObsGatewayState, package_id: &str, path: &str) 
         }
         Err(err) => (StatusCode::BAD_REQUEST, err).into_response(),
     }
-}
-
-async fn read_component_export_source(
-    State(state): State<ObsGatewayState>,
-    Query(auth): Query<AuthQuery>,
-    headers: HeaderMap,
-    Path(package_id): Path<String>,
-    Json(request): Json<ComponentSourceRequest>,
-) -> Response {
-    if !gateway_authorized(&state, &headers, &auth) {
-        return unauthorized();
-    }
-    json_result(
-        state
-            .plugin_host
-            .read_component_export_source(&package_id, &request.component_ref),
-    )
 }
 
 async fn call_service_export(

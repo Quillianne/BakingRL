@@ -1,0 +1,151 @@
+<script lang="ts">
+  import { onMount } from "svelte";
+  import { listen } from "@tauri-apps/api/event";
+  import { invoke } from "@tauri-apps/api/core";
+  import { adapter } from "$lib/adapter/index";
+  import { mountPluginWebview, type PluginWebviewHandle } from "$lib/pluginWebview";
+  import type { AppSettings } from "$lib/dashboard/types";
+  import type { GameEventFrame } from "$lib/rlTelemetry";
+
+  const { data } = $props();
+
+  let root = $state<HTMLElement | null>(null);
+  let message = $state("");
+
+  type TelemetryCallback = (event: unknown) => void;
+
+  async function configureAdapter() {
+    try {
+      const settings = await invoke<AppSettings>("get_app_settings");
+      adapter.configureGateway(settings.obs.host, settings.obs.port, settings.obs.access_token);
+    } catch {
+      // Browser fallback keeps adapter defaults.
+    }
+  }
+
+  function publishTelemetry(callbacks: Set<TelemetryCallback>, event: unknown) {
+    for (const callback of callbacks) callback(event);
+  }
+
+  async function packageSettings() {
+    try {
+      return await invoke<Record<string, unknown>>("get_package_settings", { packageId: data.packageId });
+    } catch {
+      return {};
+    }
+  }
+
+  onMount(() => {
+    let disposed = false;
+    let webviewHandle: PluginWebviewHandle | null = null;
+    let unlistenTelemetry: (() => void) | undefined;
+    let moduleCleanup: (() => void) | undefined;
+    const telemetryCallbacks = new Set<TelemetryCallback>();
+
+    async function mount() {
+      if (!root) return;
+      await configureAdapter();
+      const settings = await packageSettings();
+      const dimensions = {
+        width: Math.max(1, root.clientWidth || window.innerWidth),
+        height: Math.max(1, root.clientHeight || window.innerHeight)
+      };
+
+      if (data.entry) {
+        const moduleUrl = adapter.packageModuleUrl(data.packageId, data.entry, Date.now());
+        const module = await import(/* @vite-ignore */ moduleUrl);
+        const exported = module.default ?? module;
+        if (typeof exported?.mount === "function") {
+          const cleanup = await exported.mount({
+            root,
+            packageId: data.packageId,
+            webviewId: data.webviewId,
+            settings,
+            dimensions,
+            mode: "runtime"
+          });
+          if (typeof cleanup === "function") moduleCleanup = cleanup;
+        }
+        return;
+      }
+
+      if (data.path) {
+        webviewHandle = mountPluginWebview({
+          root,
+          src: adapter.packageHtmlUrl(data.packageId, data.path, Date.now()),
+          packageId: data.packageId,
+          exportName: data.webviewId,
+          item: {
+            id: data.webviewId,
+            name: data.webviewId,
+            width: dimensions.width,
+            height: dimensions.height,
+            settings: {}
+          },
+          settings,
+          mode: "runtime",
+          assetUrl(ref) {
+            return adapter.packageFileUrl(data.packageId, ref);
+          },
+          subscribeTelemetry(callback) {
+            telemetryCallbacks.add(callback);
+            return () => telemetryCallbacks.delete(callback);
+          }
+        });
+        return;
+      }
+
+      throw new Error("Missing plugin webview entry.");
+    }
+
+    void listen<GameEventFrame>("bakingrl-telemetry", (event) => {
+      publishTelemetry(telemetryCallbacks, event.payload);
+    }).then((unlisten) => {
+      unlistenTelemetry = unlisten;
+    });
+
+    void mount().catch((error) => {
+      if (!disposed) message = error instanceof Error ? error.message : String(error);
+    });
+
+    return () => {
+      disposed = true;
+      moduleCleanup?.();
+      webviewHandle?.cleanup();
+      unlistenTelemetry?.();
+    };
+  });
+</script>
+
+<svelte:head>
+  <title>{data.webviewId}</title>
+</svelte:head>
+
+<main class="plugin-webview-host" bind:this={root}>
+  {#if message}
+    <div class="plugin-webview-error">{message}</div>
+  {/if}
+</main>
+
+<style>
+  :global(body) {
+    margin: 0;
+  }
+
+  .plugin-webview-host {
+    min-height: calc(100vh - 48px);
+    width: 100%;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    overflow: hidden;
+  }
+
+  .plugin-webview-error {
+    display: grid;
+    min-height: calc(100vh - 48px);
+    place-items: center;
+    padding: 24px;
+    color: var(--danger);
+    text-align: center;
+  }
+</style>

@@ -240,18 +240,20 @@
         <div class="section-stack compact-settings-stack">
           <div class="settings-group">
             <h3>{dashboard.t("settings.security")}</h3>
-            <div class="input-group">
-              <label for="runtimeIsolation">{dashboard.t("settings.runtimeIsolation")}</label>
-              <select id="runtimeIsolation" bind:value={draftSettings.security.plugin_runtime_isolation}>
-                <option value="package">{dashboard.t("settings.runtimeIsolationPackage")}</option>
-                <option value="export">{dashboard.t("settings.runtimeIsolationExport")}</option>
-              </select>
-            </div>
-
             <label class="check-row">
               <input type="checkbox" bind:checked={draftSettings.security.require_trusted_remote_packages} />
               <span></span>
               {dashboard.t("settings.requireTrustedRemotePackages")}
+            </label>
+            <label class="check-row">
+              <input type="checkbox" bind:checked={draftSettings.security.plugins_safe_mode} />
+              <span></span>
+              {dashboard.t("settings.pluginsSafeMode")}
+            </label>
+            <label class="check-row">
+              <input type="checkbox" bind:checked={draftSettings.security.disable_plugin_activation} />
+              <span></span>
+              {dashboard.t("settings.disablePluginActivation")}
             </label>
           </div>
 

@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run tauri:before-build",
     "frontendDist": "../build"
   },
   "app": {
@@ -54,8 +54,10 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "../build": "build"
+      "../build": "build",
+      "gen/extension-host": "extension-host"
     },
+    "externalBin": ["bin/node"],
     "fileAssociations": [
       {
         "ext": ["brlp"],

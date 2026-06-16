@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::bundle::VerifiedDeveloperDescriptor;
-use super::permissions::EffectivePackagePermissionsV2;
+use super::permissions::EffectivePackagePermissions;
 
 pub const OFFICIAL_MARKETPLACE_URL: &str =
     "https://quillianne.github.io/BakingRLMarketplace/marketplace.json";
@@ -81,7 +81,7 @@ pub struct MarketplaceApprovedVersion {
 pub struct MarketplaceReview {
     pub status: String,
     pub reviewed_at: String,
-    pub permissions: EffectivePackagePermissionsV2,
+    pub permissions: EffectivePackagePermissions,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

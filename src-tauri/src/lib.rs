@@ -3,7 +3,7 @@ pub mod ingestor;
 pub mod models;
 pub mod obs_gateway;
 pub mod plugin_host;
-pub mod plugin_v2;
+pub mod plugin_package;
 pub mod registry;
 pub mod window_watcher;
 
@@ -11,19 +11,19 @@ use crate::bus::{BusEvent, EventBus};
 use crate::ingestor::{start_tcp_ingestor, TelemetryStatusState};
 use crate::models::{GameEvent, ObsGatewayStatus, TelemetryConnectionStatus};
 use crate::plugin_host::{
-    call_service_export, create_overlay_layout, create_page, delete_overlay_layout,
-    delete_package_secret, delete_page, discard_prepared_package, duplicate_overlay_layout,
-    duplicate_page, get_app_settings, get_marketplace_catalog, get_overlay_layouts,
-    get_package_configuration_page, get_package_configuration_state, get_package_settings,
-    get_pages, get_runtime_info, get_visual_settings_schema, import_package_layout,
-    import_package_page, inspect_package_bundle, install_package_from_file,
-    install_package_from_url, install_prepared_package, list_packages, open_package_configuration,
-    open_package_secrets, open_page, packages_dir, plugin_registry_get,
+    call_service_export, clear_plugin_diagnostics, create_overlay_layout, create_page,
+    delete_overlay_layout, delete_package_secret, delete_page, discard_prepared_package,
+    duplicate_overlay_layout, duplicate_page, get_app_settings, get_marketplace_catalog,
+    get_overlay_layouts, get_package_configuration_page, get_package_configuration_state,
+    get_package_settings, get_pages, get_runtime_info, get_visual_settings_schema,
+    import_package_layout, import_package_page, inspect_package_bundle, install_package_from_file,
+    install_package_from_url, install_prepared_package, list_packages, list_plugin_diagnostics,
+    open_package_configuration, open_package_secrets, open_page, packages_dir, plugin_registry_get,
     prepare_marketplace_package, prepare_package_from_deep_link, prepare_package_from_git,
-    prepare_package_from_url, read_component_export_source, read_visual_export_source,
-    refresh_marketplace, reload_packages, remove_package, save_app_settings, save_overlay_layout,
-    save_package_settings, save_page, set_active_overlay_layout, set_package_enabled,
-    set_package_secret, set_stream_overlay_layout, PluginHost,
+    prepare_package_from_url, read_visual_export_source, refresh_marketplace, reload_packages,
+    remove_package, save_app_settings, save_overlay_layout, save_package_settings, save_page,
+    set_active_overlay_layout, set_package_enabled, set_package_secret, set_stream_overlay_layout,
+    PluginHost,
 };
 use crate::registry::{registry_entries, registry_get, Registry};
 use crate::window_watcher::start_window_visibility_watcher;
@@ -641,6 +641,8 @@ pub fn run() {
             discard_prepared_package,
             packages_dir,
             get_runtime_info,
+            list_plugin_diagnostics,
+            clear_plugin_diagnostics,
             get_app_settings,
             save_app_settings,
             get_package_settings,
@@ -653,7 +655,6 @@ pub fn run() {
             remove_package,
             reload_packages,
             read_visual_export_source,
-            read_component_export_source,
             call_service_export,
             plugin_registry_get,
             get_overlay_layouts,

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { adapter } from "$lib/adapter/index";
+  import { mountPluginWebview } from "$lib/pluginWebview";
 
   type RendererMode = "runtime" | "editor" | "page";
   type LayoutType = "ingame" | "stream";
@@ -30,9 +31,14 @@
     onEventLayerActiveChange?: (active: boolean) => void;
   } = $props();
 
-  type VisualExportDescriptor = {
+  type VisualContributionDescriptor = {
     name: string;
     entry: string;
+    webview?: string | {
+      entry?: string;
+      path?: string;
+      html?: string;
+    } | null;
     default_width: number;
     default_height: number;
     settings: string | null;
@@ -50,10 +56,10 @@
         read?: string[];
       };
     };
-    exports: {
-      visuals: VisualExportDescriptor[];
+    contributions: {
+      visuals: VisualContributionDescriptor[];
       configuration?: {
-        visuals: VisualExportDescriptor[];
+        visuals: VisualContributionDescriptor[];
       } | null;
     };
   };
@@ -123,41 +129,10 @@
     };
   };
 
-  type ComponentExportSource = {
-    package_id: string;
-    export_name: string;
-    entry: string;
-    source: string;
-    props_schema: any | null;
-  };
-
   type Diagnostics = {
     log(message: string, data?: unknown): void;
     warn(message: string, data?: unknown): void;
     error(message: string, data?: unknown): void;
-  };
-
-  type ComponentContext = {
-    root: HTMLElement;
-    providerPackageId: string;
-    exportName: string;
-    assets: {
-      url(ref: string): string;
-    };
-    diagnostics: Diagnostics;
-  };
-
-  type ComponentHandle = {
-    mount(root: HTMLElement, props?: Record<string, unknown>): Promise<void | (() => void)>;
-  };
-
-  type ComponentExport = {
-    mount(context: ComponentContext, props: Record<string, unknown>): void | (() => void) | Promise<void | (() => void)>;
-  };
-
-  type ComponentModule = {
-    default?: ComponentExport;
-    mount?: ComponentExport["mount"];
   };
 
   type VisualContext = {
@@ -176,9 +151,6 @@
     };
     registry: {
       get(key: string): Promise<unknown>;
-    };
-    components: {
-      load(ref: string): Promise<ComponentHandle>;
     };
     services: {
       call(ref: string, method: string, input?: unknown): Promise<unknown>;
@@ -235,7 +207,6 @@
   let eventActiveItems = $state(new Set<string>());
   let mountedItems = new Map<string, MountedItem>();
   let telemetrySubscribers = new Set<(event: unknown) => void>();
-  let componentSourceCache = new Map<string, ComponentExportSource>();
   let settingsCache = new Map<string, Record<string, unknown>>();
   let editorActionHandles = new Map<string, VisualEditorActionHandle[]>();
   let moduleVersion = 0;
@@ -491,7 +462,7 @@
     if (!exportName || itemKind(item) !== "visual") return null;
     const pkg = packageForItem(item);
     if (!pkg) return null;
-    const visuals = source === "configuration" ? (pkg.exports.configuration?.visuals ?? []) : pkg.exports.visuals;
+    const visuals = source === "configuration" ? (pkg.contributions.configuration?.visuals ?? []) : pkg.contributions.visuals;
     return visuals.find((visual) => visual.name === exportName) ?? null;
   }
 
@@ -507,30 +478,28 @@
     return adapter.packageModuleUrl(packageId, entry, `${packageRevision}.${moduleVersion}`);
   }
 
+  function packageHtmlUrl(packageId: string, entry: string) {
+    return adapter.packageHtmlUrl(packageId, entry, `${packageRevision}.${moduleVersion}`);
+  }
+
   function packageAssetUrl(packageId: string, ref: string) {
     const value = String(ref ?? "");
     if (/^(https?:|data:|blob:|\/)/.test(value)) return value;
     return adapter.packageFileUrl(packageId, value);
   }
 
-  function settingsObject(item: OverlayItem) {
-    return item.settings && typeof item.settings === "object" && !Array.isArray(item.settings) ? item.settings : {};
+  function webviewEntryForVisual(visual: VisualContributionDescriptor) {
+    if (typeof visual.webview === "string") return visual.webview;
+    if (visual.webview && typeof visual.webview === "object") {
+      const entry = visual.webview.entry ?? visual.webview.path ?? visual.webview.html;
+      if (typeof entry === "string") return entry;
+    }
+    if (typeof visual.entry === "string" && /\.html?(?:[?#].*)?$/i.test(visual.entry)) return visual.entry;
+    return null;
   }
 
-  function validateProps(schema: any | null, props: Record<string, unknown>) {
-    if (!schema || typeof schema !== "object") return;
-    const required = Array.isArray(schema.required) ? schema.required : [];
-    for (const key of required) {
-      if (!(key in props)) throw new Error(`Missing required component prop '${key}'.`);
-    }
-    const properties = schema.properties && typeof schema.properties === "object" ? schema.properties : {};
-    for (const [key, value] of Object.entries(props)) {
-      const expected = properties[key]?.type;
-      if (!expected || value == null) continue;
-      if (expected === "number" && typeof value !== "number") throw new Error(`Component prop '${key}' must be a number.`);
-      if (expected === "string" && typeof value !== "string") throw new Error(`Component prop '${key}' must be a string.`);
-      if (expected === "boolean" && typeof value !== "boolean") throw new Error(`Component prop '${key}' must be a boolean.`);
-    }
+  function settingsObject(item: OverlayItem) {
+    return item.settings && typeof item.settings === "object" && !Array.isArray(item.settings) ? item.settings : {};
   }
 
   function visualMountSignature(item: OverlayItem) {
@@ -553,21 +522,8 @@
     return settings;
   }
 
-  async function getComponentSource(callerPackageId: string, componentRef: string) {
-    const key = `${callerPackageId}->${componentRef}`;
-    const cached = componentSourceCache.get(key);
-    if (cached) return cached;
-    const source = await adapter.invoke<ComponentExportSource>("read_component_export_source", {
-      callerPackageId,
-      componentRef
-    });
-    componentSourceCache.set(key, source);
-    return source;
-  }
-
   function invalidateMountedModules() {
     moduleVersion += 1;
-    componentSourceCache.clear();
     settingsCache.clear();
     for (const mounted of mountedItems.values()) mounted.cleanup();
     mountedItems.clear();
@@ -663,6 +619,83 @@
     root.dataset.contextMode = mountedContextMode();
     applyItemStyle(root, layer, item, layout);
     host.appendChild(root);
+
+    const webviewEntry = webviewEntryForVisual(mountedVisual);
+    if (webviewEntry) {
+      const packageId = item.package_id;
+      const exportName = item.export_name;
+      try {
+        let webviewHandle: ReturnType<typeof mountPluginWebview>;
+        const cleanupMountedWebview = () => {
+          clearEditorActions(item.id);
+          webviewHandle?.cleanup();
+          const nextActiveItems = new Set(eventActiveItems);
+          nextActiveItems.delete(item.id);
+          eventActiveItems = nextActiveItems;
+          root.remove();
+        };
+        const settings = { ...(await getPackageSettings(packageId)), ...settingsObject(item) };
+        webviewHandle = mountPluginWebview({
+          root,
+          src: packageHtmlUrl(mountedPackage.id, webviewEntry),
+          packageId: mountedPackage.id,
+          exportName,
+          item: {
+            id: item.id,
+            name: item.name,
+            width: item.width,
+            height: item.height,
+            settings: settingsObject(item)
+          },
+          settings,
+          mode: mountedContextMode(),
+          assetUrl(ref) {
+            return packageAssetUrl(mountedPackage.id, ref);
+          },
+          subscribeTelemetry: subscribe,
+          emitEditorEvent(eventName, payload) {
+            publishEditorTelemetry(eventName, payload);
+          },
+          setActive(active) {
+            if (layer.kind !== "event") return;
+            const nextActiveItems = new Set(eventActiveItems);
+            if (active) {
+              nextActiveItems.add(item.id);
+            } else {
+              nextActiveItems.delete(item.id);
+            }
+            eventActiveItems = nextActiveItems;
+          }
+        });
+        mountedItems.set(item.id, {
+          cleanup: cleanupMountedWebview,
+          async update(nextLayer, nextItem, nextLayout) {
+            const nextPackageSettings = await getPackageSettings(mountedPackage.id);
+            const nextSettings = { ...nextPackageSettings, ...settingsObject(nextItem) };
+            root.dataset.mountSignature = visualMountSignature(nextItem);
+            applyItemStyle(root, nextLayer, nextItem, nextLayout);
+            webviewHandle.update(
+              {
+                id: nextItem.id,
+                name: nextItem.name,
+                width: nextItem.width,
+                height: nextItem.height,
+                settings: settingsObject(nextItem)
+              },
+              nextSettings
+            );
+          }
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        root.classList.add("visual-export-error");
+        root.textContent = message;
+        mountedItems.set(item.id, {
+          cleanup: () => root.remove()
+        });
+      }
+      return;
+    }
 
     let disposed = false;
     let visualCleanup: void | (() => void);
@@ -762,37 +795,6 @@
         registry: {
           get(key) {
             return adapter.invoke("plugin_registry_get", { packageId: mountedPackage.id, key: String(key) });
-          }
-        },
-        components: {
-          async load(ref) {
-            const componentRef = String(ref ?? "");
-            const component = await getComponentSource(mountedPackage.id, componentRef);
-            const componentMod = (await import(/* @vite-ignore */ moduleUrl(component.package_id, component.entry))) as ComponentModule;
-            const componentModule = componentMod.default ?? componentMod;
-            const mountComponent = componentModule.mount;
-            if (!mountComponent) {
-              throw new Error(`Component export '${componentRef}' does not export mount().`);
-            }
-            return {
-              async mount(componentRoot, props = {}) {
-                validateProps(component.props_schema, props);
-                return mountComponent(
-                  {
-                    root: componentRoot,
-                    providerPackageId: component.package_id,
-                    exportName: component.export_name,
-                    assets: {
-                      url(assetRef) {
-                        return packageAssetUrl(component.package_id, assetRef);
-                      }
-                    },
-                    diagnostics
-                  },
-                  props
-                );
-              }
-            };
           }
         },
         services: {
@@ -1009,7 +1011,6 @@
       editorActionHandles.clear();
       onEditorActionsChange?.([]);
       telemetrySubscribers.clear();
-      componentSourceCache.clear();
       settingsCache.clear();
     };
   });

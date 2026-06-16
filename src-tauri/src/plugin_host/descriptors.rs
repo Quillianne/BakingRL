@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::plugin_v2::bundle::BundleInspection;
-use crate::plugin_v2::manifest::{
-    parse_runtime_api_version, PluginPackageManifestV2, HOST_RUNTIME_API_RANGE,
-    HOST_RUNTIME_API_VERSION,
+use crate::plugin_package::bundle::BundleInspection;
+use crate::plugin_package::manifest::{
+    parse_runtime_api_version, PluginActivationV3, PluginDiagnosticsV3, PluginPackageManifest,
+    PluginRuntimeV3, PluginSafeModeV3, HOST_RUNTIME_API_RANGE, HOST_RUNTIME_API_VERSION,
 };
-use crate::plugin_v2::permissions::EffectivePackagePermissionsV2;
+use crate::plugin_package::permissions::EffectivePackagePermissions;
 
 use super::package_files::read_json_package_file;
 use super::settings_contract::secret_key_set;
@@ -14,16 +14,25 @@ use super::PackageRecord;
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PackageDescriptor {
+    #[serde(rename = "manifestSchema")]
+    pub manifest_schema: String,
     pub id: String,
     pub name: String,
     pub version: String,
     pub author: Option<String>,
+    pub kind: Option<String>,
+    pub activation: Option<PluginActivationV3>,
+    pub runtime: Option<PluginRuntimeV3>,
+    pub contributes: Option<serde_json::Value>,
+    pub capabilities: Option<serde_json::Value>,
+    pub diagnostics: Option<PluginDiagnosticsV3>,
+    #[serde(rename = "safeMode")]
+    pub safe_mode: Option<PluginSafeModeV3>,
     pub enabled: bool,
     pub status: PackageStatus,
     pub path: String,
-    pub exports: PackageExportsDescriptor,
-    pub imports: PackageImportsDescriptor,
-    pub effective_permissions: EffectivePackagePermissionsV2,
+    pub contributions: PackageContributionsDescriptor,
+    pub effective_permissions: EffectivePackagePermissions,
     pub compatibility: PackageCompatibilityDescriptor,
     pub settings: Option<String>,
     pub has_public_settings: bool,
@@ -39,20 +48,21 @@ pub enum PackageStatus {
 }
 
 #[derive(Debug, Clone, serde::Serialize, Default)]
-pub struct PackageExportsDescriptor {
-    pub visuals: Vec<VisualExportDescriptor>,
-    pub components: Vec<NamedExportDescriptor>,
-    pub services: Vec<ServiceExportDescriptor>,
-    pub connectors: Vec<NamedExportDescriptor>,
-    pub assets: Vec<NamedExportDescriptor>,
-    pub schemas: Vec<NamedExportDescriptor>,
-    pub pages: Vec<PageExportDescriptor>,
-    pub layouts: Vec<LayoutTemplateExportDescriptor>,
-    pub configuration: Option<ConfigurationExportDescriptor>,
+pub struct PackageContributionsDescriptor {
+    pub commands: Vec<NamedContributionDescriptor>,
+    pub visuals: Vec<VisualContributionDescriptor>,
+    pub services: Vec<ServiceContributionDescriptor>,
+    pub views: Vec<WebviewContributionDescriptor>,
+    pub assets: Vec<NamedContributionDescriptor>,
+    pub schemas: Vec<NamedContributionDescriptor>,
+    pub pages: Vec<PageContributionDescriptor>,
+    pub overlays: Vec<OverlayContributionDescriptor>,
+    pub webviews: Vec<WebviewContributionDescriptor>,
+    pub configuration: Option<ConfigurationContributionDescriptor>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
-pub struct VisualExportDescriptor {
+pub struct VisualContributionDescriptor {
     pub name: String,
     pub entry: String,
     pub default_width: f64,
@@ -61,18 +71,18 @@ pub struct VisualExportDescriptor {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
-pub struct NamedExportDescriptor {
+pub struct NamedContributionDescriptor {
     pub name: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
-pub struct ServiceExportDescriptor {
+pub struct ServiceContributionDescriptor {
     pub name: String,
     pub methods: Vec<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
-pub struct PageExportDescriptor {
+pub struct PageContributionDescriptor {
     pub name: String,
     pub path: String,
     pub title: Option<String>,
@@ -80,7 +90,7 @@ pub struct PageExportDescriptor {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
-pub struct LayoutTemplateExportDescriptor {
+pub struct OverlayContributionDescriptor {
     pub name: String,
     pub path: String,
     pub title: Option<String>,
@@ -88,11 +98,23 @@ pub struct LayoutTemplateExportDescriptor {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
-pub struct ConfigurationExportDescriptor {
+pub struct WebviewContributionDescriptor {
+    pub name: String,
+    pub entry: Option<String>,
+    pub path: Option<String>,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub icon: Option<String>,
+    pub configuration: Option<String>,
+    pub route: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ConfigurationContributionDescriptor {
     pub title: Option<String>,
     pub description: Option<String>,
     pub path: String,
-    pub visuals: Vec<VisualExportDescriptor>,
+    pub visuals: Vec<VisualContributionDescriptor>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
@@ -122,53 +144,51 @@ impl PackageCompatibilityDescriptor {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
-pub struct ComponentExportSource {
-    pub package_id: String,
-    pub export_name: String,
-    pub entry: String,
-    pub source: String,
-    pub props_schema: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
 pub struct PreparedPackageInstall {
     pub path: String,
     pub source: String,
     pub inspection: BundleInspection,
 }
 
-#[derive(Debug, Clone, serde::Serialize, Default)]
-pub struct PackageImportsDescriptor {
-    pub components: Vec<String>,
-    pub services: Vec<String>,
-}
-
 pub(super) fn descriptor_for_manifest(
-    manifest: &PluginPackageManifestV2,
+    manifest: &PluginPackageManifest,
     path: String,
     enabled: bool,
-    effective_permissions: EffectivePackagePermissionsV2,
+    effective_permissions: EffectivePackagePermissions,
 ) -> PackageDescriptor {
     let compatibility = compatibility_for_manifest(manifest);
     let enabled = enabled && compatibility.is_compatible();
     let (has_public_settings, has_secrets) = package_settings_capabilities(manifest, &path);
+    let contributes = manifest.normalized_contributes_v3();
     PackageDescriptor {
-        id: manifest.id.clone(),
-        name: manifest.name.clone(),
-        version: manifest.version.clone(),
-        author: manifest.author.clone(),
+        manifest_schema: manifest.manifest_schema().to_string(),
+        id: manifest.id().to_string(),
+        name: manifest.name().to_string(),
+        version: manifest.version().to_string(),
+        author: manifest.author().map(ToOwned::to_owned),
+        kind: manifest.kind().map(ToOwned::to_owned),
+        activation: manifest.activation().cloned(),
+        runtime: manifest.runtime().cloned(),
+        contributes: manifest.contributes_value(),
+        capabilities: manifest.capabilities().cloned(),
+        diagnostics: manifest.diagnostics().cloned(),
+        safe_mode: manifest.safe_mode().cloned(),
         enabled,
         status: PackageStatus::Installed,
         path,
-        exports: PackageExportsDescriptor {
-            visuals: manifest
-                .exports
+        contributions: PackageContributionsDescriptor {
+            commands: contributes
+                .commands
+                .keys()
+                .map(|name| NamedContributionDescriptor { name: name.clone() })
+                .collect(),
+            visuals: contributes
                 .visuals
                 .iter()
                 .map(|(name, export)| {
                     let [default_width, default_height] =
                         export.default_size.unwrap_or([320.0, 120.0]);
-                    VisualExportDescriptor {
+                    VisualContributionDescriptor {
                         name: name.clone(),
                         entry: export.entry.clone(),
                         default_width,
@@ -177,76 +197,95 @@ pub(super) fn descriptor_for_manifest(
                     }
                 })
                 .collect(),
-            components: manifest
-                .exports
-                .components
-                .keys()
-                .map(|name| NamedExportDescriptor { name: name.clone() })
-                .collect(),
-            services: manifest
-                .exports
+            services: contributes
                 .services
                 .iter()
-                .map(|(name, export)| ServiceExportDescriptor {
+                .map(|(name, export)| ServiceContributionDescriptor {
                     name: name.clone(),
                     methods: export.methods.clone(),
                 })
                 .collect(),
-            connectors: manifest
-                .exports
-                .connectors
-                .keys()
-                .map(|name| NamedExportDescriptor { name: name.clone() })
+            views: contributes
+                .views
+                .iter()
+                .map(|(name, export)| WebviewContributionDescriptor {
+                    name: name.clone(),
+                    entry: export.entry.clone(),
+                    path: export.path.clone(),
+                    title: export.title.clone(),
+                    description: export.description.clone(),
+                    icon: export.icon.clone(),
+                    configuration: export.configuration.clone(),
+                    route: export.route.clone(),
+                })
                 .collect(),
-            assets: manifest
-                .exports
+            assets: contributes
                 .assets
                 .keys()
-                .map(|name| NamedExportDescriptor { name: name.clone() })
+                .map(|name| NamedContributionDescriptor { name: name.clone() })
                 .collect(),
-            schemas: manifest
-                .exports
+            schemas: contributes
                 .schemas
                 .keys()
-                .map(|name| NamedExportDescriptor { name: name.clone() })
+                .map(|name| NamedContributionDescriptor { name: name.clone() })
                 .collect(),
-            pages: manifest
-                .exports
+            pages: contributes
                 .pages
                 .iter()
-                .map(|(name, export)| PageExportDescriptor {
+                .map(|(name, export)| PageContributionDescriptor {
                     name: name.clone(),
-                    path: export.path.clone(),
+                    path: export
+                        .path
+                        .clone()
+                        .or_else(|| export.entry.clone())
+                        .unwrap_or_default(),
                     title: export.title.clone(),
                     description: export.description.clone(),
                 })
                 .collect(),
-            layouts: manifest
-                .exports
-                .layouts
+            overlays: contributes
+                .overlays
                 .iter()
-                .map(|(name, export)| LayoutTemplateExportDescriptor {
+                .map(|(name, export)| OverlayContributionDescriptor {
                     name: name.clone(),
-                    path: export.path.clone(),
+                    path: export
+                        .path
+                        .clone()
+                        .or_else(|| export.entry.clone())
+                        .unwrap_or_default(),
                     title: export.title.clone(),
                     description: export.description.clone(),
                 })
                 .collect(),
-            configuration: manifest
-                .exports
+            webviews: contributes
+                .webviews
+                .iter()
+                .map(|(name, export)| WebviewContributionDescriptor {
+                    name: name.clone(),
+                    entry: export.entry.clone(),
+                    path: export.path.clone(),
+                    title: export.title.clone(),
+                    description: export.description.clone(),
+                    icon: export.icon.clone(),
+                    configuration: export.configuration.clone(),
+                    route: export.route.clone(),
+                })
+                .collect(),
+            configuration: contributes
                 .configuration
-                .as_ref()
-                .map(|configuration| ConfigurationExportDescriptor {
+                .values()
+                .find(|configuration| configuration.path.is_some())
+                .map(|configuration| ConfigurationContributionDescriptor {
                     title: configuration.title.clone(),
                     description: configuration.description.clone(),
-                    path: configuration.path.clone(),
+                    path: configuration.path.clone().unwrap_or_default(),
                     visuals: configuration
                         .visuals
                         .iter()
                         .map(|(name, export)| {
                             let [default_width, default_height] =
                                 export.default_size.unwrap_or([1200.0, 740.0]);
-                            VisualExportDescriptor {
+                            VisualContributionDescriptor {
                                 name: name.clone(),
                                 entry: export.entry.clone(),
                                 default_width,
@@ -257,24 +296,35 @@ pub(super) fn descriptor_for_manifest(
                         .collect(),
                 }),
         },
-        imports: PackageImportsDescriptor {
-            components: manifest.imports.components.clone(),
-            services: manifest.imports.services.clone(),
-        },
         effective_permissions,
         compatibility,
-        settings: manifest.settings.clone(),
+        settings: manifest.settings().map(ToOwned::to_owned).or_else(|| {
+            manifest
+                .normalized_contributes_v3()
+                .configuration
+                .values()
+                .next()
+                .map(|configuration| configuration.schema.clone())
+        }),
         has_public_settings,
         has_secrets,
         error: None,
     }
 }
 
-fn package_settings_capabilities(manifest: &PluginPackageManifestV2, path: &str) -> (bool, bool) {
-    let Some(settings_path) = manifest.settings.as_deref() else {
+fn package_settings_capabilities(manifest: &PluginPackageManifest, path: &str) -> (bool, bool) {
+    let settings_path = manifest.settings().map(ToOwned::to_owned).or_else(|| {
+        manifest
+            .normalized_contributes_v3()
+            .configuration
+            .values()
+            .next()
+            .map(|configuration| configuration.schema.clone())
+    });
+    let Some(settings_path) = settings_path else {
         return (false, false);
     };
-    let Ok(schema) = read_json_package_file(Path::new(path), settings_path) else {
+    let Ok(schema) = read_json_package_file(Path::new(path), &settings_path) else {
         return (false, false);
     };
     let secret_keys = secret_key_set(Some(&schema));
@@ -293,18 +343,15 @@ fn package_settings_capabilities(manifest: &PluginPackageManifestV2, path: &str)
 }
 
 pub(super) fn compatibility_for_manifest(
-    manifest: &PluginPackageManifestV2,
+    manifest: &PluginPackageManifest,
 ) -> PackageCompatibilityDescriptor {
     let host_runtime_api = parse_runtime_api_version(HOST_RUNTIME_API_VERSION)
         .expect("HOST_RUNTIME_API_VERSION must be a semver version");
-    let host_runtime_api_minor = (host_runtime_api.0, host_runtime_api.1);
     let runtime_api = manifest
-        .compatibility
-        .as_ref()
+        .compatibility()
         .and_then(|compatibility| compatibility.runtime_api.clone());
     let sdk = manifest
-        .compatibility
-        .as_ref()
+        .compatibility()
         .and_then(|compatibility| compatibility.sdk.clone());
     let (status, message) = match runtime_api
         .as_deref()
@@ -314,10 +361,10 @@ pub(super) fn compatibility_for_manifest(
             PackageCompatibilityStatus::UnknownRuntimeApi,
             Some("Package does not declare compatibility.runtimeApi; rebuild it with the current SDK.".to_string()),
         ),
-        Some((major, minor, _)) if (major, minor) == host_runtime_api_minor => {
+        Some((major, _, _)) if major == host_runtime_api.0 => {
             (PackageCompatibilityStatus::Compatible, None)
         }
-        Some((major, minor, _)) if (major, minor) < host_runtime_api_minor => (
+        Some((major, _, _)) if major < host_runtime_api.0 => (
             PackageCompatibilityStatus::Incompatible,
             Some(format!(
                 "Package targets runtime API {}; update the package to {}.",
@@ -344,47 +391,95 @@ pub(super) fn compatibility_for_manifest(
 }
 
 pub(super) fn apply_graph_diagnostics(records: &mut HashMap<String, PackageRecord>) {
-    let component_exports: std::collections::HashSet<String> = records
-        .values()
-        .flat_map(|record| {
-            record
-                .manifest
-                .exports
-                .components
-                .keys()
-                .map(|name| format!("{}/{}", record.manifest.id, name))
-                .collect::<Vec<_>>()
-        })
-        .collect();
-    let service_exports: std::collections::HashSet<String> = records
-        .values()
-        .flat_map(|record| {
-            record
-                .manifest
-                .exports
-                .services
-                .keys()
-                .map(|name| format!("{}/{}", record.manifest.id, name))
-                .collect::<Vec<_>>()
-        })
-        .collect();
+    let _ = records;
+}
 
-    for record in records.values_mut() {
-        let mut missing = Vec::new();
-        for import in &record.manifest.imports.components {
-            if !component_exports.contains(import) {
-                missing.push(format!("component {import}"));
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn v3_manifest(raw: serde_json::Value) -> PluginPackageManifest {
+        PluginPackageManifest::parse(&raw.to_string()).unwrap()
+    }
+
+    #[test]
+    fn descriptor_derives_catalog_from_v3_contributes() {
+        let manifest = v3_manifest(serde_json::json!({
+            "schema": "bakingrl.plugin/3",
+            "id": "com.example.catalog",
+            "name": "Catalog",
+            "version": "1.0.0",
+            "contributes": {
+                "visuals": {
+                    "scoreboard": {
+                        "entry": "dist/visuals/scoreboard.js",
+                        "defaultSize": [760, 128],
+                        "settings": "schemas/scoreboard-settings.json"
+                    }
+                },
+                "services": {
+                    "matchStats": {
+                        "entry": "dist/services/match-stats.js",
+                        "methods": ["snapshot"]
+                    }
+                },
+                "pages": {
+                    "dashboard": {
+                        "path": "pages/dashboard.json",
+                        "title": "Dashboard"
+                    }
+                },
+                "overlays": {
+                    "stream": {
+                        "path": "overlays/stream.json",
+                        "title": "Stream"
+                    }
+                }
+            },
+            "compatibility": {
+                "runtimeApi": "1.0.0"
             }
-        }
-        for import in &record.manifest.imports.services {
-            if !service_exports.contains(import) {
-                missing.push(format!("service {import}"));
-            }
-        }
-        record.descriptor.error = if missing.is_empty() {
-            None
-        } else {
-            Some(format!("Missing imports: {}", missing.join(", ")))
-        };
+        }));
+
+        let descriptor = descriptor_for_manifest(
+            &manifest,
+            "/tmp/com.example.catalog".to_string(),
+            true,
+            EffectivePackagePermissions::default(),
+        );
+
+        assert!(descriptor.enabled);
+        assert_eq!(
+            descriptor.compatibility.status,
+            PackageCompatibilityStatus::Compatible
+        );
+        assert_eq!(
+            descriptor.compatibility.runtime_api.as_deref(),
+            Some("1.0.0")
+        );
+        assert_eq!(descriptor.contributions.visuals[0].name, "scoreboard");
+        assert_eq!(
+            descriptor.contributions.visuals[0].entry,
+            "dist/visuals/scoreboard.js"
+        );
+        assert_eq!(descriptor.contributions.visuals[0].default_width, 760.0);
+        assert_eq!(descriptor.contributions.services[0].name, "matchStats");
+        assert_eq!(
+            descriptor.contributions.services[0].methods,
+            vec!["snapshot"]
+        );
+        assert_eq!(
+            descriptor.contributions.pages[0].path,
+            "pages/dashboard.json"
+        );
+        assert_eq!(
+            descriptor.contributions.overlays[0].path,
+            "overlays/stream.json"
+        );
+        assert!(descriptor
+            .contributes
+            .as_ref()
+            .and_then(|value| value.get("visuals"))
+            .is_some());
     }
 }

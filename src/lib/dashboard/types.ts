@@ -1,6 +1,6 @@
 import type { GameEventFrame, RlTelemetryEventName } from "$lib/rlTelemetry";
 
-export type VisualExportDescriptor = {
+export type VisualContributionDescriptor = {
   name: string;
   entry: string;
   default_width: number;
@@ -8,34 +8,45 @@ export type VisualExportDescriptor = {
   settings: string | null;
 };
 
-export type NamedExportDescriptor = {
+export type NamedContributionDescriptor = {
   name: string;
 };
 
-export type ServiceExportDescriptor = {
+export type ServiceContributionDescriptor = {
   name: string;
   methods: string[];
 };
 
-export type PageExportDescriptor = {
+export type PageContributionDescriptor = {
   name: string;
   path: string;
   title: string | null;
   description: string | null;
 };
 
-export type LayoutTemplateExportDescriptor = {
+export type OverlayContributionDescriptor = {
   name: string;
   path: string;
   title: string | null;
   description: string | null;
 };
 
-export type ConfigurationExportDescriptor = {
+export type WebviewContributionDescriptor = {
+  name: string;
+  entry: string | null;
+  path: string | null;
+  title: string | null;
+  description: string | null;
+  icon: string | null;
+  configuration: string | null;
+  route: string | null;
+};
+
+export type ConfigurationContributionDescriptor = {
   title: string | null;
   description: string | null;
   path: string;
-  visuals: VisualExportDescriptor[];
+  visuals: VisualContributionDescriptor[];
 };
 
 export type PackageCompatibilityStatus =
@@ -84,27 +95,32 @@ export type PermissionSection = {
 };
 
 export type PackageDescriptor = {
+  manifestSchema: string;
   id: string;
   name: string;
   version: string;
   author: string | null;
+  kind: string | null;
+  activation: Record<string, unknown> | null;
+  runtime: Record<string, unknown> | null;
+  contributes: Record<string, unknown> | null;
+  capabilities: Record<string, unknown> | null;
+  diagnostics: Record<string, unknown> | null;
+  safeMode: Record<string, unknown> | null;
   enabled: boolean;
   status: "installed" | "deleting";
   path: string;
-  exports: {
-    visuals: VisualExportDescriptor[];
-    components: NamedExportDescriptor[];
-    services: ServiceExportDescriptor[];
-    connectors: NamedExportDescriptor[];
-    assets: NamedExportDescriptor[];
-    schemas: NamedExportDescriptor[];
-    pages: PageExportDescriptor[];
-    layouts: LayoutTemplateExportDescriptor[];
-    configuration: ConfigurationExportDescriptor | null;
-  };
-  imports: {
-    components: string[];
-    services: string[];
+  contributions: {
+    commands: NamedContributionDescriptor[];
+    visuals: VisualContributionDescriptor[];
+    services: ServiceContributionDescriptor[];
+    views: WebviewContributionDescriptor[];
+    assets: NamedContributionDescriptor[];
+    schemas: NamedContributionDescriptor[];
+    pages: PageContributionDescriptor[];
+    overlays: OverlayContributionDescriptor[];
+    webviews: WebviewContributionDescriptor[];
+    configuration: ConfigurationContributionDescriptor | null;
   };
   effective_permissions: PermissionShape;
   compatibility: PackageCompatibilityDescriptor;
@@ -158,30 +174,38 @@ export type PackageConfigurationState = {
   secretStoreError: string | null;
 };
 
-export type ManifestExports = {
+export type ManifestContributes = {
+  commands?: Record<string, unknown>;
   visuals?: Record<string, unknown>;
-  components?: Record<string, unknown>;
   services?: Record<string, unknown>;
-  connectors?: Record<string, unknown>;
+  views?: Record<string, unknown>;
   assets?: Record<string, unknown>;
   schemas?: Record<string, unknown>;
   pages?: Record<string, unknown>;
+  overlays?: Record<string, unknown>;
+  webviews?: Record<string, unknown>;
   layouts?: Record<string, unknown>;
-  configuration?: unknown;
+  configuration?: Record<string, unknown>;
 };
 
 export type BundleInspection = {
   manifest: {
+    schema: string;
     id: string;
     name: string;
     version: string;
     author: string | null;
+    kind?: string | null;
+    activation?: Record<string, unknown> | null;
+    runtime?: Record<string, unknown> | null;
+    contributes?: ManifestContributes | null;
+    capabilities?: Record<string, unknown> | null;
+    diagnostics?: Record<string, unknown> | null;
+    safeMode?: Record<string, unknown> | null;
     compatibility?: {
       runtimeApi?: string | null;
       sdk?: string | null;
     } | null;
-    exports: ManifestExports;
-    imports?: PackageDescriptor["imports"];
     permissions?: PermissionShape;
   };
   hashes_present: boolean;
@@ -397,7 +421,8 @@ export type AppSettings = {
     start_minimized: boolean;
   };
   security: {
-    plugin_runtime_isolation: "export" | "package";
+    plugins_safe_mode: boolean;
+    disable_plugin_activation: boolean;
     require_trusted_remote_packages: boolean;
     trusted_package_public_keys: string[];
   };
@@ -432,6 +457,16 @@ export type ObsGatewayStatus = {
   running: boolean;
   address: string;
   message: string | null;
+};
+
+export type PluginDiagnosticEvent = {
+  packageId: string | null;
+  source: string;
+  severity: "info" | "warning" | "error" | "fatal";
+  phase: string;
+  message: string;
+  timestampMs: number;
+  crashCount?: number;
 };
 
 export type OverlayMonitor = {

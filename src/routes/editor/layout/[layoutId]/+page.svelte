@@ -22,7 +22,7 @@
 
   const { data } = $props();
 
-  type VisualExportDescriptor = {
+  type VisualContributionDescriptor = {
     name: string;
     entry: string;
     default_width: number;
@@ -33,8 +33,8 @@
     id: string;
     name: string;
     enabled: boolean;
-    exports: {
-      visuals: VisualExportDescriptor[];
+    contributions: {
+      visuals: VisualContributionDescriptor[];
     };
   };
 
@@ -132,7 +132,7 @@
   const propertiesScrollKey = $derived(`layout:${layout?.id ?? data.layoutId}:properties:${selectedItemId || "none"}`);
   const visualExports = $derived(
     packages.filter((pkg) => pkg.enabled).flatMap((pkg) =>
-      pkg.exports.visuals.map((visual) => ({
+      pkg.contributions.visuals.map((visual) => ({
         package: pkg,
         visual,
         ref: `${pkg.id}/${visual.name}`
@@ -369,7 +369,7 @@
     return { layer, targetItem: null, position: "end" as ItemDropPosition };
   }
 
-  function createVisualItem(ref: string, targetLayer: OverlayLayer, placement?: PlacementPoint | null) {
+  function createVisualItem(ref: string, targetLayer: OverlayLayer, placement?: PlacementPoint | null): OverlayItem | null {
     if (!layout || !ref) return null;
     const selected = visualExports.find((entry) => entry.ref === ref);
     if (!selected) return null;

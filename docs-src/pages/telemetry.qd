@@ -13,7 +13,7 @@ Rocket League local stream
   -> ingestor
   -> normalized event model
   -> host event bus
-  -> overlays, pages, services, connectors
+  -> overlays, pages, webviews, services, sidecars
 ```
 
 ## Event Consumers
@@ -22,7 +22,7 @@ Different runtime surfaces consume telemetry differently:
 
 - Visuals subscribe to live events to update DOM output.
 - Services can aggregate state or expose snapshots.
-- Connectors can forward selected information to permitted external systems.
+- Native sidecars can process heavier trusted workloads through JSON-RPC.
 - Editors can use mock events to preview visuals without a live game.
 
 ## Development Behavior

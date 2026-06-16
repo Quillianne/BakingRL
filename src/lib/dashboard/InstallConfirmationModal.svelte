@@ -69,8 +69,8 @@
 
       <div class="metric-grid compact install-metrics">
         <div class="metric-cell">
-          <strong>{state.inspectionExportCount(state.pendingInstall.inspection)}</strong>
-          <span>{state.t("common.exports")}</span>
+          <strong>{state.inspectionContributionCount(state.pendingInstall.inspection)}</strong>
+          <span>{state.t("common.contributions")}</span>
         </div>
         <div class="metric-cell">
           <strong>{compactNumberFormatter.format(state.pendingInstall.inspection.file_count)}</strong>

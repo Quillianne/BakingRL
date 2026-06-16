@@ -11,7 +11,7 @@ interface AdapterOptions {
 }
 
 /**
- * The BakingRL Adapter abstracts the data source for visual package exports.
+ * The BakingRL Adapter abstracts the data source for visual package contributions.
  * It automatically detects if it is running inside the native Tauri in-game overlay
  * or inside an external browser source (like OBS) and routes events accordingly.
  */
@@ -66,6 +66,11 @@ export class BakingRLAdapter {
             return `${this.apiUrl}/package-files/${encodeURIComponent(this.gatewayToken)}/${encodedPackageId}/${encodedPath}`;
         }
         return `${this.apiUrl}/packages/${encodedPackageId}/files/${encodedPath}`;
+    }
+
+    public packageHtmlUrl(packageId: string, path: string, version?: string | number): string {
+        const url = this.packageFileUrl(packageId, path);
+        return version === undefined ? url : this.withQueryParam(url, 'v', version);
     }
 
     public packageModuleUrl(packageId: string, path: string, version: string | number): string {
@@ -200,11 +205,6 @@ export class BakingRLAdapter {
                 break;
             case 'read_visual_export_source':
                 url += `/packages/${encodeURIComponent(args?.packageId ?? '')}/visuals/${encodeURIComponent(args?.exportName ?? '')}/source`;
-                break;
-            case 'read_component_export_source':
-                url += `/packages/${encodeURIComponent(args?.callerPackageId ?? '')}/components/source`;
-                method = 'POST';
-                body = { componentRef: args?.componentRef };
                 break;
             case 'call_service_export':
                 url += `/packages/${encodeURIComponent(args?.callerPackageId ?? '')}/services/call`;

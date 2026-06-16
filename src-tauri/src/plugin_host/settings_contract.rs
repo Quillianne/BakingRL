@@ -49,10 +49,23 @@ pub struct PackageSecretDefinition {
 pub(super) fn read_package_settings_schema(
     record: &PackageRecord,
 ) -> Result<Option<Value>, String> {
-    let Some(settings_path) = record.manifest.settings.as_deref() else {
+    let settings_path = record
+        .manifest
+        .settings()
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            record
+                .manifest
+                .normalized_contributes_v3()
+                .configuration
+                .values()
+                .next()
+                .map(|configuration| configuration.schema.clone())
+        });
+    let Some(settings_path) = settings_path else {
         return Ok(None);
     };
-    read_json_package_file(Path::new(&record.descriptor.path), settings_path).map(Some)
+    read_json_package_file(Path::new(&record.descriptor.path), &settings_path).map(Some)
 }
 
 pub(super) fn merge_package_settings(

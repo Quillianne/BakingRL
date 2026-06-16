@@ -127,8 +127,8 @@ pub fn install_bundle_from_file(
     source: String,
 ) -> Result<InstallReceipt, String> {
     let inspection = inspect_bundle(bundle_path)?;
-    let package_id = inspection.manifest.id.clone();
-    let version = inspection.manifest.version.clone();
+    let package_id = inspection.manifest.id().to_string();
+    let version = inspection.manifest.version().to_string();
     let staging_dir = staging_root.join(format!("{}-{}", sanitize_id(&package_id), unique_stamp()));
     fs::create_dir_all(packages_dir)
         .map_err(|e| format!("Unable to create package directory: {e}"))?;

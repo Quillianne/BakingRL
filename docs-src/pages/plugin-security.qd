@@ -1,86 +1,103 @@
-.docname {Plugin Security}
+.docname {Plugin Trust And Safety}
 .docauthor {BakingRL}
 .include {docs}
 .doclang {en}
 
-BakingRL treats plugin packages as untrusted. The SDK improves developer
-experience, but security enforcement belongs to the host.
+BakingRL v3 plugins are trusted extensions. The host does not try to provide a
+strict security sandbox around plugin code. Instead, it provides operational
+safety: clear package metadata, visible capabilities, diagnostics, safe mode,
+and process supervision.
 
-## Security Boundary
+This is a deliberate product choice. BakingRL plugins are expected to be
+powerful enough to control production workflows, custom pages, overlays,
+services, and native sidecars.
 
-The host owns the security boundary because it controls:
+## Trust Boundary
 
-- package installation;
-- archive extraction;
-- manifest parsing;
-- permission resolution;
-- network access;
-- registry writes;
-- service calls;
-- component imports;
-- runtime teardown.
+The Tauri host remains the process that owns:
 
-Plugin code should never be considered a trusted enforcement layer.
+- package installation and bundle extraction;
+- manifest parsing and runtime compatibility;
+- app settings and package enable state;
+- page, overlay, OBS, and window routing;
+- extension host and sidecar supervision;
+- diagnostics, crash-loop detection, stop, restart, and safe mode.
 
-## Permission Model
+Plugin JavaScript runs outside the Tauri process in a Node extension host.
+Plugin Rust or native code runs outside the Tauri process as a JSON-RPC
+sidecar. Native plugin code must not be loaded into the host binary.
 
-Permissions should be explicit and narrow. Examples:
+## Capabilities Are Operational Metadata
 
-- A connector requests access to a specific HTTPS origin.
-- A service requests access to a specific registry namespace.
-- A visual requests component or service access through package references.
+`capabilities.permissions` is visible metadata and a lightweight runtime guard.
+It documents what the package intends to use:
 
-The host should reject requests outside the effective permission set.
+- filesystem/storage;
+- network;
+- native sidecars;
+- secrets;
+- OBS;
+- telemetry;
+- registry;
+- bus namespaces.
 
-## Package Boundaries
+The host can reject obvious out-of-scope bus and registry access, but
+capabilities should not be treated as a complete security sandbox. They are
+primarily for review, diagnostics, marketplace trust, and operator confidence.
 
-Packages cannot import each other directly. Cross-package usage goes through the
-host:
+## Safe Mode
 
-```txt
-visual -> context.components.load("package/component")
-visual -> context.services.call("package/service", "method", input)
-connector -> host-mediated HTTP/WebSocket API
-```
+Safe mode starts BakingRL without executing plugin code. In safe mode the host
+does not start:
 
-This makes dependencies visible and enforceable.
+- extension hosts;
+- native sidecars;
+- plugin services;
+- plugin webviews, pages, overlays, or visuals.
 
-## Archive Safety
+Use safe mode when a plugin crashes repeatedly, blocks startup, or renders
+broken UI.
 
-Archive extraction must be defensive:
+## Crash Loop Detection
 
-- reject absolute paths;
-- reject traversal paths;
-- reject symlinks;
-- cap file size;
-- cap total uncompressed size;
-- verify hashes when provided;
-- verify signatures when required.
+The host tracks extension host and sidecar crashes. Repeated crashes in a short
+window are promoted to fatal diagnostics and restarts are blocked until the
+package is reloaded or the operator intervenes.
 
-## Trust And Signatures
+This keeps one broken package from continuously restarting in the background.
 
-Local packages and direct imports remain inspectable even before the future
-marketplace trust model is finalized. Hashes and signatures are recorded and
-displayed when present, but remote trust policy is intentionally still a host
-and marketplace concern.
+## Diagnostics
 
-Do not treat a package as trusted only because it installed successfully.
-Runtime API compatibility, permissions, hash state, signature state, and user
-enablement are separate decisions.
+Plugin stdout, stderr, JSON-RPC failures, activation errors, and host runtime
+errors should become package-scoped diagnostics. A useful diagnostic includes:
 
-## Runtime Safety
+- package ID;
+- source such as `extensionHost` or `sidecar`;
+- phase such as `activation` or `runtime`;
+- severity;
+- message;
+- crash count when relevant.
 
-Plugin runtime contexts should be revocable. When a package is disabled or
-reloaded, the host should stop subscriptions, unmount visuals, and dispose of
-service or connector instances.
+Diagnostics are part of the trusted model: the product can be powerful because
+operators can see what is running and what failed.
+
+## Distribution Trust
+
+Hashes, signatures, and marketplace metadata help review package provenance.
+They do not make code safe by themselves. They answer different questions:
+
+- Did this package match the uploaded artifact?
+- Which developer or marketplace entry published it?
+- Which capabilities does it claim?
+- Which runtime API does it target?
 
 ## Author Guidance
 
 Plugin authors should:
 
-- request the smallest possible permission set;
-- validate external input;
-- avoid storing secrets in package source;
-- avoid global mutable state unless cleanup is explicit;
-- expose small service methods instead of broad control APIs;
-- treat telemetry payloads and settings as untrusted data.
+- keep sidecars package-local and communicate through JSON-RPC stdio;
+- namespace events and registry keys under `plugin.<package-id>.*`;
+- implement `deactivate()` and dispose subscriptions;
+- report failures through `context.diagnostics`;
+- avoid storing secrets in source, bundles, logs, or settings JSON;
+- prefer small service methods over broad mutable global state.
