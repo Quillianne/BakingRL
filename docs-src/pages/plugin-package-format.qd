@@ -17,7 +17,7 @@ packages should use `schema: "bakingrl.plugin/3"` and `kind: "trusted"`.
   "kind": "trusted",
   "compatibility": {
     "runtimeApi": "1.0.0",
-    "sdk": "1.0.1"
+    "sdk": "1.0.3"
   },
   "activation": {
     "events": ["onStartup"]

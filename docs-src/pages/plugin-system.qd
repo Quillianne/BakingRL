@@ -10,7 +10,7 @@ Figma: plugins can be powerful, can own meaningful workflows, and can combine
 browser UI, host APIs, and native helper processes.
 
 The public plugin contract is `bakingrl.plugin/3`, `kind: "trusted"`,
-`runtimeApi: "1.0.0"`, and SDK package version `1.0.1`.
+`runtimeApi: "1.0.0"`, and SDK package version `1.0.3`.
 
 ## What A V3 Plugin Can Do
 
