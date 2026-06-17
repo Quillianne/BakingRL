@@ -704,6 +704,125 @@ mod tests {
         )
     }
 
+    fn poc_chain_records(
+        overlay_enabled: bool,
+        visual_enabled: bool,
+        content_enabled: bool,
+    ) -> HashMap<String, PackageRecord> {
+        HashMap::from([
+            package_record(
+                serde_json::json!({
+                    "schemaVersion": "bakingrl.plugin/4",
+                    "id": "bakingrl.poc-overlay-studio",
+                    "name": "POC Overlay Studio",
+                    "version": "1.0.0",
+                    "bakingrlApi": "2.1.0",
+                    "contributes": {
+                        "services": [
+                            {
+                                "id": "overlayStudio",
+                                "runtime": "node",
+                                "methods": ["snapshot"]
+                            }
+                        ],
+                        "extensionPoints": [
+                            {
+                                "id": "overlay-studio.visual",
+                                "service": "overlayStudio"
+                            }
+                        ]
+                    }
+                }),
+                overlay_enabled,
+            ),
+            package_record(
+                serde_json::json!({
+                    "schemaVersion": "bakingrl.plugin/4",
+                    "id": "bakingrl.poc-visual-pack",
+                    "name": "POC Visual Pack",
+                    "version": "1.0.0",
+                    "bakingrlApi": "2.1.0",
+                    "dependencies": [
+                        {
+                            "packageId": "bakingrl.poc-overlay-studio"
+                        }
+                    ],
+                    "contributes": {
+                        "services": [
+                            {
+                                "id": "visualPack",
+                                "runtime": "node",
+                                "methods": ["snapshot"]
+                            }
+                        ],
+                        "visuals": [
+                            {
+                                "id": "demoWidget",
+                                "entry": "dist/visuals/demo-widget.js"
+                            }
+                        ],
+                        "resources": [
+                            {
+                                "id": "widgetPreset",
+                                "path": "resources/widget-preset.json",
+                                "type": "application/json",
+                                "visibility": "public"
+                            }
+                        ],
+                        "extensionPoints": [
+                            {
+                                "id": "visual-pack.content",
+                                "service": "visualPack"
+                            }
+                        ],
+                        "contributions": [
+                            {
+                                "id": "demo-score-widget",
+                                "target": "bakingrl.poc-overlay-studio/overlay-studio.visual",
+                                "visual": "demoWidget",
+                                "service": "visualPack",
+                                "resources": ["widgetPreset"]
+                            }
+                        ]
+                    }
+                }),
+                visual_enabled,
+            ),
+            package_record(
+                serde_json::json!({
+                    "schemaVersion": "bakingrl.plugin/4",
+                    "id": "bakingrl.poc-content-pack",
+                    "name": "POC Content Pack",
+                    "version": "1.0.0",
+                    "bakingrlApi": "2.1.0",
+                    "dependencies": [
+                        {
+                            "packageId": "bakingrl.poc-visual-pack"
+                        }
+                    ],
+                    "contributes": {
+                        "resources": [
+                            {
+                                "id": "overlayContent",
+                                "path": "resources/overlay-content.json",
+                                "type": "application/json",
+                                "visibility": "public"
+                            }
+                        ],
+                        "contributions": [
+                            {
+                                "id": "demo-overlay-content",
+                                "target": "bakingrl.poc-visual-pack/visual-pack.content",
+                                "resources": ["overlayContent"]
+                            }
+                        ]
+                    }
+                }),
+                content_enabled,
+            ),
+        ])
+    }
+
     #[test]
     fn compatibility_accepts_supported_runtime_api_range() {
         for bakingrl_api in ["2.0.0", "2.0.9", "2.1.0", "2.1.9"] {
@@ -1073,6 +1192,72 @@ mod tests {
             .error
             .as_ref()
             .is_some_and(|error| error.contains("does not declare a dependency")));
+    }
+
+    #[test]
+    fn graph_diagnostics_tracks_three_level_poc_chain_lifecycle() {
+        let mut records = poc_chain_records(true, true, true);
+        apply_graph_diagnostics(&mut records);
+        assert!(records["bakingrl.poc-overlay-studio"].descriptor.enabled);
+        assert!(records["bakingrl.poc-visual-pack"].descriptor.enabled);
+        assert!(records["bakingrl.poc-content-pack"].descriptor.enabled);
+        assert_eq!(
+            records["bakingrl.poc-overlay-studio"].descriptor.error,
+            None
+        );
+        assert_eq!(records["bakingrl.poc-visual-pack"].descriptor.error, None);
+        assert_eq!(records["bakingrl.poc-content-pack"].descriptor.error, None);
+
+        let mut records = poc_chain_records(true, true, false);
+        apply_graph_diagnostics(&mut records);
+        assert!(records["bakingrl.poc-overlay-studio"].descriptor.enabled);
+        assert!(records["bakingrl.poc-visual-pack"].descriptor.enabled);
+        assert!(!records["bakingrl.poc-content-pack"].descriptor.enabled);
+        assert_eq!(records["bakingrl.poc-visual-pack"].descriptor.error, None);
+        assert_eq!(records["bakingrl.poc-content-pack"].descriptor.error, None);
+
+        let mut records = poc_chain_records(true, false, true);
+        apply_graph_diagnostics(&mut records);
+        assert!(records["bakingrl.poc-overlay-studio"].descriptor.enabled);
+        assert!(!records["bakingrl.poc-visual-pack"].descriptor.enabled);
+        assert!(!records["bakingrl.poc-content-pack"].descriptor.enabled);
+        assert_eq!(records["bakingrl.poc-visual-pack"].descriptor.error, None);
+        assert_eq!(
+            records["bakingrl.poc-content-pack"].descriptor.dependencies[0].status,
+            PackageDependencyStatus::Disabled
+        );
+        assert!(records["bakingrl.poc-content-pack"]
+            .descriptor
+            .error
+            .as_ref()
+            .is_some_and(
+                |error| error.contains("Dependency 'bakingrl.poc-visual-pack' is disabled")
+            ));
+
+        let mut records = poc_chain_records(false, true, true);
+        apply_graph_diagnostics(&mut records);
+        assert!(!records["bakingrl.poc-overlay-studio"].descriptor.enabled);
+        assert!(!records["bakingrl.poc-visual-pack"].descriptor.enabled);
+        assert!(!records["bakingrl.poc-content-pack"].descriptor.enabled);
+        assert_eq!(
+            records["bakingrl.poc-visual-pack"].descriptor.dependencies[0].status,
+            PackageDependencyStatus::Disabled
+        );
+        assert!(records["bakingrl.poc-visual-pack"]
+            .descriptor
+            .error
+            .as_ref()
+            .is_some_and(
+                |error| error.contains("Dependency 'bakingrl.poc-overlay-studio' is disabled")
+            ));
+        assert!(records["bakingrl.poc-content-pack"]
+            .descriptor
+            .error
+            .as_ref()
+            .is_some_and(|error| {
+                error.contains("targets disabled package 'bakingrl.poc-visual-pack'")
+                    || error.contains("Dependency 'bakingrl.poc-visual-pack' is disabled")
+            }));
     }
 
     #[test]
