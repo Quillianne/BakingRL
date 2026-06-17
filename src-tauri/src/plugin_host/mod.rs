@@ -1059,48 +1059,16 @@ impl PluginHost {
         resource_type: Option<&str>,
         visibility: Option<&str>,
     ) -> Result<serde_json::Value, String> {
-        if let Some(visibility) = visibility {
-            if !matches!(visibility, "public" | "private") {
-                return Err("resources.list visibility must be 'public' or 'private'.".to_string());
-            }
-        }
+        validate_resource_visibility_filter(visibility)?;
         let records = self.records.lock().unwrap();
         self.require_enabled_record(&records, caller_package_id)?;
-        let resources = records
-            .values()
-            .filter(|record| record.descriptor.enabled && record.descriptor.error.is_none())
-            .filter(|record| package_id.is_none_or(|package_id| record.manifest.id() == package_id))
-            .flat_map(|record| {
-                let is_owner = record.manifest.id() == caller_package_id;
-                record
-                    .descriptor
-                    .contributions
-                    .resources
-                    .iter()
-                    .filter(move |resource| is_owner || resource.public)
-                    .filter(move |resource| {
-                        resource_type.is_none_or(|resource_type| {
-                            resource.resource_type.as_deref() == Some(resource_type)
-                        })
-                    })
-                    .filter(move |resource| {
-                        visibility.is_none_or(|visibility| resource.visibility == visibility)
-                    })
-                    .map(|resource| {
-                        serde_json::json!({
-                            "packageId": record.manifest.id(),
-                            "id": resource.name,
-                            "reference": resource.reference,
-                            "paths": resource.paths,
-                            "type": resource.resource_type,
-                            "visibility": resource.visibility,
-                            "public": resource.public,
-                            "metadata": resource.metadata,
-                        })
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
+        let resources = listed_package_resources(
+            &records,
+            caller_package_id,
+            package_id,
+            resource_type,
+            visibility,
+        );
         Ok(serde_json::Value::Array(resources))
     }
 
@@ -2200,6 +2168,59 @@ fn caller_depends_on(provider_package_id: &str, caller: &PackageRecord) -> bool 
         .any(|dependency| dependency.package_id == provider_package_id)
 }
 
+fn validate_resource_visibility_filter(visibility: Option<&str>) -> Result<(), String> {
+    if let Some(visibility) = visibility {
+        if !matches!(visibility, "public" | "private") {
+            return Err("resources.list visibility must be 'public' or 'private'.".to_string());
+        }
+    }
+    Ok(())
+}
+
+fn listed_package_resources(
+    records: &HashMap<String, PackageRecord>,
+    caller_package_id: &str,
+    package_id: Option<&str>,
+    resource_type: Option<&str>,
+    visibility: Option<&str>,
+) -> Vec<serde_json::Value> {
+    records
+        .values()
+        .filter(|record| record.descriptor.enabled && record.descriptor.error.is_none())
+        .filter(|record| package_id.is_none_or(|package_id| record.manifest.id() == package_id))
+        .flat_map(|record| {
+            let is_owner = record.manifest.id() == caller_package_id;
+            record
+                .descriptor
+                .contributions
+                .resources
+                .iter()
+                .filter(move |resource| is_owner || resource.public)
+                .filter(move |resource| {
+                    resource_type.is_none_or(|resource_type| {
+                        resource.resource_type.as_deref() == Some(resource_type)
+                    })
+                })
+                .filter(move |resource| {
+                    visibility.is_none_or(|visibility| resource.visibility == visibility)
+                })
+                .map(|resource| {
+                    serde_json::json!({
+                        "packageId": record.manifest.id(),
+                        "id": resource.name,
+                        "reference": resource.reference,
+                        "paths": resource.paths,
+                        "type": resource.resource_type,
+                        "visibility": resource.visibility,
+                        "public": resource.public,
+                        "metadata": resource.metadata,
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
 fn validate_min_bakingrl_version(min_version: Option<&str>) -> Result<(), String> {
     let Some(min_version) = min_version.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(());
@@ -2265,6 +2286,109 @@ mod tests {
 
         assert!(caller_depends_on("bakingrl.provider", &caller));
         assert!(!caller_depends_on("bakingrl.other", &caller));
+    }
+
+    #[test]
+    fn package_resources_filter_by_package_type_and_visible_scope() {
+        let caller = package_record(serde_json::json!({
+            "schemaVersion": "bakingrl.plugin/4",
+            "id": "bakingrl.consumer",
+            "name": "Consumer",
+            "version": "1.0.0",
+            "bakingrlApi": "2.1.0",
+            "contributes": {
+                "resources": [
+                    {
+                        "id": "consumerPrivate",
+                        "path": "resources/consumer-private.json",
+                        "type": "application/json",
+                        "visibility": "private"
+                    }
+                ]
+            }
+        }));
+        let provider = package_record(serde_json::json!({
+            "schemaVersion": "bakingrl.plugin/4",
+            "id": "bakingrl.provider",
+            "name": "Provider",
+            "version": "1.0.0",
+            "bakingrlApi": "2.1.0",
+            "contributes": {
+                "resources": [
+                    {
+                        "id": "publicJson",
+                        "path": "resources/public.json",
+                        "type": "application/json",
+                        "visibility": "public",
+                        "metadata": { "role": "overlay-content" }
+                    },
+                    {
+                        "id": "publicSvg",
+                        "path": "resources/public.svg",
+                        "type": "image/svg+xml",
+                        "visibility": "public",
+                        "metadata": { "role": "team-badges" }
+                    },
+                    {
+                        "id": "privateJson",
+                        "path": "resources/private.json",
+                        "type": "application/json",
+                        "visibility": "private"
+                    }
+                ]
+            }
+        }));
+        let records = HashMap::from([
+            ("bakingrl.consumer".to_string(), caller),
+            ("bakingrl.provider".to_string(), provider),
+        ]);
+
+        assert_eq!(
+            resource_ids(listed_package_resources(
+                &records,
+                "bakingrl.consumer",
+                Some("bakingrl.provider"),
+                Some("application/json"),
+                Some("public"),
+            )),
+            vec!["publicJson"]
+        );
+        assert!(listed_package_resources(
+            &records,
+            "bakingrl.consumer",
+            Some("bakingrl.provider"),
+            None,
+            Some("private"),
+        )
+        .is_empty());
+
+        assert_eq!(
+            resource_ids(listed_package_resources(
+                &records,
+                "bakingrl.provider",
+                Some("bakingrl.provider"),
+                Some("application/json"),
+                Some("private"),
+            )),
+            vec!["privateJson"]
+        );
+
+        let invalid_visibility = validate_resource_visibility_filter(Some("internal")).unwrap_err();
+        assert!(invalid_visibility.contains("visibility must be 'public' or 'private'"));
+    }
+
+    fn resource_ids(resources: Vec<serde_json::Value>) -> Vec<String> {
+        let mut ids = resources
+            .into_iter()
+            .filter_map(|resource| {
+                resource
+                    .get("id")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned)
+            })
+            .collect::<Vec<_>>();
+        ids.sort();
+        ids
     }
 }
 
