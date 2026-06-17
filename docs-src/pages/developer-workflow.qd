@@ -69,8 +69,7 @@ panel. This is the first place to check when an enabled package does not start
 or when a backend export fails after reload.
 
 The dashboard rail also shows live status for the Rocket League telemetry
-connection and the OBS gateway. The OBS gateway status is a local health probe
-against the configured host and port; it does not validate OBS itself.
+connection and key host services from this session.
 
 ## Change Boundaries
 

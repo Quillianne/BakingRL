@@ -5,7 +5,7 @@
 
 BakingRL is a desktop host for Rocket League telemetry overlays. The host
 collects local telemetry, normalizes events, loads plugin packages, and renders
-plugin-powered visuals in Tauri windows and OBS browser sources.
+plugin-powered visuals in Tauri windows and external overlay surfaces.
 
 ## What The Host Owns
 
@@ -13,9 +13,9 @@ BakingRL is responsible for:
 
 - telemetry connection state and event normalization;
 - package discovery, installation, compatibility checks, and enable state;
-- trusted plugin v3 activation, package settings, and runtime diagnostics;
+- trusted plugin v4 activation, package settings, and runtime diagnostics;
 - Node extension hosts and native sidecar supervision;
-- dashboard pages, overlay layouts, and OBS gateway routes.
+- dashboard pages, overlay layouts, and stream routes.
 
 The host is the operational boundary. Plugin code is trusted enough to power
 production workflows, but it still runs outside the Tauri process and remains
@@ -38,15 +38,15 @@ individual plugin implementation details.
 
 - Keep plugin packages portable as `.brlp` bundles.
 - Keep user-owned pages and overlay layouts editable inside the host.
-- Make package capabilities explicit through `contributes` and
-  `capabilities.permissions`.
+- Make package surfaces explicit through `runtime`, `contributes`, settings,
+  and external surface declarations.
 - Keep runtime APIs small, versioned, and host-mediated.
 - Surface incompatibility and runtime errors early in the dashboard.
 
 ## Who Should Read This
 
 Read the host docs if you are changing BakingRL itself: package loading,
-runtime behavior, permissions, telemetry, overlay rendering, page rendering, or
-the dashboard.
+runtime behavior, host-mediated APIs, telemetry, overlay rendering, page
+rendering, or the dashboard.
 
 Read the SDK docs if you are writing or packaging plugins.

@@ -12,7 +12,7 @@ This repository contains the desktop host:
 
 - Rust/Tauri backend;
 - Svelte dashboard and editors;
-- telemetry ingestion and OBS gateway;
+- telemetry ingestion and overlay routing;
 - package installation and state;
 - service and connector runtime management;
 - host documentation.

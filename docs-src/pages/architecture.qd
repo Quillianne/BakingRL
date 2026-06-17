@@ -23,7 +23,6 @@ Package loading follows a separate path:
 package source
   -> install/extract
   -> manifest validation
-  -> permission resolution
   -> runtime registration
   -> visual/service/connector/page availability
 ```
@@ -35,11 +34,11 @@ The host is the trusted boundary. It owns:
 - Telemetry socket connections.
 - Package installation and extraction.
 - Manifest parsing and bundle validation.
-- Permission checks.
+- Host-mediated runtime API checks.
 - Registry access.
 - Service RPC routing.
 - Connector network access.
-- OBS gateway routing and local health checks.
+- Current external browser-source routing and local health checks.
 - Window management.
 - Deep-link integration.
 - Local app-data paths.
@@ -55,21 +54,16 @@ The frontend owns:
 - Overlay editor.
 - Page editor.
 - Runtime preview surfaces.
-- OBS and overlay routes.
+- Overlay and stream routes.
 - System vitals and developer diagnostics.
 
 Frontend routes render host state and mount plugin visuals through adapter APIs.
 
-## OBS Gateway
+## External Browser Output
 
-The OBS gateway exposes host-owned overlay and page state to external browser
-surfaces such as OBS Browser Sources. The dashboard uses a local health probe
-against the configured gateway host and port to show whether the gateway is
-accepting connections.
-
-The gateway is part of the trusted host boundary. Plugins do not own OBS routes
-directly; they contribute visuals, page templates, and overlay layout templates
-that the host renders through controlled routes.
+The host can expose overlay and page state to external browser surfaces.
+Routes are host-owned and remain part of the surface API contracts available to
+packages through the manifest.
 
 ## Plugin Runtime
 
@@ -79,7 +73,7 @@ set of host-mediated surfaces:
 - Visuals mount into DOM roots owned by the host.
 - Components are imported by reference through the host.
 - Services expose methods through RPC.
-- Connectors declare network permissions and access network through host APIs.
+- Connectors and sidecars access host resources through mediated APIs.
 - Pages are templates imported into host-managed page layouts.
 
 ## Data Ownership

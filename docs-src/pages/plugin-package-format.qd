@@ -3,120 +3,74 @@
 .include {docs}
 .doclang {en}
 
-BakingRL packages are described by `bakingrl.plugin.json`. Current active
-packages should use `schema: "bakingrl.plugin/3"` and `kind: "trusted"`.
+BakingRL packages are described by `bakingrl.plugin.json`. Current packages use
+`schemaVersion: "bakingrl.plugin/4"` and declare the host runtime contract with
+top-level `bakingrlApi`.
 
-## Minimal Trusted V3 Manifest
+## Minimal Trusted V4 Manifest
 
 ```json
 {
-  "schema": "bakingrl.plugin/3",
+  "schemaVersion": "bakingrl.plugin/4",
   "id": "com.example.extension",
   "name": "Example Extension",
   "version": "1.0.0",
-  "kind": "trusted",
-  "compatibility": {
-    "runtimeApi": "1.0.0",
-    "sdk": "1.0.3"
-  },
-  "activation": {
-    "events": ["onStartup"]
-  },
+  "author": "Example Author",
+  "bakingrlApi": "2.0.0",
   "runtime": {
-    "extensionHost": {
+    "node": {
       "entry": "dist/extension/index.js"
     },
-    "sidecars": {}
+    "sidecars": []
   },
   "contributes": {
-    "commands": {},
-    "services": {},
-    "visuals": {},
-    "views": {},
-    "pages": {},
-    "overlays": {},
-    "webviews": {},
-    "configuration": {},
-    "assets": {},
-    "schemas": {}
-  },
-  "capabilities": {
-    "permissions": {
-      "bus": {
-        "read": [],
-        "publish": ["plugin.com.example.extension.*"]
-      },
-      "registry": {
-        "read": [],
-        "write": ["plugin.com.example.extension.*"]
-      },
-      "network": {
-        "http": [],
-        "websocket": []
-      },
-      "storage": ["plugin://self/*"]
-    }
-  },
-  "diagnostics": {
-    "enabled": true
+    "commands": [],
+    "services": [],
+    "visuals": [],
+    "settings": {}
   }
 }
 ```
 
 ## Required Fields
 
-`schema`
+`schemaVersion`
 
-Must be `bakingrl.plugin/3`.
+Must be `bakingrl.plugin/4`.
 
 `id`
 
 Stable package identity. Use reverse-DNS style values such as
 `com.bakingrl.cast-package` or `com.example.scoreboard`.
 
-`kind`
+`bakingrlApi`
 
-Current v3 packages use `trusted`.
+Must target the host runtime API. Current runtime API is `2.0.0`; the host
+accepts compatible `2.x` packages.
 
-`compatibility.runtimeApi`
-
-Must target the host runtime API. Current runtime API is `1.0.0`; the host
-accepts compatible `1.x` packages.
-
-`activation`
-
-Declares when the extension can start. Current packages commonly use
-`onStartup`.
-
-`runtime.extensionHost.entry`
+`runtime.node.entry`
 
 Package-relative built ESM module loaded in a Node extension host process.
+
+`runtime.sidecars`
+
+Array of package-local helper processes. The host filters sidecars by exact
+platform identifiers such as `darwin-arm64`, `darwin-x64`, `linux-arm64`,
+`linux-x64`, or `windows-x64` before trying to spawn them.
 
 `contributes`
 
 Declarative package surface used for discovery, descriptors, runtime startup,
 and UI.
 
-`capabilities`
-
-Visible package capability metadata. Host-mediated permission declarations live
-under `capabilities.permissions`.
-
 ## Contributes
 
-`contributes` is an object whose maps describe what the package adds to the
-product:
+`contributes` describes what the package adds to the product:
 
-- `commands`: command IDs discoverable by the host.
-- `services`: services that will be registered from `activate(context)`.
-- `visuals`: browser visuals for pages, overlays, and OBS layouts.
-- `views`: future host-owned view surfaces.
-- `pages`: importable page templates.
-- `overlays`: importable overlay layout templates.
-- `webviews`: plugin-authored browser panels.
-- `configuration`: package configuration UI.
-- `assets`: static files.
-- `schemas`: JSON schemas for settings, methods, or metadata.
+- `commands`: command IDs discoverable by the host;
+- `services`: service metadata and method schemas;
+- `visuals`: browser visuals for host-owned surfaces;
+- `settings`: automatic settings schema metadata.
 
 Services are discovered from the manifest, but live service implementations are
 registered by extension host code:
@@ -145,7 +99,8 @@ export async function deactivate() {}
 ```
 
 The runtime context provides commands, services, bus, registry, storage,
-secrets metadata, webviews, overlays, sidecars, telemetry, and diagnostics.
+settings, secrets metadata, sidecars, telemetry, state, and diagnostics through
+host-mediated SDK APIs.
 
 ## Bus And Registry Namespaces
 
@@ -162,39 +117,39 @@ plugin.com.bakingrl.cast-package.state
 plugin.com.bakingrl.cast-package.sequence
 ```
 
-Trusted v3 packages can read and publish their own package namespace. Reads of
-another package's namespace should be declared explicitly in
-`capabilities.permissions.bus.read` or `capabilities.permissions.registry.read`.
+Cross-package reads and writes are host-mediated. V4 manifests do not declare a
+manifest permission block.
 
 ## Sidecars
 
 Native plugin code is a process, not a loaded library. Sidecars are declared as
-an object map:
+array entries:
 
 ```json
 {
   "runtime": {
-    "sidecars": {
-      "helper": {
-        "command": "bin/helper",
+    "sidecars": [
+      {
+        "id": "helper",
+        "bin": "bin/helper",
         "args": [],
         "env": {},
-        "platforms": ["darwin"],
+        "platforms": ["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64"],
         "protocol": "jsonrpc-stdio",
-        "activation": "manual"
+        "activation": "onEnable"
       }
-    }
+    ]
   }
 }
 ```
 
-`command` is package-relative. `protocol` is currently `jsonrpc-stdio`.
-Activation can be `manual`, `onActivation`, or `onStartup`.
+`bin` is package-relative. `protocol` is currently `jsonrpc-stdio`. Activation
+can be `manual`, `onEnable`, or `onStartup`.
 
 ## Package Settings And Secrets
 
-Top-level `settings` can point to a package-level JSON Schema. Non-sensitive
-values are exposed through `context.settings`.
+`contributes.settings.schema` can point to package settings metadata.
+Non-sensitive values are exposed through host-managed settings APIs.
 
 Fields marked with `x-bakingrl-secret: true` are stored by the host and should
 not be written to bundle files, logs, or normal settings JSON.

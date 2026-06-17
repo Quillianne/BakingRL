@@ -66,8 +66,8 @@ discovers packages from that directory.
 The package manager can also inspect a local `.brlp` file, a direct package
 URL, or a Git repository plus optional revision before installation. Inspection
 shows manifest metadata, bundle hash/signature status, contribution counts, and
-effective permissions so the user can review the package before copying it into
-app data.
+runtime compatibility so the user can review the package before copying it
+into app data.
 
 ## Discover
 
@@ -85,7 +85,6 @@ Host validation checks:
 - manifest schema;
 - runtime API compatibility;
 - entry references;
-- permissions;
 - hash metadata when present;
 - signature metadata when present;
 - package size and extraction constraints.
@@ -94,9 +93,9 @@ Host validation checks:
 
 Users enable packages explicitly. Enabled packages become available to overlay
 layouts, pages, webviews, extension-host services, and declared sidecars
-according to their v3 contributions.
+according to their v4 contributions.
 
-Packages built against an unsupported `compatibility.runtimeApi` are visible
+Packages built against an unsupported `bakingrlApi` are visible
 for inspection, but disabled. The package detail view can show the declared
 runtime API so users know whether a package needs to be updated.
 
@@ -133,9 +132,9 @@ layout item
   -> visual module mounts with VisualContext
 ```
 
-Configuration page mounting follows the same host-owned page renderer, but it
-uses the package's private configuration page and private configuration visuals
-instead of public page templates.
+Configuration mounting uses host-generated settings UI from the package settings
+schema. Custom configuration visuals are reserved for a later V4 settings
+ticket.
 
 ## Reload
 

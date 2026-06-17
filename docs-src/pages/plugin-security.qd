@@ -3,10 +3,10 @@
 .include {docs}
 .doclang {en}
 
-BakingRL v3 plugins are trusted extensions. The host does not try to provide a
+BakingRL v4 plugins are trusted extensions. The host does not try to provide a
 strict security sandbox around plugin code. Instead, it provides operational
-safety: clear package metadata, visible capabilities, diagnostics, safe mode,
-and process supervision.
+safety: clear package metadata, explicit runtime declarations, diagnostics,
+safe mode, and process supervision.
 
 This is a deliberate product choice. BakingRL plugins are expected to be
 powerful enough to control production workflows, custom pages, overlays,
@@ -19,7 +19,7 @@ The Tauri host remains the process that owns:
 - package installation and bundle extraction;
 - manifest parsing and runtime compatibility;
 - app settings and package enable state;
-- page, overlay, OBS, and window routing;
+- page, overlay, and window routing;
 - extension host and sidecar supervision;
 - diagnostics, crash-loop detection, stop, restart, and safe mode.
 
@@ -27,23 +27,20 @@ Plugin JavaScript runs outside the Tauri process in a Node extension host.
 Plugin Rust or native code runs outside the Tauri process as a JSON-RPC
 sidecar. Native plugin code must not be loaded into the host binary.
 
-## Capabilities Are Operational Metadata
+## Host-Mediated APIs
 
-`capabilities.permissions` is visible metadata and a lightweight runtime guard.
-It documents what the package intends to use:
+V4 manifests no longer declare a manifest permission block. Plugin code reaches
+host functionality through SDK APIs owned by the host:
 
-- filesystem/storage;
-- network;
-- native sidecars;
-- secrets;
-- OBS;
-- telemetry;
-- registry;
-- bus namespaces.
+- package-local storage resolution;
+- settings and secret access;
+- telemetry and runtime state streams;
+- sidecar and service calls;
+- visual and configuration contexts.
 
-The host can reject obvious out-of-scope bus and registry access, but
-capabilities should not be treated as a complete security sandbox. They are
-primarily for review, diagnostics, marketplace trust, and operator confidence.
+Those APIs are the boundary. Manifests describe what the package contributes
+and which runtime API it targets; they do not carry a permission policy that
+the author can extend.
 
 ## Safe Mode
 
