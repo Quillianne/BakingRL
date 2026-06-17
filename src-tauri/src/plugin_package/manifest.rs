@@ -4,6 +4,7 @@ use std::path::{Component, Path};
 
 pub const PLUGIN_SCHEMA_V4: &str = "bakingrl.plugin/4";
 pub const HOST_RUNTIME_API_VERSION: &str = "2.1.0";
+pub const MIN_SUPPORTED_RUNTIME_API_VERSION: &str = "2.0.0";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PluginPackageManifest {

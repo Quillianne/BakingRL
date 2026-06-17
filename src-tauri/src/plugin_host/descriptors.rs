@@ -4,7 +4,7 @@ use std::path::Path;
 use crate::plugin_package::bundle::BundleInspection;
 use crate::plugin_package::manifest::{
     parse_runtime_api_version, PluginContributesV4, PluginPackageManifest, PluginRuntimeV4,
-    HOST_RUNTIME_API_VERSION,
+    HOST_RUNTIME_API_VERSION, MIN_SUPPORTED_RUNTIME_API_VERSION,
 };
 
 use super::package_files::read_json_package_file;
@@ -415,6 +415,8 @@ pub(super) fn compatibility_for_manifest(
 ) -> PackageCompatibilityDescriptor {
     let host_runtime_api = parse_runtime_api_version(HOST_RUNTIME_API_VERSION)
         .expect("HOST_RUNTIME_API_VERSION must be a semver version");
+    let min_runtime_api = parse_runtime_api_version(MIN_SUPPORTED_RUNTIME_API_VERSION)
+        .expect("MIN_SUPPORTED_RUNTIME_API_VERSION must be a semver version");
     let bakingrl_api = manifest.bakingrl_api();
     let (status, message) = match parse_runtime_api_version(bakingrl_api) {
         None => (
@@ -424,19 +426,40 @@ pub(super) fn compatibility_for_manifest(
                     .to_string(),
             ),
         ),
-        Some((major, _, _)) if major == host_runtime_api.0 => {
+        Some((major, minor, _))
+            if major == host_runtime_api.0
+                && major == min_runtime_api.0
+                && minor >= min_runtime_api.1
+                && minor <= host_runtime_api.1 =>
+        {
             (PackageCompatibilityStatus::Compatible, None)
         }
-        Some((major, _, _)) if major < host_runtime_api.0 => (
+        Some((major, minor, _))
+            if major < min_runtime_api.0
+                || (major == min_runtime_api.0 && minor < min_runtime_api.1) =>
+        {
+            (
+                PackageCompatibilityStatus::Incompatible,
+                Some(format!(
+                    "Package targets legacy runtime API {bakingrl_api}; this app supports {MIN_SUPPORTED_RUNTIME_API_VERSION} through {HOST_RUNTIME_API_VERSION}."
+                )),
+            )
+        }
+        Some((major, minor, _))
+            if major > host_runtime_api.0
+                || (major == host_runtime_api.0 && minor > host_runtime_api.1) =>
+        {
+            (
+                PackageCompatibilityStatus::RequiresNewerHost,
+                Some(format!(
+                    "Package targets runtime API {bakingrl_api}; update BakingRL to a host that supports it."
+                )),
+            )
+        }
+        Some(_) => (
             PackageCompatibilityStatus::Incompatible,
             Some(format!(
-                "Package targets runtime API {bakingrl_api}; update the package to {HOST_RUNTIME_API_VERSION}."
-            )),
-        ),
-        Some(_) => (
-            PackageCompatibilityStatus::RequiresNewerHost,
-            Some(format!(
-                "Package targets runtime API {bakingrl_api}; update BakingRL to a host that supports it."
+                "Package targets runtime API {bakingrl_api}; this app supports {MIN_SUPPORTED_RUNTIME_API_VERSION} through {HOST_RUNTIME_API_VERSION}."
             )),
         ),
     };
@@ -445,9 +468,13 @@ pub(super) fn compatibility_for_manifest(
         bakingrl_api: Some(bakingrl_api.to_string()),
         sdk: None,
         host_runtime_api: HOST_RUNTIME_API_VERSION.to_string(),
-        supported_runtime_api: HOST_RUNTIME_API_VERSION.to_string(),
+        supported_runtime_api: supported_runtime_api_label(),
         message,
     }
+}
+
+pub(super) fn supported_runtime_api_label() -> String {
+    format!("{MIN_SUPPORTED_RUNTIME_API_VERSION} - {HOST_RUNTIME_API_VERSION}")
 }
 
 pub(super) fn apply_graph_diagnostics(records: &mut HashMap<String, PackageRecord>) {
@@ -675,6 +702,57 @@ mod tests {
                 manifest,
             },
         )
+    }
+
+    #[test]
+    fn compatibility_accepts_supported_runtime_api_range() {
+        for bakingrl_api in ["2.0.0", "2.0.9", "2.1.0", "2.1.9"] {
+            let manifest = v4_manifest(serde_json::json!({
+                "schemaVersion": "bakingrl.plugin/4",
+                "id": "com.example.compat",
+                "name": "Compat",
+                "version": "1.0.0",
+                "bakingrlApi": bakingrl_api,
+                "contributes": {}
+            }));
+
+            let compatibility = compatibility_for_manifest(&manifest);
+
+            assert_eq!(
+                compatibility.status,
+                PackageCompatibilityStatus::Compatible,
+                "{bakingrl_api} should be supported"
+            );
+        }
+    }
+
+    #[test]
+    fn compatibility_rejects_legacy_and_newer_runtime_api() {
+        let legacy = v4_manifest(serde_json::json!({
+            "schemaVersion": "bakingrl.plugin/4",
+            "id": "com.example.legacy",
+            "name": "Legacy",
+            "version": "1.0.0",
+            "bakingrlApi": "1.9.9",
+            "contributes": {}
+        }));
+        let newer = v4_manifest(serde_json::json!({
+            "schemaVersion": "bakingrl.plugin/4",
+            "id": "com.example.newer",
+            "name": "Newer",
+            "version": "1.0.0",
+            "bakingrlApi": "2.2.0",
+            "contributes": {}
+        }));
+
+        assert_eq!(
+            compatibility_for_manifest(&legacy).status,
+            PackageCompatibilityStatus::Incompatible
+        );
+        assert_eq!(
+            compatibility_for_manifest(&newer).status,
+            PackageCompatibilityStatus::RequiresNewerHost
+        );
     }
 
     #[test]

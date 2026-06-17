@@ -1198,22 +1198,7 @@ fn call_service(
         .get("input")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
-    let Some((target_package_id, _)) = service_ref.split_once('/') else {
-        return Err(format!(
-            "Service ref '{service_ref}' must use '<package-id>/<service>'."
-        ));
-    };
-    let _target_package_id = target_package_id;
-    let allowed_methods = context
-        .service_methods
-        .get(&service_ref)
-        .ok_or_else(|| format!("Service '{service_ref}' is not known."))?;
-    if !allowed_methods.iter().any(|allowed| allowed == &method) {
-        return Err(format!(
-            "Service '{}' does not expose method '{}'.",
-            service_ref, method
-        ));
-    }
+    plugin_host(context)?.validate_service_call(&context.package_id, &service_ref, &method)?;
     tauri::async_runtime::block_on(context.service_router.call(&service_ref, method, input))
 }
 
@@ -1251,7 +1236,14 @@ fn resources_list(
     params: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let package_id = optional_string(&params, "packageId");
-    plugin_host(context)?.list_package_resources(&context.package_id, package_id.as_deref())
+    let resource_type = optional_string(&params, "type");
+    let visibility = optional_string(&params, "visibility");
+    plugin_host(context)?.list_package_resources(
+        &context.package_id,
+        package_id.as_deref(),
+        resource_type.as_deref(),
+        visibility.as_deref(),
+    )
 }
 
 fn resources_read(

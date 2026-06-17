@@ -1102,8 +1102,14 @@ fn sidecar_resources_list(
     params: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let package_id = optional_string(&params, "packageId");
-    plugin_host(app_handle)?
-        .list_package_resources(sidecar_package_id(sidecar_ref), package_id.as_deref())
+    let resource_type = optional_string(&params, "type");
+    let visibility = optional_string(&params, "visibility");
+    plugin_host(app_handle)?.list_package_resources(
+        sidecar_package_id(sidecar_ref),
+        package_id.as_deref(),
+        resource_type.as_deref(),
+        visibility.as_deref(),
+    )
 }
 
 fn sidecar_resources_read(

@@ -58,6 +58,7 @@ const PACKAGE_TOGGLE_ROLLBACK_MS = 5000;
 const PACKAGE_RELOAD_MIN_SPIN_MS = 450;
 const PACKAGE_FILE_OPENED_EVENT = "bakingrl-package-files-opened";
 const DEVELOPER_TELEMETRY_FLUSH_MS = 500;
+const MIN_SUPPORTED_RUNTIME_API = "2.0.0";
 
 type PendingPackageToggle = {
   enabled: boolean;
@@ -544,11 +545,24 @@ export class DashboardState {
   runtimeApiCompatibility(runtimeApi: string | null | undefined) {
     const targetVersion = parseRuntimeApiVersion(runtimeApi);
     const hostVersion = parseRuntimeApiVersion(this.runtimeInfo?.runtimeApiVersion ?? "1.0.0");
+    const minVersion = parseRuntimeApiVersion(MIN_SUPPORTED_RUNTIME_API);
     if (!targetVersion || !hostVersion) {
       return "unknown_runtime_api" as const;
     }
-    if (targetVersion.major === hostVersion.major) {
+    if (
+      minVersion &&
+      targetVersion.major === hostVersion.major &&
+      targetVersion.major === minVersion.major &&
+      targetVersion.minor >= minVersion.minor &&
+      targetVersion.minor <= hostVersion.minor
+    ) {
       return "compatible" as const;
+    }
+    if (
+      targetVersion.major < (minVersion?.major ?? hostVersion.major) ||
+      (minVersion && targetVersion.major === minVersion.major && targetVersion.minor < minVersion.minor)
+    ) {
+      return "incompatible" as const;
     }
     if (targetVersion.major < hostVersion.major) {
       return "incompatible" as const;

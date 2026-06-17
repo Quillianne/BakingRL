@@ -35,6 +35,7 @@ use crate::plugin_package::install::{
 };
 use crate::plugin_package::manifest::{
     parse_runtime_api_version, PluginPackageManifest, HOST_RUNTIME_API_VERSION,
+    MIN_SUPPORTED_RUNTIME_API_VERSION,
 };
 use crate::plugin_package::marketplace::{
     catalog_for_index, current_marketplace_platform, developer_allows_key,
@@ -44,7 +45,10 @@ use crate::plugin_package::marketplace::{
     OFFICIAL_MARKETPLACE_URL,
 };
 use crate::registry::Registry;
-use descriptors::{apply_graph_diagnostics, compatibility_for_manifest, descriptor_for_manifest};
+use descriptors::{
+    apply_graph_diagnostics, compatibility_for_manifest, descriptor_for_manifest,
+    supported_runtime_api_label,
+};
 pub use descriptors::{
     PackageContributionsDescriptor, PackageDescriptor, PackageStatus, PreparedPackageInstall,
 };
@@ -779,15 +783,7 @@ impl PluginHost {
         let mut state = self.load_state();
         state.enabled.insert(package_id.clone(), enabled);
         self.save_state(&state)?;
-        {
-            let mut records = self.records.lock().unwrap();
-            if let Some(record) = records.get_mut(&package_id) {
-                record.descriptor.enabled = enabled;
-            }
-        }
-        let packages = self.list_packages();
-        self.emit_packages_changed(&packages);
-        Ok(packages)
+        Ok(self.reload_packages())
     }
 
     fn begin_remove_package(&self, package_id: &str) -> Result<PackageRemovalStart, String> {
@@ -1060,7 +1056,14 @@ impl PluginHost {
         &self,
         caller_package_id: &str,
         package_id: Option<&str>,
+        resource_type: Option<&str>,
+        visibility: Option<&str>,
     ) -> Result<serde_json::Value, String> {
+        if let Some(visibility) = visibility {
+            if !matches!(visibility, "public" | "private") {
+                return Err("resources.list visibility must be 'public' or 'private'.".to_string());
+            }
+        }
         let records = self.records.lock().unwrap();
         self.require_enabled_record(&records, caller_package_id)?;
         let resources = records
@@ -1075,6 +1078,14 @@ impl PluginHost {
                     .resources
                     .iter()
                     .filter(move |resource| is_owner || resource.public)
+                    .filter(move |resource| {
+                        resource_type.is_none_or(|resource_type| {
+                            resource.resource_type.as_deref() == Some(resource_type)
+                        })
+                    })
+                    .filter(move |resource| {
+                        visibility.is_none_or(|visibility| resource.visibility == visibility)
+                    })
                     .map(|resource| {
                         serde_json::json!({
                             "packageId": record.manifest.id(),
@@ -1111,7 +1122,14 @@ impl PluginHost {
             .find(|resource| resource.name == resource_id)
             .ok_or_else(|| format!("Resource '{resource_ref}' does not exist."))?;
         if !resource.public && caller_package_id != provider_package_id {
-            return Err(format!("Resource '{resource_ref}' is private."));
+            let message = format!("Resource '{resource_ref}' is private.");
+            self.push_host_diagnostic(
+                Some(caller_package_id),
+                "resources",
+                PluginDiagnosticSeverity::Warning,
+                message.clone(),
+            );
+            return Err(message);
         }
         let relative_path = select_resource_path(resource_ref, &resource.paths, requested_path)?;
         let bytes = read_binary_package_file(
@@ -1142,8 +1160,22 @@ impl PluginHost {
     ) -> Result<(), String> {
         let (provider_package_id, export_name) = parse_export_ref(service_ref)?;
         let records = self.records.lock().unwrap();
-        self.require_enabled_record(&records, caller_package_id)?;
+        let caller = self.require_enabled_record(&records, caller_package_id)?;
         let provider = self.require_enabled_record(&records, provider_package_id)?;
+        if provider_package_id != caller_package_id
+            && !caller_depends_on(provider_package_id, caller)
+        {
+            let message = format!(
+                "Package '{caller_package_id}' cannot call service '{service_ref}' without declaring a dependency on '{provider_package_id}'."
+            );
+            self.push_host_diagnostic(
+                Some(caller_package_id),
+                "services",
+                PluginDiagnosticSeverity::Warning,
+                message.clone(),
+            );
+            return Err(message);
+        }
         let export = provider
             .manifest
             .contributes_v4()
@@ -2085,6 +2117,23 @@ impl PluginHost {
         let _ = self.app_handle.emit("bakingrl-runtime-error", payload);
     }
 
+    fn push_host_diagnostic(
+        &self,
+        package_id: Option<&str>,
+        phase: &str,
+        severity: PluginDiagnosticSeverity,
+        message: String,
+    ) {
+        self.diagnostics.push(PluginDiagnosticInput {
+            package_id: package_id.map(ToOwned::to_owned),
+            source: "host".to_string(),
+            severity,
+            phase: phase.to_string(),
+            message,
+            crash_count: None,
+        });
+    }
+
     fn emit_package_settings_changed(&self, package_id: &str) {
         let _ = self
             .app_handle
@@ -2106,7 +2155,7 @@ pub fn runtime_info() -> RuntimeInfo {
     RuntimeInfo {
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         runtime_api_version: HOST_RUNTIME_API_VERSION.to_string(),
-        supported_runtime_api: HOST_RUNTIME_API_VERSION.to_string(),
+        supported_runtime_api: supported_runtime_api_label(),
     }
 }
 
@@ -2126,17 +2175,29 @@ fn validate_marketplace_runtime_api(runtime_api: Option<&str>) -> Result<(), Str
         .ok_or_else(|| format!("Marketplace runtimeApi '{runtime_api}' is invalid."))?;
     let host = parse_runtime_api_version(HOST_RUNTIME_API_VERSION)
         .expect("HOST_RUNTIME_API_VERSION must be a semver version");
-    if target.0 == host.0 {
+    let min = parse_runtime_api_version(MIN_SUPPORTED_RUNTIME_API_VERSION)
+        .expect("MIN_SUPPORTED_RUNTIME_API_VERSION must be a semver version");
+    if target.0 == host.0 && target.0 == min.0 && target.1 >= min.1 && target.1 <= host.1 {
         return Ok(());
     }
-    if target.0 > host.0 {
+    if target.0 > host.0 || (target.0 == host.0 && target.1 > host.1) {
         return Err(format!(
-            "Marketplace version requires BakingRL runtime API {runtime_api}; this app supports {HOST_RUNTIME_API_VERSION}."
+            "Marketplace version requires BakingRL runtime API {runtime_api}; this app supports {}.",
+            supported_runtime_api_label()
         ));
     }
     Err(format!(
-        "Marketplace version targets legacy runtime API {runtime_api}; this app supports {HOST_RUNTIME_API_VERSION}."
+        "Marketplace version targets legacy runtime API {runtime_api}; this app supports {}.",
+        supported_runtime_api_label()
     ))
+}
+
+fn caller_depends_on(provider_package_id: &str, caller: &PackageRecord) -> bool {
+    caller
+        .manifest
+        .dependencies_v4()
+        .iter()
+        .any(|dependency| dependency.package_id == provider_package_id)
 }
 
 fn validate_min_bakingrl_version(min_version: Option<&str>) -> Result<(), String> {
@@ -2154,6 +2215,57 @@ fn validate_min_bakingrl_version(min_version: Option<&str>) -> Result<(), String
     Err(format!(
         "Marketplace version requires BakingRL {required} or newer; this app is {current}."
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn package_record(raw: serde_json::Value) -> PackageRecord {
+        let manifest = PluginPackageManifest::parse(&raw.to_string()).unwrap();
+        let descriptor =
+            descriptor_for_manifest(&manifest, format!("/tmp/{}", manifest.id()), true);
+        PackageRecord {
+            descriptor,
+            manifest,
+        }
+    }
+
+    #[test]
+    fn marketplace_runtime_api_accepts_supported_range_only() {
+        for runtime_api in ["2.0.0", "2.0.9", "2.1.0", "2.1.9"] {
+            assert!(
+                validate_marketplace_runtime_api(Some(runtime_api)).is_ok(),
+                "{runtime_api} should be accepted"
+            );
+        }
+
+        let newer = validate_marketplace_runtime_api(Some("2.2.0")).unwrap_err();
+        assert!(newer.contains("requires BakingRL runtime API 2.2.0"));
+
+        let legacy = validate_marketplace_runtime_api(Some("1.9.9")).unwrap_err();
+        assert!(legacy.contains("targets legacy runtime API 1.9.9"));
+    }
+
+    #[test]
+    fn caller_depends_on_requires_declared_dependency() {
+        let caller = package_record(serde_json::json!({
+            "schemaVersion": "bakingrl.plugin/4",
+            "id": "bakingrl.consumer",
+            "name": "Consumer",
+            "version": "1.0.0",
+            "bakingrlApi": "2.1.0",
+            "dependencies": [
+                {
+                    "packageId": "bakingrl.provider"
+                }
+            ],
+            "contributes": {}
+        }));
+
+        assert!(caller_depends_on("bakingrl.provider", &caller));
+        assert!(!caller_depends_on("bakingrl.other", &caller));
+    }
 }
 
 fn select_resource_path(
@@ -2399,12 +2511,7 @@ pub fn set_package_enabled(
     package_id: String,
     enabled: bool,
 ) -> Result<Vec<PackageDescriptor>, String> {
-    let packages = host.set_package_enabled(package_id, enabled)?;
-    let host = host.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        host.reload_packages();
-    });
-    Ok(packages)
+    host.set_package_enabled(package_id, enabled)
 }
 
 #[tauri::command]
