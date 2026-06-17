@@ -191,6 +191,7 @@ export type BundleInspection = {
 };
 
 export type RuntimeInfo = {
+  appVersion: string;
   runtimeApiVersion: string;
   supportedRuntimeApi: string;
 };
@@ -230,15 +231,36 @@ export type MarketplaceListing = {
 
 export type MarketplaceApprovedVersion = {
   version: string;
-  bundleUrl: string;
-  bundleSha256: string;
-  signaturePublicKey: string;
+  artifacts: MarketplaceArtifact[];
+  bundleUrl?: string | null;
+  bundleSha256?: string | null;
+  signaturePublicKey?: string | null;
   runtimeApi: string | null;
+  minBakingrlVersion?: string | null;
   revoked?: boolean;
   review: {
     status: string;
     reviewedAt: string;
   };
+};
+
+export type MarketplaceArtifact = {
+  platform: "any" | "darwin-arm64" | "darwin-x64" | "linux-x64" | "windows-x64" | string;
+  bundleUrl: string;
+  bundleSha256: string;
+  signaturePublicKey: string;
+};
+
+export type MarketplaceCompatibilityStatus =
+  | "compatible"
+  | "app_too_old"
+  | "platform_unavailable"
+  | "runtime_incompatible";
+
+export type MarketplaceVersionCompatibility = {
+  status: MarketplaceCompatibilityStatus;
+  artifact: MarketplaceArtifact | null;
+  message: string;
 };
 
 export type MarketplaceCatalogPackage = {
@@ -255,6 +277,7 @@ export type MarketplaceCatalogPackage = {
 
 export type MarketplaceCatalog = {
   generatedAt: string;
+  currentPlatform: string;
   sections: {
     recommended: string[];
     new: string[];

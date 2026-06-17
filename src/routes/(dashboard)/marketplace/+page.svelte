@@ -201,6 +201,7 @@
             {#each filteredPackages as pkg (pkg.id)}
               {@const currentInstallState = installState(pkg)}
               {@const currentApprovedVersion = approvedVersion(pkg)}
+              {@const currentCompatibility = currentApprovedVersion ? dashboard.marketplaceVersionCompatibility(currentApprovedVersion) : null}
               <button type="button" class="studio-card marketplace-card" class:active={selectedPackage?.id === pkg.id} onclick={() => packageCard(pkg)}>
                 {#if pkg.listing?.bannerUrl}
                   <img class="marketplace-banner" src={pkg.listing.bannerUrl} alt="" loading="lazy" />
@@ -238,6 +239,11 @@
                     {installStateLabel(currentInstallState)}
                   </span>
                 {/if}
+                {#if currentApprovedVersion}
+                  <span class={`marketplace-status-pill compatibility ${dashboard.marketplaceCompatibilityClass(currentCompatibility)}`} title={currentCompatibility?.message}>
+                    {dashboard.marketplaceCompatibilityLabel(currentCompatibility)}
+                  </span>
+                {/if}
                 <p>{descriptionFor(pkg)}</p>
               </button>
             {/each}
@@ -254,6 +260,7 @@
       {#if selectedPackage}
         {@const selectedApprovedVersion = approvedVersion(selectedPackage)}
         {@const selectedInstallState = installState(selectedPackage)}
+        {@const selectedCompatibility = selectedApprovedVersion ? dashboard.marketplaceVersionCompatibility(selectedApprovedVersion) : null}
         {#if selectedPackage.listing?.bannerUrl}
           <img class="marketplace-detail-banner" src={selectedPackage.listing.bannerUrl} alt="" loading="lazy" />
         {/if}
@@ -307,6 +314,12 @@
           <strong>{selectedApprovedVersion?.version ?? "-"}</strong>
         </div>
 
+        <div class={`marketplace-compatibility-state ${dashboard.marketplaceCompatibilityClass(selectedCompatibility)}`} title={selectedCompatibility?.message}>
+          <span>{dashboard.t("marketplace.compatibility")}</span>
+          <strong>{dashboard.marketplaceCompatibilityLabel(selectedCompatibility)}</strong>
+          <small>{selectedCompatibility?.message ?? ""}</small>
+        </div>
+
         {#if selectedInstallState.kind !== "available"}
           <div class="marketplace-install-state" class:update={selectedInstallState.kind === "update"}>
             <span>{installStateLabel(selectedInstallState)}</span>
@@ -318,7 +331,7 @@
           <button
             class="btn-primary"
             onclick={() => selectedApprovedVersion && void dashboard.installMarketplacePackage(selectedPackage, selectedApprovedVersion.version)}
-            disabled={dashboard.busy || !selectedApprovedVersion || selectedInstallState.kind === "installed"}
+            disabled={dashboard.busy || !selectedApprovedVersion || selectedInstallState.kind === "installed" || selectedCompatibility?.status !== "compatible"}
           >
             {installButtonLabel(selectedInstallState)}
           </button>

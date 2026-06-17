@@ -30,8 +30,11 @@ import type {
   DeveloperTelemetryEntry,
   DeveloperTelemetryGroup,
   DeveloperTelemetrySort,
+  MarketplaceApprovedVersion,
+  MarketplaceArtifact,
   MarketplaceCatalog,
   MarketplaceCatalogPackage,
+  MarketplaceVersionCompatibility,
   OverlayLayout,
   OverlayLayoutCatalog,
   OverlayMonitor,
@@ -81,6 +84,59 @@ function parseRuntimeApiVersion(value: string | null | undefined) {
     return null;
   }
   return { major: parts[0], minor: parts[1], patch: parts[2] };
+}
+
+function parseComparableVersion(value: string | null | undefined) {
+  const normalized = typeof value === "string" ? value.trim().replace(/^v/i, "").split("+", 1)[0] : "";
+  if (!normalized) return null;
+  const [core, prerelease = ""] = normalized.split("-", 2);
+  const parts = core.split(".");
+  if (parts.length < 1 || parts.length > 3 || parts.some((part) => !/^\d+$/.test(part))) {
+    return null;
+  }
+  const numbers = parts.map((part) => Number(part));
+  while (numbers.length < 3) numbers.push(0);
+  return {
+    numbers,
+    prerelease: prerelease ? prerelease.split(".") : []
+  };
+}
+
+function comparePrerelease(left: string[], right: string[]) {
+  if (!left.length && !right.length) return 0;
+  if (!left.length) return 1;
+  if (!right.length) return -1;
+
+  const length = Math.max(left.length, right.length);
+  for (let index = 0; index < length; index += 1) {
+    const leftPart = left[index];
+    const rightPart = right[index];
+    if (leftPart === undefined) return -1;
+    if (rightPart === undefined) return 1;
+    if (leftPart === rightPart) continue;
+
+    const leftNumeric = /^\d+$/.test(leftPart);
+    const rightNumeric = /^\d+$/.test(rightPart);
+    if (leftNumeric && rightNumeric) return Number(leftPart) - Number(rightPart);
+    if (leftNumeric) return -1;
+    if (rightNumeric) return 1;
+    return leftPart.localeCompare(rightPart);
+  }
+
+  return 0;
+}
+
+function compareComparableVersions(left: string | null | undefined, right: string | null | undefined) {
+  const parsedLeft = parseComparableVersion(left);
+  const parsedRight = parseComparableVersion(right);
+  if (!parsedLeft || !parsedRight) return 0;
+
+  for (let index = 0; index < 3; index += 1) {
+    const difference = parsedLeft.numbers[index] - parsedRight.numbers[index];
+    if (difference !== 0) return difference;
+  }
+
+  return comparePrerelease(parsedLeft.prerelease, parsedRight.prerelease);
 }
 
 export class DashboardState {
@@ -498,6 +554,96 @@ export class DashboardState {
       return "incompatible" as const;
     }
     return "requires_newer_host" as const;
+  }
+
+  marketplaceArtifacts(version: MarketplaceApprovedVersion): MarketplaceArtifact[] {
+    if (version.artifacts?.length) return version.artifacts;
+    if (version.bundleUrl && version.bundleSha256 && version.signaturePublicKey) {
+      return [
+        {
+          platform: "any",
+          bundleUrl: version.bundleUrl,
+          bundleSha256: version.bundleSha256,
+          signaturePublicKey: version.signaturePublicKey
+        }
+      ];
+    }
+    return [];
+  }
+
+  marketplaceVersionArtifact(version: MarketplaceApprovedVersion) {
+    const platform = this.marketplace?.currentPlatform ?? "unknown";
+    const artifacts = this.marketplaceArtifacts(version);
+    return artifacts.find((artifact) => artifact.platform === platform) ?? artifacts.find((artifact) => artifact.platform === "any") ?? null;
+  }
+
+  marketplaceVersionCompatibility(version: MarketplaceApprovedVersion): MarketplaceVersionCompatibility {
+    const runtimeStatus = this.runtimeApiCompatibility(version.runtimeApi);
+    if (runtimeStatus === "requires_newer_host") {
+      return {
+        status: "app_too_old",
+        artifact: null,
+        message: this.tx("marketplace.compatAppTooOldDetail", {
+          runtimeApi: version.runtimeApi ?? "n/a",
+          hostRuntimeApi: this.runtimeInfo?.runtimeApiVersion ?? "n/a"
+        })
+      };
+    }
+    if (runtimeStatus !== "compatible") {
+      return {
+        status: "runtime_incompatible",
+        artifact: null,
+        message: this.tx("marketplace.compatRuntimeIncompatibleDetail", {
+          runtimeApi: version.runtimeApi ?? "n/a",
+          hostRuntimeApi: this.runtimeInfo?.runtimeApiVersion ?? "n/a"
+        })
+      };
+    }
+
+    const minVersion = version.minBakingrlVersion?.trim();
+    if (minVersion && compareComparableVersions(this.runtimeInfo?.appVersion, minVersion) < 0) {
+      return {
+        status: "app_too_old",
+        artifact: null,
+        message: this.tx("marketplace.compatMinVersionDetail", {
+          minVersion,
+          appVersion: this.runtimeInfo?.appVersion ?? "n/a"
+        })
+      };
+    }
+
+    const artifact = this.marketplaceVersionArtifact(version);
+    if (!artifact) {
+      return {
+        status: "platform_unavailable",
+        artifact: null,
+        message: this.tx("marketplace.compatPlatformUnavailableDetail", {
+          platform: this.marketplace?.currentPlatform ?? "unknown"
+        })
+      };
+    }
+
+    return {
+      status: "compatible",
+      artifact,
+      message: this.tx("marketplace.compatibleDetail", {
+        platform: artifact.platform === "any" ? this.t("marketplace.anyPlatform") : artifact.platform
+      })
+    };
+  }
+
+  marketplaceCompatibilityLabel(compatibility: MarketplaceVersionCompatibility | null | undefined) {
+    if (!compatibility) return this.t("marketplace.platformUnavailable");
+    if (compatibility.status === "compatible") return this.t("marketplace.compatible");
+    if (compatibility.status === "app_too_old") return this.t("marketplace.appTooOld");
+    if (compatibility.status === "platform_unavailable") return this.t("marketplace.platformUnavailable");
+    return this.t("marketplace.runtimeIncompatible");
+  }
+
+  marketplaceCompatibilityClass(compatibility: MarketplaceVersionCompatibility | null | undefined) {
+    if (compatibility?.status === "compatible") return "compatible";
+    if (compatibility?.status === "app_too_old") return "warning";
+    return "incompatible";
   }
 
   inspectionCompatibilityLabel(inspection: BundleInspection) {

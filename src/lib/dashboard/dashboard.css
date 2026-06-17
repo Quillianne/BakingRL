@@ -1033,6 +1033,18 @@ pre {
   color: var(--warn);
 }
 
+.marketplace-status-pill.compatibility.warning {
+  border-color: color-mix(in srgb, var(--warn) 42%, transparent);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  color: var(--warn);
+}
+
+.marketplace-status-pill.compatibility.incompatible {
+  border-color: color-mix(in srgb, var(--danger) 42%, transparent);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  color: var(--danger);
+}
+
 .home-marketplace-card {
   min-height: 128px;
   cursor: default;
@@ -1242,6 +1254,44 @@ pre {
   color: var(--text-primary);
   font-size: 13px;
   overflow-wrap: anywhere;
+}
+
+.marketplace-compatibility-state {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--success) 34%, transparent);
+  border-radius: var(--radius-sm);
+  background: var(--success-bg);
+}
+
+.marketplace-compatibility-state.warning {
+  border-color: color-mix(in srgb, var(--warn) 42%, transparent);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+}
+
+.marketplace-compatibility-state.incompatible {
+  border-color: color-mix(in srgb, var(--danger) 42%, transparent);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
+.marketplace-compatibility-state span {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.marketplace-compatibility-state strong {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.marketplace-compatibility-state small {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .marketplace-actions {

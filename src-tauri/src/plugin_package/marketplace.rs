@@ -66,13 +66,29 @@ pub struct MarketplacePackage {
 #[serde(rename_all = "camelCase")]
 pub struct MarketplaceApprovedVersion {
     pub version: String,
-    pub bundle_url: String,
-    pub bundle_sha256: String,
-    pub signature_public_key: String,
+    #[serde(default)]
+    pub artifacts: Vec<MarketplaceArtifact>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature_public_key: Option<String>,
     pub runtime_api: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_bakingrl_version: Option<String>,
     #[serde(default)]
     pub revoked: bool,
     pub review: MarketplaceReview,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketplaceArtifact {
+    pub platform: String,
+    pub bundle_url: String,
+    pub bundle_sha256: String,
+    pub signature_public_key: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -130,6 +146,7 @@ pub struct MarketplaceListingLinks {
 #[serde(rename_all = "camelCase")]
 pub struct MarketplaceCatalog {
     pub generated_at: String,
+    pub current_platform: String,
     pub sections: MarketplaceSections,
     pub packages: Vec<MarketplaceCatalogPackage>,
 }
@@ -222,9 +239,61 @@ pub async fn catalog_for_index(index: MarketplaceIndex) -> MarketplaceCatalog {
 
     MarketplaceCatalog {
         generated_at: index.generated_at,
+        current_platform: current_marketplace_platform().to_string(),
         sections: index.sections,
         packages,
     }
+}
+
+pub fn current_marketplace_platform() -> &'static str {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => "darwin-arm64",
+        ("macos", "x86_64") => "darwin-x64",
+        ("linux", "x86_64") => "linux-x64",
+        ("windows", "x86_64") => "windows-x64",
+        ("linux", "aarch64") => "linux-arm64",
+        _ => "unknown",
+    }
+}
+
+pub fn marketplace_artifacts(version: &MarketplaceApprovedVersion) -> Vec<MarketplaceArtifact> {
+    if !version.artifacts.is_empty() {
+        return version.artifacts.clone();
+    }
+
+    match (
+        version.bundle_url.as_ref(),
+        version.bundle_sha256.as_ref(),
+        version.signature_public_key.as_ref(),
+    ) {
+        (Some(bundle_url), Some(bundle_sha256), Some(signature_public_key)) => {
+            vec![MarketplaceArtifact {
+                platform: "any".to_string(),
+                bundle_url: bundle_url.clone(),
+                bundle_sha256: bundle_sha256.clone(),
+                signature_public_key: signature_public_key.clone(),
+            }]
+        }
+        _ => Vec::new(),
+    }
+}
+
+pub fn select_marketplace_artifact(
+    version: &MarketplaceApprovedVersion,
+    platform: &str,
+) -> Result<MarketplaceArtifact, String> {
+    let artifacts = marketplace_artifacts(version);
+    artifacts
+        .iter()
+        .find(|artifact| artifact.platform == platform)
+        .or_else(|| artifacts.iter().find(|artifact| artifact.platform == "any"))
+        .cloned()
+        .ok_or_else(|| {
+            format!(
+                "Marketplace version '{}' is not available for platform '{}'.",
+                version.version, platform
+            )
+        })
 }
 
 pub fn find_marketplace_version<'a>(
@@ -357,6 +426,29 @@ fn validate_index_shape(index: &MarketplaceIndex) -> Result<(), String> {
     if index.schema != "bakingrl.marketplace/1" {
         return Err("Marketplace index uses an unsupported schema.".to_string());
     }
+    for package in &index.packages {
+        for version in &package.approved_versions {
+            let artifacts = marketplace_artifacts(version);
+            if artifacts.is_empty() {
+                return Err(format!(
+                    "Marketplace version '{}@{}' does not declare any bundle artifact.",
+                    package.id, version.version
+                ));
+            }
+            for artifact in artifacts {
+                if artifact.platform.trim().is_empty()
+                    || artifact.bundle_url.trim().is_empty()
+                    || artifact.bundle_sha256.trim().is_empty()
+                    || artifact.signature_public_key.trim().is_empty()
+                {
+                    return Err(format!(
+                        "Marketplace artifact '{}@{}' is missing required metadata.",
+                        package.id, version.version
+                    ));
+                }
+            }
+        }
+    }
     Ok(())
 }
 
@@ -444,5 +536,61 @@ mod tests {
 
         let verified = verify_marketplace_index(index, &signature, &[public_key]).unwrap();
         assert_eq!(verified.schema, "bakingrl.marketplace/1");
+    }
+
+    #[test]
+    fn selects_specific_artifact_before_any() {
+        let version = MarketplaceApprovedVersion {
+            version: "1.0.0".to_string(),
+            artifacts: vec![
+                MarketplaceArtifact {
+                    platform: "any".to_string(),
+                    bundle_url: "https://example.com/any.brlp".to_string(),
+                    bundle_sha256: "any-sha".to_string(),
+                    signature_public_key: "any-key".to_string(),
+                },
+                MarketplaceArtifact {
+                    platform: "darwin-arm64".to_string(),
+                    bundle_url: "https://example.com/mac.brlp".to_string(),
+                    bundle_sha256: "mac-sha".to_string(),
+                    signature_public_key: "mac-key".to_string(),
+                },
+            ],
+            bundle_url: None,
+            bundle_sha256: None,
+            signature_public_key: None,
+            runtime_api: Some("2.0.0".to_string()),
+            min_bakingrl_version: None,
+            revoked: false,
+            review: MarketplaceReview {
+                status: "approved".to_string(),
+                reviewed_at: "2026-06-17T00:00:00Z".to_string(),
+            },
+        };
+
+        let selected = select_marketplace_artifact(&version, "darwin-arm64").unwrap();
+        assert_eq!(selected.bundle_sha256, "mac-sha");
+    }
+
+    #[test]
+    fn legacy_bundle_fields_become_any_artifact() {
+        let version = MarketplaceApprovedVersion {
+            version: "1.0.0".to_string(),
+            artifacts: Vec::new(),
+            bundle_url: Some("https://example.com/plugin.brlp".to_string()),
+            bundle_sha256: Some("sha".to_string()),
+            signature_public_key: Some("key".to_string()),
+            runtime_api: Some("2.0.0".to_string()),
+            min_bakingrl_version: None,
+            revoked: false,
+            review: MarketplaceReview {
+                status: "approved".to_string(),
+                reviewed_at: "2026-06-17T00:00:00Z".to_string(),
+            },
+        };
+
+        let selected = select_marketplace_artifact(&version, "windows-x64").unwrap();
+        assert_eq!(selected.platform, "any");
+        assert_eq!(selected.bundle_sha256, "sha");
     }
 }

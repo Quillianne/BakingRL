@@ -32,12 +32,14 @@ use crate::plugin_package::install::{
     download_bundle_to_file, inspect_bundle_file, install_bundle_from_file,
     parse_install_deep_link, InstallReceipt,
 };
-use crate::plugin_package::manifest::PluginPackageManifest;
-use crate::plugin_package::manifest::HOST_RUNTIME_API_VERSION;
+use crate::plugin_package::manifest::{
+    parse_runtime_api_version, PluginPackageManifest, HOST_RUNTIME_API_VERSION,
+};
 use crate::plugin_package::marketplace::{
-    catalog_for_index, developer_allows_key, fetch_verified_marketplace_index,
-    find_marketplace_version, read_cached_marketplace_index, verified_developer_for_key,
-    write_marketplace_cache, MarketplaceApprovedVersion, MarketplaceCatalog, MarketplaceIndex,
+    catalog_for_index, current_marketplace_platform, developer_allows_key,
+    fetch_verified_marketplace_index, find_marketplace_version, read_cached_marketplace_index,
+    select_marketplace_artifact, verified_developer_for_key, write_marketplace_cache,
+    MarketplaceApprovedVersion, MarketplaceArtifact, MarketplaceCatalog, MarketplaceIndex,
     OFFICIAL_MARKETPLACE_URL,
 };
 use crate::registry::Registry;
@@ -77,6 +79,7 @@ use sidecar_runtime::{SidecarRuntimeManager, SidecarRuntimeSpec};
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeInfo {
+    pub app_version: String,
     pub runtime_api_version: String,
     pub supported_runtime_api: String,
 }
@@ -614,20 +617,23 @@ impl PluginHost {
             .map_err(|e| format!("Unable to refresh marketplace index: {e}"))?;
         write_marketplace_cache(&self.marketplace_cache_path, &index)?;
         let (package, approved_version) = find_marketplace_version(&index, package_id, version)?;
+        validate_marketplace_version_compatibility(approved_version)?;
+        let artifact =
+            select_marketplace_artifact(approved_version, current_marketplace_platform())?;
         if !developer_allows_key(
             &index,
             &package.developer_id,
-            &approved_version.signature_public_key,
+            &artifact.signature_public_key,
         ) {
             return Err("Marketplace developer does not own the approved signing key.".to_string());
         }
         let developer_id = package.developer_id.clone();
-        let approved_version = approved_version.clone();
+        let artifact = artifact.clone();
 
         let download_path = self
             .downloads_dir()
             .join(format!("prepared-marketplace-{}.brlp", unique_id("bundle")));
-        download_bundle_to_file(&approved_version.bundle_url, &download_path).await?;
+        download_bundle_to_file(&artifact.bundle_url, &download_path).await?;
         let mut inspection = match inspect_bundle_file(&download_path) {
             Ok(inspection) => inspection,
             Err(err) => {
@@ -640,7 +646,7 @@ impl PluginHost {
             package_id,
             version,
             &developer_id,
-            &approved_version,
+            &artifact,
         )
         .map_err(|err| {
             let _ = fs::remove_file(&download_path);
@@ -1718,10 +1724,13 @@ impl PluginHost {
             let index = read_cached_marketplace_index(&self.marketplace_cache_path)?;
             let (package, approved_version) =
                 find_marketplace_version(&index, package_id, version)?;
+            validate_marketplace_version_compatibility(approved_version)?;
+            let artifact =
+                select_marketplace_artifact(approved_version, current_marketplace_platform())?;
             if !developer_allows_key(
                 &index,
                 &package.developer_id,
-                &approved_version.signature_public_key,
+                &artifact.signature_public_key,
             ) {
                 return Err(
                     "Marketplace developer does not own the approved signing key.".to_string(),
@@ -1732,7 +1741,7 @@ impl PluginHost {
                 package_id,
                 version,
                 &package.developer_id,
-                approved_version,
+                &artifact,
             );
         }
         let settings = self.load_app_settings();
@@ -1773,7 +1782,7 @@ impl PluginHost {
         package_id: &str,
         version: &str,
         developer_id: &str,
-        approved_version: &MarketplaceApprovedVersion,
+        approved_artifact: &MarketplaceArtifact,
     ) -> Result<(), String> {
         if inspection.manifest.id() != package_id {
             return Err(
@@ -1789,7 +1798,7 @@ impl PluginHost {
         }
         if !inspection
             .sha256
-            .eq_ignore_ascii_case(&approved_version.bundle_sha256)
+            .eq_ignore_ascii_case(&approved_artifact.bundle_sha256)
         {
             return Err(
                 "Downloaded marketplace bundle SHA-256 does not match the approved entry."
@@ -1802,7 +1811,7 @@ impl PluginHost {
             );
         }
         if inspection.signature_public_key.as_deref()
-            != Some(approved_version.signature_public_key.as_str())
+            != Some(approved_artifact.signature_public_key.as_str())
         {
             return Err(
                 "Marketplace bundle signature key does not match the approved entry.".to_string(),
@@ -1915,9 +1924,56 @@ impl PluginHost {
 
 pub fn runtime_info() -> RuntimeInfo {
     RuntimeInfo {
+        app_version: env!("CARGO_PKG_VERSION").to_string(),
         runtime_api_version: HOST_RUNTIME_API_VERSION.to_string(),
         supported_runtime_api: HOST_RUNTIME_API_VERSION.to_string(),
     }
+}
+
+fn validate_marketplace_version_compatibility(
+    approved_version: &MarketplaceApprovedVersion,
+) -> Result<(), String> {
+    validate_marketplace_runtime_api(approved_version.runtime_api.as_deref())?;
+    validate_min_bakingrl_version(approved_version.min_bakingrl_version.as_deref())
+}
+
+fn validate_marketplace_runtime_api(runtime_api: Option<&str>) -> Result<(), String> {
+    let runtime_api = runtime_api
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "Marketplace version is missing runtimeApi.".to_string())?;
+    let target = parse_runtime_api_version(runtime_api)
+        .ok_or_else(|| format!("Marketplace runtimeApi '{runtime_api}' is invalid."))?;
+    let host = parse_runtime_api_version(HOST_RUNTIME_API_VERSION)
+        .expect("HOST_RUNTIME_API_VERSION must be a semver version");
+    if target.0 == host.0 {
+        return Ok(());
+    }
+    if target.0 > host.0 {
+        return Err(format!(
+            "Marketplace version requires BakingRL runtime API {runtime_api}; this app supports {HOST_RUNTIME_API_VERSION}."
+        ));
+    }
+    Err(format!(
+        "Marketplace version targets legacy runtime API {runtime_api}; this app supports {HOST_RUNTIME_API_VERSION}."
+    ))
+}
+
+fn validate_min_bakingrl_version(min_version: Option<&str>) -> Result<(), String> {
+    let Some(min_version) = min_version.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(());
+    };
+    let current = semver::Version::parse(env!("CARGO_PKG_VERSION"))
+        .map_err(|err| format!("Current BakingRL version metadata is not valid semver: {err}"))?;
+    let required = semver::Version::parse(min_version.trim_start_matches('v')).map_err(|err| {
+        format!("Marketplace minBakingrlVersion '{min_version}' is invalid: {err}")
+    })?;
+    if current >= required {
+        return Ok(());
+    }
+    Err(format!(
+        "Marketplace version requires BakingRL {required} or newer; this app is {current}."
+    ))
 }
 
 fn monitor_id(monitor: &Monitor) -> String {
