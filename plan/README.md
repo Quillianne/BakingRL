@@ -25,9 +25,9 @@ Le travail reste separe entre les trois repositories actuels:
 
 ## Points immuables
 
-### Core minimal
+### BakingRL minimal
 
-Le core garde uniquement les responsabilites de plateforme:
+`BakingRL` garde uniquement les responsabilites de plateforme:
 
 - connexion Rocket League;
 - donnees Rocket League normalisees et si possible typees;
@@ -38,7 +38,7 @@ Le core garde uniquement les responsabilites de plateforme:
 - API locale ou commandes host pour les plugins et l'admin;
 - interface admin tres simple.
 
-Le core ne doit pas devenir proprietaire de domaines metier comme:
+`BakingRL` ne doit pas devenir proprietaire de domaines metier comme:
 
 - overlay editor;
 - rendu de visuels;
@@ -51,7 +51,7 @@ Ces domaines doivent pouvoir exister comme plugins.
 
 ### Donnees Rocket League
 
-Le core doit exposer les donnees Rocket League comme une source fiable:
+`BakingRL` doit exposer les donnees Rocket League comme une source fiable:
 
 - statut de connexion;
 - snapshots;
@@ -59,7 +59,7 @@ Le core doit exposer les donnees Rocket League comme une source fiable:
 - modele stable et documente;
 - typage suffisant pour que les plugins puissent coder sans deviner les champs.
 
-Le core peut changer la technique interne de collecte, mais les plugins doivent recevoir une surface claire.
+`BakingRL` peut changer la technique interne de collecte, mais les plugins doivent recevoir une surface claire.
 
 ### Plugins comme extensions de plateforme
 
@@ -80,7 +80,7 @@ Un plugin plateforme peut en plus:
 - declarer une interface que d'autres plugins peuvent etendre;
 - documenter ce qu'il accepte;
 - decouvrir les plugins qui contribuent a son interface;
-- orchestrer une experience plus large sans que le core connaisse ce domaine.
+- orchestrer une experience plus large sans que `BakingRL` connaisse ce domaine.
 
 ### Chaines de plugins
 
@@ -105,13 +105,13 @@ Plugin B
   -> fournit des images, logos ou contenus compatibles avec Plugin A
 ```
 
-Le core ne doit pas coder specialement ce cas. Il doit fournir les primitives qui le rendent possible.
+`BakingRL` ne doit pas coder specialement ce cas. Il doit fournir les primitives qui le rendent possible.
 
 ### Securite et mediation host
 
 Les plugins ne sont pas consideres comme totalement fiables.
 
-Le core doit:
+`BakingRL` doit:
 
 - valider ce qu'un plugin declare;
 - refuser les chemins dangereux;
@@ -119,7 +119,7 @@ Le core doit:
 - garder les secrets host-owned;
 - mediatiser les appels entre plugins;
 - rendre les erreurs visibles dans les diagnostics;
-- permettre de desactiver un plugin sans casser le core.
+- permettre de desactiver un plugin sans casser `BakingRL`.
 
 ### Solutions techniques adaptables
 
@@ -141,7 +141,7 @@ L'utilisateur lance BakingRL.
 
 Il doit pouvoir:
 
-- voir si le core fonctionne;
+- voir si `BakingRL` fonctionne;
 - voir si Rocket League est connecte ou non;
 - voir les derniers diagnostics;
 - voir la liste des plugins installes;
@@ -179,7 +179,7 @@ L'utilisateur installe un plugin proof of concept avec sidecar.
 Reussite:
 
 - le sidecar demarre;
-- le core sait s'il est healthy;
+- `BakingRL` sait s'il est healthy;
 - un crash est detecte;
 - les logs/diagnostics sont visibles;
 - le plugin peut etre arrete proprement.
@@ -190,14 +190,14 @@ L'utilisateur installe un plugin proof of concept `Overlay Studio`.
 
 Ce plugin:
 
-- consomme les donnees RL du core;
+- consomme les donnees RL de `BakingRL`;
 - expose une interface que d'autres plugins pourront enrichir;
 - peut ouvrir une UI d'edition;
 - peut produire une sortie visible ou servable pour un overlay de test.
 
 Reussite:
 
-- le core ne contient pas de logique overlay;
+- `BakingRL` ne contient pas de logique overlay;
 - Overlay Studio decouvre ses contributions;
 - Overlay Studio recoit les donnees RL;
 - un overlay de test peut changer quand les donnees RL changent.
@@ -214,7 +214,7 @@ Ce plugin:
 
 Reussite:
 
-- le core detecte la relation entre Overlay Studio et le plugin A;
+- `BakingRL` detecte la relation entre Overlay Studio et le plugin A;
 - Overlay Studio voit la contribution du plugin A;
 - le plugin A ne fonctionne pas silencieusement si sa dependance manque;
 - la contribution disparait proprement si le plugin A est desactive.
@@ -226,12 +226,12 @@ L'utilisateur installe un plugin B qui depend du plugin A.
 Ce plugin:
 
 - fournit des images, logos, presets, donnees ou ressources;
-- ne depend pas directement du core overlay;
+- ne depend pas directement d'une logique overlay dans `BakingRL`;
 - enrichit ce que Plugin A sait utiliser.
 
 Reussite:
 
-- le core detecte la chaine BakingRL -> Overlay Studio -> Plugin A -> Plugin B;
+- `BakingRL` detecte la chaine BakingRL -> Overlay Studio -> Plugin A -> Plugin B;
 - Plugin A voit ce que Plugin B apporte;
 - Overlay Studio peut en beneficier via Plugin A;
 - la desactivation de Plugin B ne casse ni Plugin A ni Overlay Studio.
@@ -252,7 +252,7 @@ Il doit avoir des erreurs de validation claires quand le package est invalide.
 
 Le SDK doit rendre ce parcours simple:
 
-- types partages avec le core;
+- types partages avec `BakingRL`;
 - helpers pour lire les donnees RL autorisees;
 - helpers pour services, settings, webviews et diagnostics;
 - validator local;
@@ -265,7 +265,7 @@ Le developpeur doit pouvoir creer un plugin qui:
 - expose une interface publique pour d'autres plugins;
 - documente ce que les autres plugins peuvent lui fournir;
 - decouvre les contributions compatibles;
-- appelle ou consomme ces contributions via le core;
+- appelle ou consomme ces contributions via `BakingRL`;
 - reste fonctionnel quand aucune contribution externe n'est installee.
 
 ### Developpeur d'un plugin contributeur
@@ -284,7 +284,7 @@ Le developpeur doit pouvoir creer un plugin qui:
 - fournit uniquement des ressources ou donnees;
 - n'a pas besoin de Node ou sidecar si inutile;
 - peut etre consomme par un autre plugin;
-- ne donne pas au core de connaissance metier supplementaire.
+- ne donne pas a `BakingRL` de connaissance metier supplementaire.
 
 ## Proofs of concept attendus
 
@@ -325,13 +325,13 @@ Ces plugins doivent vivre dans `BakingRLPlugins`.
 
 Ces POC ne sont pas des produits finaux. Ils servent a prouver que le modele de plateforme fonctionne.
 
-Le SDK dans `BakingRLSDK` est considere assez utile quand ces POC peuvent etre ecrits sans recopier manuellement les contrats internes du core.
+Le SDK dans `BakingRLSDK` est considere assez utile quand ces POC peuvent etre ecrits sans recopier manuellement les contrats internes de `BakingRL`.
 
 ## Tests unitaires attendus
 
 ### Telemetry
 
-- transforme un evenement Rocket League brut ou mock en modele core type;
+- transforme un evenement Rocket League brut ou mock en modele `BakingRL` type;
 - produit un snapshot coherent;
 - signale une deconnexion;
 - garde une surface stable pour les plugins.
@@ -340,7 +340,7 @@ Le SDK dans `BakingRLSDK` est considere assez utile quand ces POC peuvent etre e
 
 - accepte un plugin minimal valide;
 - refuse un plugin sans identite stable;
-- refuse une version de core/API incompatible;
+- refuse une version de runtime API incompatible;
 - refuse des chemins absolus ou sortant du package;
 - refuse une declaration incoherente;
 - produit des erreurs lisibles.
@@ -378,7 +378,7 @@ Le SDK dans `BakingRLSDK` est considere assez utile quand ces POC peuvent etre e
 
 ## Tests d'integration attendus
 
-### Core sans plugin
+### BakingRL sans plugin
 
 - l'app demarre;
 - l'admin minimal s'affiche;
@@ -387,7 +387,7 @@ Le SDK dans `BakingRLSDK` est considere assez utile quand ces POC peuvent etre e
 
 ### Flux Rocket League mock
 
-- le core lance une source RL mock;
+- `BakingRL` lance une source RL mock;
 - un snapshot est visible dans l'admin;
 - un plugin de test recoit les changements.
 
@@ -437,7 +437,7 @@ Le test doit prouver que:
 
 - plugin invalide refuse sans etat partiel;
 - dependance manquante expliquee;
-- plugin crashe sans faire tomber le core;
+- plugin crashe sans faire tomber `BakingRL`;
 - settings invalides rejetes;
 - ressource interdite non servie.
 
@@ -448,11 +448,11 @@ La refonte est prete pour continuer si:
 - tous les tests unitaires passent;
 - tous les tests d'integration POC passent;
 - l'admin minimal permet de comprendre l'etat du runtime;
-- aucun code overlay/editor/OBS specifique n'est dans le core;
+- aucun code overlay/editor/OBS specifique n'est dans `BakingRL`;
 - un plugin plateforme peut etre cree;
 - un plugin peut contribuer a un autre plugin;
 - une chaine de plugins a trois niveaux fonctionne;
-- les donnees Rocket League alimentent au moins un POC visuel via un plugin, pas via le core.
+- les donnees Rocket League alimentent au moins un POC visuel via un plugin, pas via `BakingRL`.
 
 ## Commandes de validation cible
 
