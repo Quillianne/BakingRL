@@ -19,10 +19,10 @@ use crate::plugin_host::{
     install_package_from_url, install_prepared_package, list_packages, list_plugin_diagnostics,
     open_package_configuration, open_package_secrets, open_page, packages_dir, plugin_registry_get,
     prepare_marketplace_package, prepare_package_from_deep_link, prepare_package_from_git,
-    prepare_package_from_url, read_visual_export_source, refresh_marketplace, reload_packages,
-    remove_package, save_app_settings, save_overlay_layout, save_package_settings, save_page,
-    set_active_overlay_layout, set_package_enabled, set_package_secret, set_stream_overlay_layout,
-    PluginHost,
+    prepare_package_from_url, read_package_file_text, read_visual_export_source,
+    refresh_marketplace, reload_packages, remove_package, save_app_settings, save_overlay_layout,
+    save_package_settings, save_page, set_active_overlay_layout, set_package_enabled,
+    set_package_secret, set_stream_overlay_layout, PluginHost,
 };
 use crate::registry::{registry_entries, registry_get, Registry};
 use crate::window_watcher::start_window_visibility_watcher;
@@ -609,6 +609,7 @@ pub fn run() {
             remove_package,
             reload_packages,
             read_visual_export_source,
+            read_package_file_text,
             call_service_export,
             plugin_registry_get,
             get_overlay_layouts,

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { adapter } from "$lib/adapter/index";
+  import { importPluginModule } from "$lib/pluginModuleLoader";
   import { mountPluginWebview } from "$lib/pluginWebview";
 
   type RendererMode = "runtime" | "editor" | "page";
@@ -508,10 +509,6 @@
     return value.replace(/"/g, "%22");
   }
 
-  function moduleUrl(packageId: string, entry: string) {
-    return adapter.packageModuleUrl(packageId, entry, `${packageRevision}.${moduleVersion}`);
-  }
-
   function packageHtmlUrl(packageId: string, entry: string) {
     return adapter.packageHtmlUrl(packageId, entry, `${packageRevision}.${moduleVersion}`);
   }
@@ -849,7 +846,11 @@
     try {
       const packageSettings = await getPackageSettings(item.package_id);
       const settings = { ...packageSettings, ...settingsObject(item) };
-      const visualMod = (await import(/* @vite-ignore */ moduleUrl(mountedPackage.id, mountedVisual.entry))) as VisualModule;
+      const visualMod = (await importPluginModule(
+        mountedPackage.id,
+        mountedVisual.entry,
+        `${packageRevision}.${moduleVersion}`
+      )) as VisualModule;
       visualModule = visualMod.default ?? (visualMod.mount ? {
         mount: visualMod.mount,
         update: visualMod.update,

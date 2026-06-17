@@ -3,6 +3,7 @@
   import { listen } from "@tauri-apps/api/event";
   import { invoke } from "@tauri-apps/api/core";
   import { adapter } from "$lib/adapter/index";
+  import { importPluginModule } from "$lib/pluginModuleLoader";
   import { mountPluginWebview, type PluginWebviewHandle } from "$lib/pluginWebview";
   import type { GameEventFrame } from "$lib/rlTelemetry";
 
@@ -41,8 +42,7 @@
       };
 
       if (data.entry) {
-        const moduleUrl = adapter.packageModuleUrl(data.packageId, data.entry, Date.now());
-        const module = await import(/* @vite-ignore */ moduleUrl);
+        const module = await importPluginModule(data.packageId, data.entry, Date.now());
         const exported = module.default ?? module;
         if (typeof exported?.mount === "function") {
           const cleanup = await exported.mount({

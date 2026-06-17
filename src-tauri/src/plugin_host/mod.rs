@@ -938,6 +938,16 @@ impl PluginHost {
         read_binary_package_file(Path::new(&record.descriptor.path), &safe_path)
     }
 
+    pub fn read_package_file_text(
+        &self,
+        package_id: &str,
+        relative_path: &str,
+    ) -> Result<String, String> {
+        let bytes = self.read_package_file(package_id, relative_path)?;
+        String::from_utf8(bytes)
+            .map_err(|e| format!("Package file '{relative_path}' is not valid UTF-8: {e}"))
+    }
+
     pub fn validate_service_call(
         &self,
         caller_package_id: &str,
@@ -2133,6 +2143,15 @@ pub fn read_visual_export_source(
     export_name: String,
 ) -> Result<String, String> {
     host.read_visual_export_source(&package_id, &export_name)
+}
+
+#[tauri::command]
+pub fn read_package_file_text(
+    host: State<'_, Arc<PluginHost>>,
+    package_id: String,
+    relative_path: String,
+) -> Result<String, String> {
+    host.read_package_file_text(&package_id, &relative_path)
 }
 
 #[tauri::command]
