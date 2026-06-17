@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{Read, Seek};
 use std::path::{Component, Path, PathBuf};
@@ -124,6 +124,7 @@ fn inspect_archive<R: Read + Seek>(
     let mut signature_present = false;
     let mut hashes_raw: Option<Vec<u8>> = None;
     let mut signature_raw: Option<String> = None;
+    let mut entries = BTreeSet::new();
 
     for index in 0..archive.len() {
         let mut file = archive
@@ -142,6 +143,7 @@ fn inspect_archive<R: Read + Seek>(
         }
         if !file.is_dir() {
             file_count += 1;
+            entries.insert(entry_name.clone());
         }
         if entry_name == MANIFEST_FILE {
             let mut raw = String::new();
@@ -165,9 +167,11 @@ fn inspect_archive<R: Read + Seek>(
         }
     }
     let signature = verify_bundle_signature(signature_raw.as_deref(), hashes_raw.as_deref())?;
+    let manifest = manifest.ok_or_else(|| format!("Bundle is missing {MANIFEST_FILE}"))?;
+    validate_manifest_declared_files(&manifest, &entries)?;
 
     Ok(BundleInspection {
-        manifest: manifest.ok_or_else(|| format!("Bundle is missing {MANIFEST_FILE}"))?,
+        manifest,
         hashes_present,
         signature_present,
         signature_verified: signature.verified,
@@ -177,6 +181,98 @@ fn inspect_archive<R: Read + Seek>(
         uncompressed_size,
         sha256,
     })
+}
+
+fn validate_manifest_declared_files(
+    manifest: &PluginPackageManifest,
+    entries: &BTreeSet<String>,
+) -> Result<(), String> {
+    if let Some(runtime) = manifest.runtime_v4() {
+        if let Some(node) = &runtime.node {
+            require_bundle_entry(entries, "runtime.node.entry", &node.entry)?;
+        }
+        for sidecar in &runtime.sidecars {
+            if sidecar_supports_current_platform(sidecar) {
+                require_bundle_entry(entries, "runtime.sidecars.bin", &sidecar.bin)?;
+            }
+        }
+    }
+
+    let contributes = manifest.contributes_v4();
+    if let Some(settings_schema) = manifest.settings_schema() {
+        require_bundle_entry(entries, "contributes.settings.schema", settings_schema)?;
+    }
+    for visual in &contributes.visuals {
+        require_bundle_entry(entries, "contributes.visuals.entry", &visual.entry)?;
+        if let Some(instance_settings) = &visual.instance_settings {
+            require_bundle_entry(
+                entries,
+                "contributes.visuals.instanceSettings",
+                instance_settings,
+            )?;
+        }
+    }
+    for service in &contributes.services {
+        if let Some(schema) = &service.schema {
+            require_bundle_entry(entries, "contributes.services.schema", schema)?;
+        }
+    }
+    for extension_point in &contributes.extension_points {
+        if let Some(schema) = &extension_point.schema {
+            require_bundle_entry(entries, "contributes.extensionPoints.schema", schema)?;
+        }
+    }
+    for contribution in &contributes.contributions {
+        if let Some(data_schema) = &contribution.data_schema {
+            require_bundle_entry(entries, "contributes.contributions.dataSchema", data_schema)?;
+        }
+    }
+    for resource in &contributes.resources {
+        if let Some(path) = &resource.path {
+            require_bundle_entry(entries, "contributes.resources.path", path)?;
+        }
+        for path in &resource.paths {
+            require_bundle_entry(entries, "contributes.resources.paths", path)?;
+        }
+    }
+    for webview in &contributes.webviews {
+        require_bundle_entry(entries, "contributes.webviews.entry", &webview.entry)?;
+    }
+
+    Ok(())
+}
+
+fn require_bundle_entry(
+    entries: &BTreeSet<String>,
+    field: &str,
+    relative_path: &str,
+) -> Result<(), String> {
+    validate_archive_path(relative_path)?;
+    if entries.contains(relative_path) {
+        return Ok(());
+    }
+    Err(format!(
+        "Bundle manifest declares {field} '{relative_path}', but the file is missing from the bundle."
+    ))
+}
+
+fn sidecar_supports_current_platform(sidecar: &super::manifest::PluginRuntimeSidecarV4) -> bool {
+    sidecar.platforms.is_empty()
+        || sidecar
+            .platforms
+            .iter()
+            .any(|candidate| candidate == current_bundle_platform())
+}
+
+fn current_bundle_platform() -> &'static str {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => "darwin-arm64",
+        ("macos", "x86_64") => "darwin-x64",
+        ("linux", "aarch64") => "linux-arm64",
+        ("linux", "x86_64") => "linux-x64",
+        ("windows", "x86_64") => "windows-x64",
+        _ => "unknown",
+    }
 }
 
 fn sha256_file(path: &Path) -> Result<String, String> {
@@ -351,12 +447,28 @@ mod tests {
         zip.finish().unwrap();
     }
 
+    fn valid_bundle_entries(manifest: &str) -> Vec<(&str, &str)> {
+        vec![
+            (MANIFEST_FILE, manifest),
+            (
+                "dist/extension-host.js",
+                "export default { activate() {} };",
+            ),
+            (
+                "dist/visuals/scoreboard.js",
+                "export default { mount() {} };",
+            ),
+        ]
+    }
+
     fn signed_entries() -> Vec<(String, String)> {
         let manifest = valid_manifest();
+        let runtime = "export default { activate() {} };".to_string();
         let visual = "export default { mount() {} };".to_string();
         let hashes = serde_json::to_string_pretty(&serde_json::json!({
             "files": {
                 MANIFEST_FILE: hex::encode(Sha256::digest(manifest.as_bytes())),
+                "dist/extension-host.js": hex::encode(Sha256::digest(runtime.as_bytes())),
                 "dist/visuals/scoreboard.js": hex::encode(Sha256::digest(visual.as_bytes()))
             }
         }))
@@ -372,6 +484,7 @@ mod tests {
         .unwrap();
         vec![
             (MANIFEST_FILE.to_string(), manifest),
+            ("dist/extension-host.js".to_string(), runtime),
             ("dist/visuals/scoreboard.js".to_string(), visual),
             (HASHES_FILE.to_string(), hashes),
             (SIGNATURE_FILE.to_string(), signature),
@@ -382,20 +495,12 @@ mod tests {
     fn inspects_valid_bundle() {
         let dir = tempdir().unwrap();
         let bundle_path = dir.path().join("valid.brlp");
-        write_bundle(
-            &bundle_path,
-            &[
-                (MANIFEST_FILE, &valid_manifest()),
-                (
-                    "dist/visuals/scoreboard.js",
-                    "export default { mount() {} };",
-                ),
-            ],
-        );
+        let manifest = valid_manifest();
+        write_bundle(&bundle_path, &valid_bundle_entries(&manifest));
 
         let inspection = inspect_bundle(&bundle_path).unwrap();
         assert_eq!(inspection.manifest.id(), "com.example.bundle");
-        assert_eq!(inspection.file_count, 2);
+        assert_eq!(inspection.file_count, 3);
     }
 
     #[test]
@@ -476,23 +581,91 @@ mod tests {
     }
 
     #[test]
-    fn extracts_valid_bundle_to_target() {
+    fn rejects_bundle_missing_declared_manifest_file() {
         let dir = tempdir().unwrap();
-        let bundle_path = dir.path().join("valid.brlp");
-        let target = dir.path().join("target");
+        let bundle_path = dir.path().join("missing-declared-file.brlp");
+        let manifest = valid_manifest();
         write_bundle(
             &bundle_path,
             &[
-                (MANIFEST_FILE, &valid_manifest()),
+                (MANIFEST_FILE, &manifest),
                 (
-                    "dist/visuals/scoreboard.js",
-                    "export default { mount() {} };",
+                    "dist/extension-host.js",
+                    "export default { activate() {} };",
                 ),
             ],
         );
 
+        let error = inspect_bundle(&bundle_path).unwrap_err();
+        assert!(error.contains("contributes.visuals.entry"));
+        assert!(error.contains("dist/visuals/scoreboard.js"));
+    }
+
+    #[test]
+    fn inspect_bundle_only_requires_sidecars_for_current_platform() {
+        let dir = tempdir().unwrap();
+        let bundle_path = dir.path().join("foreign-sidecar.brlp");
+        let manifest = serde_json::json!({
+            "schemaVersion": "bakingrl.plugin/4",
+            "id": "com.example.sidecar",
+            "name": "Sidecar",
+            "version": "1.0.0",
+            "bakingrlApi": "2.1.0",
+            "runtime": {
+                "sidecars": [
+                    {
+                        "id": "foreign",
+                        "bin": "bin/foreign-sidecar",
+                        "platforms": ["definitely-not-this-platform"],
+                        "protocol": "jsonrpc-stdio"
+                    }
+                ]
+            },
+            "contributes": {}
+        })
+        .to_string();
+        write_bundle(&bundle_path, &[(MANIFEST_FILE, &manifest)]);
+
+        inspect_bundle(&bundle_path).unwrap();
+
+        let current_bundle_path = dir.path().join("current-sidecar.brlp");
+        let manifest = serde_json::json!({
+            "schemaVersion": "bakingrl.plugin/4",
+            "id": "com.example.sidecar",
+            "name": "Sidecar",
+            "version": "1.0.0",
+            "bakingrlApi": "2.1.0",
+            "runtime": {
+                "sidecars": [
+                    {
+                        "id": "current",
+                        "bin": "bin/current-sidecar",
+                        "platforms": [current_bundle_platform()],
+                        "protocol": "jsonrpc-stdio"
+                    }
+                ]
+            },
+            "contributes": {}
+        })
+        .to_string();
+        write_bundle(&current_bundle_path, &[(MANIFEST_FILE, &manifest)]);
+
+        let error = inspect_bundle(&current_bundle_path).unwrap_err();
+        assert!(error.contains("runtime.sidecars.bin"));
+        assert!(error.contains("bin/current-sidecar"));
+    }
+
+    #[test]
+    fn extracts_valid_bundle_to_target() {
+        let dir = tempdir().unwrap();
+        let bundle_path = dir.path().join("valid.brlp");
+        let target = dir.path().join("target");
+        let manifest = valid_manifest();
+        write_bundle(&bundle_path, &valid_bundle_entries(&manifest));
+
         extract_bundle(&bundle_path, &target).unwrap();
         assert!(target.join(MANIFEST_FILE).exists());
+        assert!(target.join("dist/extension-host.js").exists());
         assert!(target.join("dist/visuals/scoreboard.js").exists());
     }
 }
