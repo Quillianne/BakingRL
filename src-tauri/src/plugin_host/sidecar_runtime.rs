@@ -364,51 +364,27 @@ impl SidecarRuntimeController {
     }
 
     fn on_start(&self, sidecar_ref: &str) {
-        self.update_status(sidecar_ref, |status| {
-            status.running = true;
-            status.last_exit_code = None;
-            status.healthy = None;
-            status.last_health_error = None;
-        });
+        self.update_status(sidecar_ref, mark_sidecar_running);
     }
 
     fn on_stop(&self, sidecar_ref: &str, exit_code: Option<i32>) {
         self.update_status(sidecar_ref, |status| {
-            status.running = false;
-            status.last_exit_code = exit_code;
-            status.healthy = None;
+            mark_sidecar_stopped(status, exit_code)
         });
     }
 
     fn on_crash(&self, sidecar_ref: &str, exit_code: Option<i32>) {
         self.update_status(sidecar_ref, |status| {
-            status.running = false;
-            status.last_exit_code = exit_code;
-            status.crash_count = status.crash_count.saturating_add(1);
-            status.healthy = Some(false);
+            mark_sidecar_crashed(status, exit_code)
         });
     }
 
     fn on_restart(&self, sidecar_ref: &str) {
-        self.update_status(sidecar_ref, |status| {
-            status.restart_count = status.restart_count.saturating_add(1);
-        });
+        self.update_status(sidecar_ref, mark_sidecar_restarted);
     }
 
     fn on_health(&self, sidecar_ref: &str, result: Result<(), String>) {
-        self.update_status(sidecar_ref, |status| {
-            status.last_health_check_ms = Some(now_ms());
-            match result {
-                Ok(()) => {
-                    status.healthy = Some(true);
-                    status.last_health_error = None;
-                }
-                Err(error) => {
-                    status.healthy = Some(false);
-                    status.last_health_error = Some(error);
-                }
-            }
-        });
+        self.update_status(sidecar_ref, |status| mark_sidecar_health(status, result));
     }
 
     pub fn reload_with_app_handle(
@@ -825,47 +801,46 @@ fn sidecar_package_id(sidecar_ref: &str) -> &str {
     sidecar_ref.split('/').next().unwrap_or_default()
 }
 
-fn set_sidecar_stopped(
+fn update_sidecar_status<F>(
     runtime_state: &Arc<Mutex<SidecarRuntimeState>>,
     sidecar_ref: &str,
-    exit_code: Option<i32>,
-) {
+    update: F,
+) where
+    F: FnOnce(&mut SidecarRuntimeStatus),
+{
     let mut state = runtime_state.lock().unwrap();
     let status = state
         .status_by_ref
         .entry(sidecar_ref.to_string())
         .or_default();
+    update(status);
+}
+
+fn mark_sidecar_running(status: &mut SidecarRuntimeStatus) {
+    status.running = true;
+    status.last_exit_code = None;
+    status.healthy = None;
+    status.last_health_error = None;
+}
+
+fn mark_sidecar_stopped(status: &mut SidecarRuntimeStatus, exit_code: Option<i32>) {
     status.running = false;
     status.last_exit_code = exit_code;
     status.healthy = None;
 }
 
-fn set_sidecar_crash(
-    runtime_state: &Arc<Mutex<SidecarRuntimeState>>,
-    sidecar_ref: &str,
-    exit_code: Option<i32>,
-) {
-    let mut state = runtime_state.lock().unwrap();
-    let status = state
-        .status_by_ref
-        .entry(sidecar_ref.to_string())
-        .or_default();
+fn mark_sidecar_crashed(status: &mut SidecarRuntimeStatus, exit_code: Option<i32>) {
     status.running = false;
     status.last_exit_code = exit_code;
     status.crash_count = status.crash_count.saturating_add(1);
     status.healthy = Some(false);
 }
 
-fn set_sidecar_health(
-    runtime_state: &Arc<Mutex<SidecarRuntimeState>>,
-    sidecar_ref: &str,
-    result: Result<(), String>,
-) {
-    let mut state = runtime_state.lock().unwrap();
-    let status = state
-        .status_by_ref
-        .entry(sidecar_ref.to_string())
-        .or_default();
+fn mark_sidecar_restarted(status: &mut SidecarRuntimeStatus) {
+    status.restart_count = status.restart_count.saturating_add(1);
+}
+
+fn mark_sidecar_health(status: &mut SidecarRuntimeStatus, result: Result<(), String>) {
     status.last_health_check_ms = Some(now_ms());
     match result {
         Ok(()) => {
@@ -877,6 +852,40 @@ fn set_sidecar_health(
             status.last_health_error = Some(error);
         }
     }
+}
+
+fn set_sidecar_running(runtime_state: &Arc<Mutex<SidecarRuntimeState>>, sidecar_ref: &str) {
+    update_sidecar_status(runtime_state, sidecar_ref, mark_sidecar_running);
+}
+
+fn set_sidecar_stopped(
+    runtime_state: &Arc<Mutex<SidecarRuntimeState>>,
+    sidecar_ref: &str,
+    exit_code: Option<i32>,
+) {
+    update_sidecar_status(runtime_state, sidecar_ref, |status| {
+        mark_sidecar_stopped(status, exit_code)
+    });
+}
+
+fn set_sidecar_crash(
+    runtime_state: &Arc<Mutex<SidecarRuntimeState>>,
+    sidecar_ref: &str,
+    exit_code: Option<i32>,
+) {
+    update_sidecar_status(runtime_state, sidecar_ref, |status| {
+        mark_sidecar_crashed(status, exit_code)
+    });
+}
+
+fn set_sidecar_health(
+    runtime_state: &Arc<Mutex<SidecarRuntimeState>>,
+    sidecar_ref: &str,
+    result: Result<(), String>,
+) {
+    update_sidecar_status(runtime_state, sidecar_ref, |status| {
+        mark_sidecar_health(status, result)
+    });
 }
 
 fn state_get(
@@ -1365,6 +1374,74 @@ mod tests {
         assert_eq!(
             state_snapshot(&runtime_state, "com.pkg.a/helper").get("ping"),
             Some(&serde_json::json!("ok"))
+        );
+    }
+
+    #[test]
+    fn runtime_status_tracks_health_crash_and_stop() {
+        let runtime_state = Arc::new(Mutex::new(SidecarRuntimeState::default()));
+        let sidecar_ref = "com.pkg.sidecar/helper";
+
+        set_sidecar_running(&runtime_state, sidecar_ref);
+        let running = get_status_snapshot(&runtime_state, sidecar_ref);
+        assert!(running.running);
+        assert_eq!(running.last_exit_code, None);
+        assert_eq!(running.healthy, None);
+        assert_eq!(running.last_health_error, None);
+
+        set_sidecar_health(&runtime_state, sidecar_ref, Ok(()));
+        let healthy = get_status_snapshot(&runtime_state, sidecar_ref);
+        assert!(healthy.running);
+        assert_eq!(healthy.healthy, Some(true));
+        assert_eq!(healthy.last_health_error, None);
+        assert!(healthy.last_health_check_ms.is_some());
+
+        set_sidecar_health(
+            &runtime_state,
+            sidecar_ref,
+            Err("health timeout".to_string()),
+        );
+        let unhealthy = get_status_snapshot(&runtime_state, sidecar_ref);
+        assert!(unhealthy.running);
+        assert_eq!(unhealthy.healthy, Some(false));
+        assert_eq!(
+            unhealthy.last_health_error.as_deref(),
+            Some("health timeout")
+        );
+        assert!(unhealthy.last_health_check_ms.is_some());
+
+        set_sidecar_crash(&runtime_state, sidecar_ref, Some(42));
+        let crashed = get_status_snapshot(&runtime_state, sidecar_ref);
+        assert!(!crashed.running);
+        assert_eq!(crashed.last_exit_code, Some(42));
+        assert_eq!(crashed.crash_count, 1);
+        assert_eq!(crashed.healthy, Some(false));
+
+        set_sidecar_stopped(&runtime_state, sidecar_ref, Some(0));
+        let stopped = get_status_snapshot(&runtime_state, sidecar_ref);
+        assert!(!stopped.running);
+        assert_eq!(stopped.last_exit_code, Some(0));
+        assert_eq!(stopped.crash_count, 1);
+        assert_eq!(stopped.healthy, None);
+    }
+
+    #[test]
+    fn runtime_log_payload_serializes_sidecar_diagnostics() {
+        let payload = RuntimeLogPayload {
+            kind: "sidecar",
+            source: "com.pkg.sidecar/helper",
+            stream: "stderr",
+            line: "boom",
+        };
+
+        assert_eq!(
+            serde_json::to_value(payload).unwrap(),
+            serde_json::json!({
+                "kind": "sidecar",
+                "source": "com.pkg.sidecar/helper",
+                "stream": "stderr",
+                "line": "boom",
+            })
         );
     }
 }
