@@ -17,6 +17,39 @@ export type ServiceContributionDescriptor = {
   methods: string[];
 };
 
+export type ExtensionPointContributionDescriptor = {
+  name: string;
+  version: string | null;
+  title: string | null;
+  description: string | null;
+  schema: string | null;
+  service: string | null;
+  reference: string;
+};
+
+export type PluginContributionDescriptor = {
+  name: string;
+  target: string;
+  kind: string | null;
+  title: string | null;
+  description: string | null;
+  data_schema: string | null;
+  visual: string | null;
+  service: string | null;
+  resources: string[];
+  metadata: unknown | null;
+};
+
+export type ResourceContributionDescriptor = {
+  name: string;
+  paths: string[];
+  resource_type: string | null;
+  visibility: string;
+  public: boolean;
+  metadata: unknown | null;
+  reference: string;
+};
+
 export type PageContributionDescriptor = {
   name: string;
   path: string;
@@ -76,11 +109,33 @@ export type PluginRuntimeSidecarDescriptor = {
   platforms: string[];
   protocol: string;
   activation: string;
+  healthCheck?: {
+    method: string;
+    intervalMs?: number | null;
+    timeoutMs?: number | null;
+  } | null;
 };
 
 export type PluginRuntimeDescriptor = {
   node: PluginRuntimeNodeDescriptor | null;
   sidecars: PluginRuntimeSidecarDescriptor[];
+};
+
+export type PackageDependencyStatus =
+  | "pending"
+  | "satisfied"
+  | "optional_missing"
+  | "missing"
+  | "disabled"
+  | "incompatible"
+  | "version_mismatch";
+
+export type PackageDependencyDescriptor = {
+  package_id: string;
+  version: string | null;
+  optional: boolean;
+  status: PackageDependencyStatus;
+  message: string | null;
 };
 
 export type PackageDescriptor = {
@@ -91,6 +146,7 @@ export type PackageDescriptor = {
   author: string | null;
   runtime: PluginRuntimeDescriptor | null;
   contributes: Record<string, unknown> | null;
+  dependencies: PackageDependencyDescriptor[];
   enabled: boolean;
   status: "installed" | "deleting";
   path: string;
@@ -98,6 +154,9 @@ export type PackageDescriptor = {
     commands: NamedContributionDescriptor[];
     visuals: VisualContributionDescriptor[];
     services: ServiceContributionDescriptor[];
+    extension_points: ExtensionPointContributionDescriptor[];
+    contributions: PluginContributionDescriptor[];
+    resources: ResourceContributionDescriptor[];
     views: WebviewContributionDescriptor[];
     assets: NamedContributionDescriptor[];
     schemas: NamedContributionDescriptor[];
@@ -162,6 +221,10 @@ export type ManifestContributes = {
   commands?: unknown[];
   visuals?: unknown[];
   services?: unknown[];
+  extensionPoints?: unknown[];
+  contributions?: unknown[];
+  resources?: unknown[];
+  webviews?: unknown[];
   settings?: Record<string, unknown>;
 };
 

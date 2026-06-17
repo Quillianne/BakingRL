@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use std::path::{Component, Path};
 
 pub const PLUGIN_SCHEMA_V4: &str = "bakingrl.plugin/4";
-pub const HOST_RUNTIME_API_VERSION: &str = "2.0.0";
+pub const HOST_RUNTIME_API_VERSION: &str = "2.1.0";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PluginPackageManifest {
@@ -96,6 +96,10 @@ impl PluginPackageManifest {
         self.v4.runtime.as_ref()
     }
 
+    pub fn dependencies_v4(&self) -> &[PluginDependencyV4] {
+        &self.v4.dependencies
+    }
+
     pub fn contributes_v4(&self) -> &PluginContributesV4 {
         &self.v4.contributes
     }
@@ -121,6 +125,8 @@ pub struct PluginPackageManifestV4 {
     pub author: Option<String>,
     #[serde(rename = "bakingrlApi")]
     pub bakingrl_api: String,
+    #[serde(default)]
+    pub dependencies: Vec<PluginDependencyV4>,
     #[serde(default)]
     pub runtime: Option<PluginRuntimeV4>,
     #[serde(default)]
@@ -152,7 +158,7 @@ fn reject_legacy_manifest_fields(
         let object = value
             .as_object()
             .ok_or_else(|| "contributes must be an object".to_string())?;
-        for field in ["pages", "views", "overlays", "webviews", "configuration"] {
+        for field in ["pages", "views", "overlays", "configuration"] {
             if object.contains_key(field) {
                 return Err(format!(
                     "legacy contributes.{field} is not supported in {PLUGIN_SCHEMA_V4}"
@@ -175,6 +181,15 @@ impl PluginPackageManifestV4 {
         self.runtime
             .as_ref()
             .map_or(Ok(()), |runtime| runtime.validate())?;
+        validate_duplicate_package_ids(
+            "dependencies",
+            self.dependencies
+                .iter()
+                .map(|dependency| dependency.package_id.as_str()),
+        )?;
+        for dependency in &self.dependencies {
+            dependency.validate(&self.id)?;
+        }
         self.contributes.validate()?;
         if let Some(external_surfaces) = &self.external_surfaces {
             external_surfaces.validate()?;
@@ -183,6 +198,30 @@ impl PluginPackageManifestV4 {
         validate_non_empty("name", &self.name)?;
         validate_non_empty("version", &self.version)?;
         validate_semver("bakingrlApi", &self.bakingrl_api)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub struct PluginDependencyV4 {
+    #[serde(rename = "packageId")]
+    pub package_id: String,
+    pub version: Option<String>,
+    #[serde(default)]
+    pub optional: bool,
+}
+
+impl PluginDependencyV4 {
+    fn validate(&self, package_id: &str) -> Result<(), String> {
+        validate_package_id(&self.package_id)?;
+        if self.package_id == package_id {
+            return Err("dependencies must not reference the package itself".to_string());
+        }
+        if let Some(version) = &self.version {
+            validate_semver_req("dependencies.version", version)?;
+        }
         Ok(())
     }
 }
@@ -238,6 +277,8 @@ pub struct PluginRuntimeSidecarV4 {
     pub protocol: PluginRuntimeSidecarProtocolV4,
     #[serde(default = "default_sidecar_activation")]
     pub activation: PluginRuntimeSidecarActivationV4,
+    #[serde(rename = "healthCheck")]
+    pub health_check: Option<PluginRuntimeSidecarHealthCheckV4>,
 }
 
 impl PluginRuntimeSidecarV4 {
@@ -254,7 +295,34 @@ impl PluginRuntimeSidecarV4 {
         for platform in &self.platforms {
             validate_non_empty("runtime.sidecars.platforms", platform)?;
         }
+        if let Some(health_check) = &self.health_check {
+            health_check.validate()?;
+        }
 
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub struct PluginRuntimeSidecarHealthCheckV4 {
+    pub method: String,
+    #[serde(rename = "intervalMs")]
+    pub interval_ms: Option<u64>,
+    #[serde(rename = "timeoutMs")]
+    pub timeout_ms: Option<u64>,
+}
+
+impl PluginRuntimeSidecarHealthCheckV4 {
+    fn validate(&self) -> Result<(), String> {
+        validate_export_name("runtime.sidecars.healthCheck.method", &self.method)?;
+        if self.interval_ms.is_some_and(|value| value < 500) {
+            return Err("runtime.sidecars.healthCheck.intervalMs must be at least 500".to_string());
+        }
+        if self.timeout_ms.is_some_and(|value| value < 100) {
+            return Err("runtime.sidecars.healthCheck.timeoutMs must be at least 100".to_string());
+        }
         Ok(())
     }
 }
@@ -271,6 +339,14 @@ pub struct PluginContributesV4 {
     pub services: Vec<PluginServiceContributionV4>,
     #[serde(default)]
     pub commands: Vec<PluginCommandContributionV4>,
+    #[serde(default, rename = "extensionPoints")]
+    pub extension_points: Vec<PluginExtensionPointContributionV4>,
+    #[serde(default)]
+    pub contributions: Vec<PluginContributionBindingV4>,
+    #[serde(default)]
+    pub resources: Vec<PluginResourceContributionV4>,
+    #[serde(default)]
+    pub webviews: Vec<PluginWebviewContributionV4>,
 }
 
 impl PluginContributesV4 {
@@ -287,6 +363,24 @@ impl PluginContributesV4 {
             "contributes.commands",
             self.commands.iter().map(|command| command.id.as_str()),
         )?;
+        validate_duplicate_extension_point_ids(
+            "contributes.extensionPoints",
+            self.extension_points.iter().map(|point| point.id.as_str()),
+        )?;
+        validate_duplicate_ids(
+            "contributes.contributions",
+            self.contributions
+                .iter()
+                .map(|contribution| contribution.id.as_str()),
+        )?;
+        validate_duplicate_ids(
+            "contributes.resources",
+            self.resources.iter().map(|resource| resource.id.as_str()),
+        )?;
+        validate_duplicate_ids(
+            "contributes.webviews",
+            self.webviews.iter().map(|webview| webview.id.as_str()),
+        )?;
 
         for visual in &self.visuals {
             visual.validate()?;
@@ -296,6 +390,18 @@ impl PluginContributesV4 {
         }
         for command in &self.commands {
             command.validate()?;
+        }
+        for extension_point in &self.extension_points {
+            extension_point.validate(&self.services)?;
+        }
+        for contribution in &self.contributions {
+            contribution.validate(&self.visuals, &self.services, &self.resources)?;
+        }
+        for resource in &self.resources {
+            resource.validate()?;
+        }
+        for webview in &self.webviews {
+            webview.validate()?;
         }
         if let Some(settings) = &self.settings {
             settings.validate()?;
@@ -312,6 +418,207 @@ impl PluginContributesV4 {
             }
         }
 
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub struct PluginExtensionPointContributionV4 {
+    pub id: String,
+    pub version: Option<String>,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub schema: Option<String>,
+    pub service: Option<String>,
+}
+
+impl PluginExtensionPointContributionV4 {
+    fn validate(&self, services: &[PluginServiceContributionV4]) -> Result<(), String> {
+        validate_extension_point_id("contributes.extensionPoints.id", &self.id)?;
+        if let Some(version) = &self.version {
+            validate_semver("contributes.extensionPoints.version", version)?;
+        }
+        if let Some(title) = &self.title {
+            validate_non_empty("contributes.extensionPoints.title", title)?;
+        }
+        if let Some(description) = &self.description {
+            validate_non_empty("contributes.extensionPoints.description", description)?;
+        }
+        if let Some(schema) = &self.schema {
+            validate_relative_plugin_path("contributes.extensionPoints.schema", schema)?;
+        }
+        if let Some(service) = &self.service {
+            validate_export_name("contributes.extensionPoints.service", service)?;
+            if !services.iter().any(|candidate| candidate.id == *service) {
+                return Err(format!(
+                    "contributes.extensionPoints.service references unknown contributes.services id '{service}'"
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub struct PluginContributionBindingV4 {
+    pub id: String,
+    pub target: String,
+    pub kind: Option<String>,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    #[serde(rename = "dataSchema")]
+    pub data_schema: Option<String>,
+    pub visual: Option<String>,
+    pub service: Option<String>,
+    #[serde(default)]
+    pub resources: Vec<String>,
+    pub metadata: Option<serde_json::Value>,
+}
+
+impl PluginContributionBindingV4 {
+    fn validate(
+        &self,
+        visuals: &[PluginVisualContributionV4],
+        services: &[PluginServiceContributionV4],
+        resources: &[PluginResourceContributionV4],
+    ) -> Result<(), String> {
+        validate_export_name("contributes.contributions.id", &self.id)?;
+        validate_extension_ref("contributes.contributions.target", &self.target)?;
+        if let Some(kind) = &self.kind {
+            validate_non_empty("contributes.contributions.kind", kind)?;
+        }
+        if let Some(title) = &self.title {
+            validate_non_empty("contributes.contributions.title", title)?;
+        }
+        if let Some(description) = &self.description {
+            validate_non_empty("contributes.contributions.description", description)?;
+        }
+        if let Some(data_schema) = &self.data_schema {
+            validate_relative_plugin_path("contributes.contributions.dataSchema", data_schema)?;
+        }
+        if let Some(visual) = &self.visual {
+            validate_export_name("contributes.contributions.visual", visual)?;
+            if !visuals.iter().any(|candidate| candidate.id == *visual) {
+                return Err(format!(
+                    "contributes.contributions.visual references unknown contributes.visuals id '{visual}'"
+                ));
+            }
+        }
+        if let Some(service) = &self.service {
+            validate_export_name("contributes.contributions.service", service)?;
+            if !services.iter().any(|candidate| candidate.id == *service) {
+                return Err(format!(
+                    "contributes.contributions.service references unknown contributes.services id '{service}'"
+                ));
+            }
+        }
+        for resource in &self.resources {
+            validate_export_name("contributes.contributions.resources", resource)?;
+            if !resources.iter().any(|candidate| candidate.id == *resource) {
+                return Err(format!(
+                    "contributes.contributions.resources references unknown contributes.resources id '{resource}'"
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum PluginResourceVisibilityV4 {
+    #[serde(rename = "public")]
+    Public,
+    #[serde(rename = "private")]
+    Private,
+}
+
+impl Default for PluginResourceVisibilityV4 {
+    fn default() -> Self {
+        Self::Private
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub struct PluginResourceContributionV4 {
+    pub id: String,
+    pub path: Option<String>,
+    #[serde(default)]
+    pub paths: Vec<String>,
+    #[serde(rename = "type")]
+    pub resource_type: Option<String>,
+    #[serde(default)]
+    pub visibility: PluginResourceVisibilityV4,
+    pub metadata: Option<serde_json::Value>,
+}
+
+impl PluginResourceContributionV4 {
+    fn validate(&self) -> Result<(), String> {
+        validate_export_name("contributes.resources.id", &self.id)?;
+        let has_path = self
+            .path
+            .as_ref()
+            .is_some_and(|path| !path.trim().is_empty());
+        let has_paths = !self.paths.is_empty();
+        if has_path == has_paths {
+            return Err(
+                "contributes.resources must declare exactly one of path or paths".to_string(),
+            );
+        }
+        if let Some(path) = &self.path {
+            validate_relative_plugin_path("contributes.resources.path", path)?;
+        }
+        for path in &self.paths {
+            validate_relative_plugin_path("contributes.resources.paths", path)?;
+        }
+        if let Some(resource_type) = &self.resource_type {
+            validate_non_empty("contributes.resources.type", resource_type)?;
+        } else if self.visibility == PluginResourceVisibilityV4::Public {
+            return Err("contributes.resources.type is required for public resources".to_string());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub struct PluginWebviewContributionV4 {
+    pub id: String,
+    pub entry: String,
+    pub title: Option<String>,
+    pub kind: Option<String>,
+    #[serde(rename = "defaultSize")]
+    pub default_size: Option<[f64; 2]>,
+}
+
+impl PluginWebviewContributionV4 {
+    fn validate(&self) -> Result<(), String> {
+        validate_export_name("contributes.webviews.id", &self.id)?;
+        validate_js_entry("contributes.webviews.entry", &self.entry)?;
+        if let Some(title) = &self.title {
+            validate_non_empty("contributes.webviews.title", title)?;
+        }
+        if let Some(kind) = &self.kind {
+            if !matches!(kind.as_str(), "tool" | "settings" | "panel") {
+                return Err(
+                    "contributes.webviews.kind must be tool, settings, or panel".to_string()
+                );
+            }
+        }
+        if let Some(size) = self.default_size {
+            if size[0] <= 0.0 || size[1] <= 0.0 {
+                return Err(
+                    "contributes.webviews.defaultSize must contain positive dimensions".to_string(),
+                );
+            }
+        }
         Ok(())
     }
 }
@@ -479,6 +786,34 @@ fn validate_duplicate_ids<'a>(
     Ok(())
 }
 
+fn validate_duplicate_package_ids<'a>(
+    field: &str,
+    ids: impl Iterator<Item = &'a str>,
+) -> Result<(), String> {
+    let mut seen = std::collections::BTreeSet::new();
+    for id in ids {
+        if !seen.insert(id.to_string()) {
+            return Err(format!("{field} cannot contain duplicate packageId '{id}'"));
+        }
+        validate_package_id(id)?;
+    }
+    Ok(())
+}
+
+fn validate_duplicate_extension_point_ids<'a>(
+    field: &str,
+    ids: impl Iterator<Item = &'a str>,
+) -> Result<(), String> {
+    let mut seen = std::collections::BTreeSet::new();
+    for id in ids {
+        if !seen.insert(id.to_string()) {
+            return Err(format!("{field} cannot contain duplicate id '{id}'"));
+        }
+        validate_extension_point_id(field, id)?;
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum PluginRuntimeSidecarProtocolV4 {
     #[serde(rename = "jsonrpc-stdio")]
@@ -557,6 +892,12 @@ fn validate_semver(field: &str, value: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_semver_req(field: &str, value: &str) -> Result<(), String> {
+    semver::VersionReq::parse(value)
+        .map(|_| ())
+        .map_err(|err| format!("{field} must be a valid semver requirement: {err}"))
+}
+
 fn validate_package_id(value: &str) -> Result<(), String> {
     validate_non_empty("id", value)?;
     if value == "." || value == ".." || value.starts_with('.') || value.ends_with('.') {
@@ -588,6 +929,27 @@ fn validate_export_name(kind: &str, value: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_extension_point_id(kind: &str, value: &str) -> Result<(), String> {
+    validate_non_empty(kind, value)?;
+    if value == "." || value == ".." || value.starts_with('.') || value.ends_with('.') {
+        return Err(format!(
+            "{kind} must not contain empty or dot-only path segments"
+        ));
+    }
+    if value.split('.').any(|segment| segment.is_empty()) {
+        return Err(format!(
+            "{kind} must not contain empty dot-separated segments"
+        ));
+    }
+    if !value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '.' || ch == '-' || ch == '_')
+    {
+        return Err(format!("{kind} '{value}' contains unsupported characters"));
+    }
+    Ok(())
+}
+
 fn validate_runtime_ref(field: &str, value: &str) -> Result<(), String> {
     if value == "node" {
         return Ok(());
@@ -602,6 +964,16 @@ fn sidecar_id_from_runtime_ref(value: &str) -> Option<&str> {
     value
         .strip_prefix("sidecar:")
         .filter(|sidecar_id| !sidecar_id.is_empty())
+}
+
+fn validate_extension_ref(field: &str, value: &str) -> Result<(), String> {
+    let Some((package_id, extension_point_id)) = value.split_once('/') else {
+        return Err(format!(
+            "{field} must use '<package-id>/<extension-point-id>'"
+        ));
+    };
+    validate_package_id(package_id)?;
+    validate_extension_point_id(field, extension_point_id)
 }
 
 #[cfg(test)]
@@ -702,6 +1074,149 @@ mod tests {
                 .map(|surface| surface.runtime.as_str()),
             Some("sidecar:helper")
         );
+    }
+
+    #[test]
+    fn accepts_v4_dependencies_extensions_resources_webviews_and_sidecar_health() {
+        let raw = serde_json::json!({
+            "schemaVersion": "bakingrl.plugin/4",
+            "id": "com.example.platform-extension",
+            "name": "Platform Extension",
+            "version": "1.0.0",
+            "bakingrlApi": "2.1.0",
+            "dependencies": [
+                {
+                    "packageId": "bakingrl.overlay-studio",
+                    "version": "^1.2.0"
+                },
+                {
+                    "packageId": "bakingrl.optional-provider",
+                    "optional": true
+                }
+            ],
+            "runtime": {
+                "sidecars": [
+                    {
+                        "id": "worker",
+                        "bin": "bin/worker",
+                        "protocol": "jsonrpc-stdio",
+                        "healthCheck": {
+                            "method": "ping",
+                            "intervalMs": 1000,
+                            "timeoutMs": 250
+                        }
+                    }
+                ]
+            },
+            "contributes": {
+                "visuals": [
+                    {
+                        "id": "scoreboard",
+                        "entry": "dist/visuals/scoreboard.js"
+                    }
+                ],
+                "services": [
+                    {
+                        "id": "catalog",
+                        "runtime": "sidecar:worker",
+                        "methods": ["list"]
+                    }
+                ],
+                "extensionPoints": [
+                    {
+                        "id": "overlay-studio.visual",
+                        "version": "1.0.0",
+                        "title": "Overlay Visual",
+                        "schema": "schemas/extension-point.json",
+                        "service": "catalog"
+                    }
+                ],
+                "resources": [
+                    {
+                        "id": "sampleData",
+                        "path": "data/sample.json",
+                        "type": "application/json",
+                        "visibility": "public"
+                    }
+                ],
+                "contributions": [
+                    {
+                        "id": "scoreboardBinding",
+                        "target": "bakingrl.overlay-studio/overlay-studio.visual",
+                        "kind": "visual",
+                        "title": "Scoreboard Binding",
+                        "dataSchema": "schemas/binding.json",
+                        "visual": "scoreboard",
+                        "service": "catalog",
+                        "resources": ["sampleData"],
+                        "metadata": {
+                            "category": "match"
+                        }
+                    }
+                ],
+                "webviews": [
+                    {
+                        "id": "inspector",
+                        "entry": "dist/webviews/inspector.js",
+                        "title": "Inspector",
+                        "kind": "panel",
+                        "defaultSize": [640, 480]
+                    }
+                ]
+            }
+        })
+        .to_string();
+
+        let manifest = PluginPackageManifest::parse(&raw).unwrap();
+        assert_eq!(manifest.dependencies_v4().len(), 2);
+        assert_eq!(
+            manifest.dependencies_v4()[0].package_id,
+            "bakingrl.overlay-studio"
+        );
+        assert_eq!(
+            manifest.dependencies_v4()[0].version.as_deref(),
+            Some("^1.2.0")
+        );
+        assert!(manifest.dependencies_v4()[1].optional);
+
+        let sidecar = &manifest.runtime_v4().unwrap().sidecars[0];
+        assert_eq!(
+            sidecar
+                .health_check
+                .as_ref()
+                .map(|health| health.method.as_str()),
+            Some("ping")
+        );
+        assert_eq!(
+            manifest.contributes_v4().extension_points[0].id,
+            "overlay-studio.visual"
+        );
+        assert_eq!(
+            manifest.contributes_v4().contributions[0].target,
+            "bakingrl.overlay-studio/overlay-studio.visual"
+        );
+        assert_eq!(manifest.contributes_v4().resources[0].id, "sampleData");
+        assert_eq!(manifest.contributes_v4().webviews[0].id, "inspector");
+    }
+
+    #[test]
+    fn rejects_v4_self_dependency() {
+        let raw = serde_json::json!({
+            "schemaVersion": "bakingrl.plugin/4",
+            "id": "com.example.self",
+            "name": "Self Dependency",
+            "version": "1.0.0",
+            "bakingrlApi": "2.1.0",
+            "dependencies": [
+                {
+                    "packageId": "com.example.self"
+                }
+            ]
+        })
+        .to_string();
+
+        let error = PluginPackageManifest::parse(&raw).unwrap_err();
+        assert!(error.contains("dependencies must not reference the package itself"));
     }
 
     #[test]
@@ -849,7 +1364,7 @@ mod tests {
 
     #[test]
     fn rejects_legacy_contributions_sections() {
-        for field in ["pages", "views", "overlays", "webviews", "configuration"] {
+        for field in ["pages", "views", "overlays", "configuration"] {
             let mut contributes = serde_json::Map::new();
             contributes.insert(field.to_string(), serde_json::json!([]));
             let raw = serde_json::json!({

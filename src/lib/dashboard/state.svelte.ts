@@ -1178,6 +1178,9 @@ export class DashboardState {
       pkg.contributions.commands.length +
       pkg.contributions.visuals.length +
       pkg.contributions.services.length +
+      pkg.contributions.extension_points.length +
+      pkg.contributions.contributions.length +
+      pkg.contributions.resources.length +
       pkg.contributions.views.length +
       pkg.contributions.assets.length +
       pkg.contributions.schemas.length +
@@ -1197,6 +1200,10 @@ export class DashboardState {
       (contributes.commands?.length ?? 0) +
       (contributes.visuals?.length ?? 0) +
       (contributes.services?.length ?? 0) +
+      (contributes.extensionPoints?.length ?? 0) +
+      (contributes.contributions?.length ?? 0) +
+      (contributes.resources?.length ?? 0) +
+      (contributes.webviews?.length ?? 0) +
       (contributes.settings ? 1 : 0)
     );
   }

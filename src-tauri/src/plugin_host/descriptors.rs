@@ -1,9 +1,10 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use crate::plugin_package::bundle::BundleInspection;
 use crate::plugin_package::manifest::{
-    parse_runtime_api_version, PluginPackageManifest, PluginRuntimeV4, HOST_RUNTIME_API_VERSION,
+    parse_runtime_api_version, PluginContributesV4, PluginPackageManifest, PluginRuntimeV4,
+    HOST_RUNTIME_API_VERSION,
 };
 
 use super::package_files::read_json_package_file;
@@ -20,6 +21,7 @@ pub struct PackageDescriptor {
     pub author: Option<String>,
     pub runtime: Option<PluginRuntimeV4>,
     pub contributes: Option<serde_json::Value>,
+    pub dependencies: Vec<PackageDependencyDescriptor>,
     pub enabled: bool,
     pub status: PackageStatus,
     pub path: String,
@@ -43,6 +45,9 @@ pub struct PackageContributionsDescriptor {
     pub commands: Vec<NamedContributionDescriptor>,
     pub visuals: Vec<VisualContributionDescriptor>,
     pub services: Vec<ServiceContributionDescriptor>,
+    pub extension_points: Vec<ExtensionPointContributionDescriptor>,
+    pub contributions: Vec<PluginContributionDescriptor>,
+    pub resources: Vec<ResourceContributionDescriptor>,
     pub views: Vec<WebviewContributionDescriptor>,
     pub assets: Vec<NamedContributionDescriptor>,
     pub schemas: Vec<NamedContributionDescriptor>,
@@ -70,6 +75,63 @@ pub struct NamedContributionDescriptor {
 pub struct ServiceContributionDescriptor {
     pub name: String,
     pub methods: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ExtensionPointContributionDescriptor {
+    pub name: String,
+    pub version: Option<String>,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub schema: Option<String>,
+    pub service: Option<String>,
+    pub reference: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PluginContributionDescriptor {
+    pub name: String,
+    pub target: String,
+    pub kind: Option<String>,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub data_schema: Option<String>,
+    pub visual: Option<String>,
+    pub service: Option<String>,
+    pub resources: Vec<String>,
+    pub metadata: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ResourceContributionDescriptor {
+    pub name: String,
+    pub paths: Vec<String>,
+    pub resource_type: Option<String>,
+    pub visibility: String,
+    pub public: bool,
+    pub metadata: Option<serde_json::Value>,
+    pub reference: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PackageDependencyStatus {
+    Pending,
+    Satisfied,
+    OptionalMissing,
+    Missing,
+    Disabled,
+    Incompatible,
+    VersionMismatch,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PackageDependencyDescriptor {
+    pub package_id: String,
+    pub version: Option<String>,
+    pub optional: bool,
+    pub status: PackageDependencyStatus,
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -161,6 +223,17 @@ pub(super) fn descriptor_for_manifest(
         author: manifest.author().map(ToOwned::to_owned),
         runtime: manifest.runtime_v4().cloned(),
         contributes: manifest.contributes_value(),
+        dependencies: manifest
+            .dependencies_v4()
+            .iter()
+            .map(|dependency| PackageDependencyDescriptor {
+                package_id: dependency.package_id.clone(),
+                version: dependency.version.clone(),
+                optional: dependency.optional,
+                status: PackageDependencyStatus::Pending,
+                message: None,
+            })
+            .collect(),
         enabled,
         status: PackageStatus::Installed,
         path,
@@ -195,12 +268,43 @@ pub(super) fn descriptor_for_manifest(
                     methods: export.methods.clone(),
                 })
                 .collect(),
+            extension_points: extension_point_descriptors(manifest.id(), contributes),
+            contributions: contributes
+                .contributions
+                .iter()
+                .map(|contribution| PluginContributionDescriptor {
+                    name: contribution.id.clone(),
+                    target: contribution.target.clone(),
+                    kind: contribution.kind.clone(),
+                    title: contribution.title.clone(),
+                    description: contribution.description.clone(),
+                    data_schema: contribution.data_schema.clone(),
+                    visual: contribution.visual.clone(),
+                    service: contribution.service.clone(),
+                    resources: contribution.resources.clone(),
+                    metadata: contribution.metadata.clone(),
+                })
+                .collect(),
+            resources: resource_descriptors(manifest.id(), contributes),
             views: Vec::new(),
             assets: Vec::new(),
             schemas: Vec::new(),
             pages: Vec::new(),
             overlays: Vec::new(),
-            webviews: Vec::new(),
+            webviews: contributes
+                .webviews
+                .iter()
+                .map(|webview| WebviewContributionDescriptor {
+                    name: webview.id.clone(),
+                    entry: Some(webview.entry.clone()),
+                    path: None,
+                    title: webview.title.clone(),
+                    description: None,
+                    icon: None,
+                    configuration: None,
+                    route: None,
+                })
+                .collect(),
             configuration,
         },
         compatibility,
@@ -209,6 +313,56 @@ pub(super) fn descriptor_for_manifest(
         has_secrets,
         error: None,
     }
+}
+
+fn extension_point_descriptors(
+    package_id: &str,
+    contributes: &PluginContributesV4,
+) -> Vec<ExtensionPointContributionDescriptor> {
+    contributes
+        .extension_points
+        .iter()
+        .map(|point| ExtensionPointContributionDescriptor {
+            name: point.id.clone(),
+            version: point.version.clone(),
+            title: point.title.clone(),
+            description: point.description.clone(),
+            schema: point.schema.clone(),
+            service: point.service.clone(),
+            reference: format!("{package_id}/{}", point.id),
+        })
+        .collect()
+}
+
+fn resource_descriptors(
+    package_id: &str,
+    contributes: &PluginContributesV4,
+) -> Vec<ResourceContributionDescriptor> {
+    contributes
+        .resources
+        .iter()
+        .map(|resource| {
+            let paths = resource
+                .path
+                .iter()
+                .cloned()
+                .chain(resource.paths.iter().cloned())
+                .collect::<Vec<_>>();
+            let visibility = match resource.visibility {
+                crate::plugin_package::manifest::PluginResourceVisibilityV4::Public => "public",
+                crate::plugin_package::manifest::PluginResourceVisibilityV4::Private => "private",
+            };
+            ResourceContributionDescriptor {
+                name: resource.id.clone(),
+                paths,
+                resource_type: resource.resource_type.clone(),
+                visibility: visibility.to_string(),
+                public: visibility == "public",
+                metadata: resource.metadata.clone(),
+                reference: format!("{package_id}/{}", resource.id),
+            }
+        })
+        .collect()
 }
 
 fn configuration_descriptor_for_visuals(
@@ -297,7 +451,209 @@ pub(super) fn compatibility_for_manifest(
 }
 
 pub(super) fn apply_graph_diagnostics(records: &mut HashMap<String, PackageRecord>) {
-    let _ = records;
+    let dependency_snapshot = graph_snapshot(records);
+    for record in records.values_mut() {
+        let mut graph_error = None;
+
+        for dependency_descriptor in &mut record.descriptor.dependencies {
+            let (status, message) = dependency_status(dependency_descriptor, &dependency_snapshot);
+            dependency_descriptor.status = status.clone();
+            dependency_descriptor.message = message.clone();
+            if !dependency_descriptor.optional
+                && !matches!(status, PackageDependencyStatus::Satisfied)
+                && graph_error.is_none()
+            {
+                graph_error = message;
+            }
+        }
+
+        if let Some(error) = graph_error {
+            record.descriptor.enabled = false;
+            record.descriptor.error = Some(error);
+        }
+    }
+
+    let contribution_snapshot = graph_snapshot(records);
+    for record in records.values_mut() {
+        if record.descriptor.error.is_some() {
+            continue;
+        }
+        let package_id = record.manifest.id().to_string();
+        let dependency_package_ids = record
+            .manifest
+            .dependencies_v4()
+            .iter()
+            .map(|dependency| dependency.package_id.as_str())
+            .collect::<HashSet<_>>();
+        let mut graph_error = None;
+
+        for contribution in &record.manifest.contributes_v4().contributions {
+            let Some((target_package_id, target_extension_point)) =
+                contribution.target.split_once('/')
+            else {
+                graph_error.get_or_insert_with(|| {
+                    format!(
+                        "Contribution '{}' has invalid target '{}'.",
+                        contribution.id, contribution.target
+                    )
+                });
+                continue;
+            };
+            if target_package_id != package_id
+                && !dependency_package_ids.contains(target_package_id)
+            {
+                graph_error.get_or_insert_with(|| {
+                    format!(
+                        "Contribution '{}' targets '{}' but the package does not declare a dependency on '{}'.",
+                        contribution.id, contribution.target, target_package_id
+                    )
+                });
+                continue;
+            }
+            let Some(target) = contribution_snapshot.get(target_package_id) else {
+                graph_error.get_or_insert_with(|| {
+                    format!(
+                        "Contribution '{}' targets missing package '{}'.",
+                        contribution.id, target_package_id
+                    )
+                });
+                continue;
+            };
+            if !target.enabled {
+                graph_error.get_or_insert_with(|| {
+                    format!(
+                        "Contribution '{}' targets disabled package '{}'.",
+                        contribution.id, target_package_id
+                    )
+                });
+                continue;
+            }
+            if !target.compatible {
+                graph_error.get_or_insert_with(|| {
+                    format!(
+                        "Contribution '{}' targets incompatible package '{}'.",
+                        contribution.id, target_package_id
+                    )
+                });
+                continue;
+            }
+            if !target
+                .extension_points
+                .iter()
+                .any(|point| point == target_extension_point)
+            {
+                graph_error.get_or_insert_with(|| {
+                    format!(
+                        "Contribution '{}' targets unknown extension point '{}'.",
+                        contribution.id, contribution.target
+                    )
+                });
+            }
+        }
+
+        if let Some(error) = graph_error {
+            record.descriptor.enabled = false;
+            record.descriptor.error = Some(error);
+        }
+    }
+}
+
+fn graph_snapshot(
+    records: &HashMap<String, PackageRecord>,
+) -> HashMap<String, GraphPackageSnapshot> {
+    records
+        .iter()
+        .map(|(package_id, record)| {
+            (
+                package_id.clone(),
+                GraphPackageSnapshot {
+                    version: record.manifest.version().to_string(),
+                    enabled: record.descriptor.enabled,
+                    compatible: record.descriptor.compatibility.is_compatible(),
+                    extension_points: record
+                        .manifest
+                        .contributes_v4()
+                        .extension_points
+                        .iter()
+                        .map(|point| point.id.clone())
+                        .collect(),
+                },
+            )
+        })
+        .collect()
+}
+
+struct GraphPackageSnapshot {
+    version: String,
+    enabled: bool,
+    compatible: bool,
+    extension_points: Vec<String>,
+}
+
+fn dependency_status(
+    dependency: &PackageDependencyDescriptor,
+    records: &HashMap<String, GraphPackageSnapshot>,
+) -> (PackageDependencyStatus, Option<String>) {
+    let Some(record) = records.get(&dependency.package_id) else {
+        if dependency.optional {
+            return (
+                PackageDependencyStatus::OptionalMissing,
+                Some(format!(
+                    "Optional dependency '{}' is not installed.",
+                    dependency.package_id
+                )),
+            );
+        }
+        return (
+            PackageDependencyStatus::Missing,
+            Some(format!("Missing dependency '{}'.", dependency.package_id)),
+        );
+    };
+    if !record.enabled {
+        return (
+            PackageDependencyStatus::Disabled,
+            Some(format!(
+                "Dependency '{}' is disabled.",
+                dependency.package_id
+            )),
+        );
+    }
+    if !record.compatible {
+        return (
+            PackageDependencyStatus::Incompatible,
+            Some(format!(
+                "Dependency '{}' is incompatible with this host.",
+                dependency.package_id
+            )),
+        );
+    }
+    if let Some(requirement) = dependency.version.as_deref() {
+        match (
+            semver::VersionReq::parse(requirement),
+            semver::Version::parse(record.version.trim_start_matches('v')),
+        ) {
+            (Ok(requirement), Ok(version)) if requirement.matches(&version) => {}
+            (Ok(_), Ok(_)) => {
+                return (
+                    PackageDependencyStatus::VersionMismatch,
+                    Some(format!(
+                        "Dependency '{}' does not satisfy version requirement '{}'.",
+                        dependency.package_id, requirement
+                    )),
+                );
+            }
+            _ => {
+                return (
+                    PackageDependencyStatus::VersionMismatch,
+                    Some(format!(
+                        "Dependency '{}' has invalid version metadata.",
+                        dependency.package_id
+                    )),
+                );
+            }
+        }
+    }
+    (PackageDependencyStatus::Satisfied, None)
 }
 
 #[cfg(test)]
@@ -306,6 +662,19 @@ mod tests {
 
     fn v4_manifest(raw: serde_json::Value) -> PluginPackageManifest {
         PluginPackageManifest::parse(&raw.to_string()).unwrap()
+    }
+
+    fn package_record(raw: serde_json::Value, enabled: bool) -> (String, PackageRecord) {
+        let manifest = v4_manifest(raw);
+        let id = manifest.id().to_string();
+        let descriptor = descriptor_for_manifest(&manifest, format!("/tmp/{id}"), enabled);
+        (
+            id,
+            PackageRecord {
+                descriptor,
+                manifest,
+            },
+        )
     }
 
     #[test]
@@ -356,6 +725,40 @@ mod tests {
                         "methods": ["snapshot"]
                     }
                 ],
+                "extensionPoints": [
+                    {
+                        "id": "overlay.visual",
+                        "version": "1.0.0",
+                        "title": "Overlay Visual",
+                        "schema": "schemas/extension-point.json",
+                        "service": "matchStats"
+                    }
+                ],
+                "resources": [
+                    {
+                        "id": "presetData",
+                        "paths": ["data/a.json", "data/b.json"],
+                        "type": "application/json",
+                        "visibility": "public"
+                    }
+                ],
+                "contributions": [
+                    {
+                        "id": "scoreboardBinding",
+                        "target": "com.example.catalog/overlay.visual",
+                        "kind": "visual",
+                        "title": "Scoreboard Binding",
+                        "visual": "scoreboard",
+                        "resources": ["presetData"]
+                    }
+                ],
+                "webviews": [
+                    {
+                        "id": "inspector",
+                        "entry": "dist/webviews/inspector.js",
+                        "title": "Inspector"
+                    }
+                ],
                 "settings": {
                     "schema": "schemas/plugin-settings.json",
                     "ui": "settingsPanel"
@@ -402,6 +805,23 @@ mod tests {
             descriptor.contributions.services[0].methods,
             vec!["snapshot"]
         );
+        assert_eq!(
+            descriptor.contributions.extension_points[0].reference,
+            "com.example.catalog/overlay.visual"
+        );
+        assert_eq!(
+            descriptor.contributions.contributions[0].target,
+            "com.example.catalog/overlay.visual"
+        );
+        assert_eq!(
+            descriptor.contributions.resources[0].paths,
+            vec!["data/a.json", "data/b.json"]
+        );
+        assert!(descriptor.contributions.resources[0].public);
+        assert_eq!(
+            descriptor.contributions.webviews[0].entry.as_deref(),
+            Some("dist/webviews/inspector.js")
+        );
         assert!(descriptor.contributions.pages.is_empty());
         assert!(descriptor.contributions.overlays.is_empty());
         assert_eq!(
@@ -418,6 +838,163 @@ mod tests {
             .as_ref()
             .and_then(|value| value.get("visuals"))
             .is_some());
+    }
+
+    #[test]
+    fn graph_diagnostics_accepts_declared_dependency_contribution() {
+        let mut records = HashMap::from([
+            package_record(
+                serde_json::json!({
+                    "schemaVersion": "bakingrl.plugin/4",
+                    "id": "bakingrl.provider",
+                    "name": "Provider",
+                    "version": "1.2.3",
+                    "bakingrlApi": "2.1.0",
+                    "contributes": {
+                        "extensionPoints": [
+                            {
+                                "id": "overlay.visual",
+                                "version": "1.0.0"
+                            }
+                        ]
+                    }
+                }),
+                true,
+            ),
+            package_record(
+                serde_json::json!({
+                    "schemaVersion": "bakingrl.plugin/4",
+                    "id": "bakingrl.consumer",
+                    "name": "Consumer",
+                    "version": "1.0.0",
+                    "bakingrlApi": "2.1.0",
+                    "dependencies": [
+                        {
+                            "packageId": "bakingrl.provider",
+                            "version": "^1.2.0"
+                        }
+                    ],
+                    "contributes": {
+                        "contributions": [
+                            {
+                                "id": "scoreboardBinding",
+                                "target": "bakingrl.provider/overlay.visual",
+                                "kind": "visual"
+                            }
+                        ]
+                    }
+                }),
+                true,
+            ),
+        ]);
+
+        apply_graph_diagnostics(&mut records);
+
+        let consumer = records.get("bakingrl.consumer").unwrap();
+        assert!(consumer.descriptor.enabled);
+        assert_eq!(consumer.descriptor.error, None);
+        assert_eq!(
+            consumer.descriptor.dependencies[0].status,
+            PackageDependencyStatus::Satisfied
+        );
+    }
+
+    #[test]
+    fn graph_diagnostics_rejects_required_dependency_version_mismatch() {
+        let mut records = HashMap::from([
+            package_record(
+                serde_json::json!({
+                    "schemaVersion": "bakingrl.plugin/4",
+                    "id": "bakingrl.provider",
+                    "name": "Provider",
+                    "version": "1.2.3",
+                    "bakingrlApi": "2.1.0",
+                    "contributes": {}
+                }),
+                true,
+            ),
+            package_record(
+                serde_json::json!({
+                    "schemaVersion": "bakingrl.plugin/4",
+                    "id": "bakingrl.consumer",
+                    "name": "Consumer",
+                    "version": "1.0.0",
+                    "bakingrlApi": "2.1.0",
+                    "dependencies": [
+                        {
+                            "packageId": "bakingrl.provider",
+                            "version": "^2.0.0"
+                        }
+                    ]
+                }),
+                true,
+            ),
+        ]);
+
+        apply_graph_diagnostics(&mut records);
+
+        let consumer = records.get("bakingrl.consumer").unwrap();
+        assert!(!consumer.descriptor.enabled);
+        assert_eq!(
+            consumer.descriptor.dependencies[0].status,
+            PackageDependencyStatus::VersionMismatch
+        );
+        assert!(consumer
+            .descriptor
+            .error
+            .as_ref()
+            .is_some_and(|error| error.contains("does not satisfy version requirement")));
+    }
+
+    #[test]
+    fn graph_diagnostics_rejects_contribution_without_declared_dependency() {
+        let mut records = HashMap::from([
+            package_record(
+                serde_json::json!({
+                    "schemaVersion": "bakingrl.plugin/4",
+                    "id": "bakingrl.provider",
+                    "name": "Provider",
+                    "version": "1.0.0",
+                    "bakingrlApi": "2.1.0",
+                    "contributes": {
+                        "extensionPoints": [
+                            {
+                                "id": "overlay.visual"
+                            }
+                        ]
+                    }
+                }),
+                true,
+            ),
+            package_record(
+                serde_json::json!({
+                    "schemaVersion": "bakingrl.plugin/4",
+                    "id": "bakingrl.consumer",
+                    "name": "Consumer",
+                    "version": "1.0.0",
+                    "bakingrlApi": "2.1.0",
+                    "contributes": {
+                        "contributions": [
+                            {
+                                "id": "scoreboardBinding",
+                                "target": "bakingrl.provider/overlay.visual"
+                            }
+                        ]
+                    }
+                }),
+                true,
+            ),
+        ]);
+
+        apply_graph_diagnostics(&mut records);
+
+        let consumer = records.get("bakingrl.consumer").unwrap();
+        assert!(!consumer.descriptor.enabled);
+        assert!(consumer
+            .descriptor
+            .error
+            .as_ref()
+            .is_some_and(|error| error.contains("does not declare a dependency")));
     }
 
     #[test]

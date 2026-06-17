@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use tauri::{AppHandle, Emitter, Manager};
@@ -17,6 +17,7 @@ use tracing::{error, info, warn};
 
 use super::PluginHost;
 use crate::plugin_package::manifest::PluginRuntimeSidecarActivationV4;
+use crate::plugin_package::manifest::PluginRuntimeSidecarHealthCheckV4;
 use crate::registry::Registry;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -27,6 +28,12 @@ pub struct SidecarRuntimeStatus {
     pub last_exit_code: Option<i32>,
     pub restart_count: u32,
     pub crash_count: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub healthy: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_health_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_health_check_ms: Option<u128>,
 }
 
 impl Default for SidecarRuntimeStatus {
@@ -36,6 +43,9 @@ impl Default for SidecarRuntimeStatus {
             last_exit_code: None,
             restart_count: 0,
             crash_count: 0,
+            healthy: None,
+            last_health_error: None,
+            last_health_check_ms: None,
         }
     }
 }
@@ -88,6 +98,7 @@ pub struct SidecarRuntimeSpec {
     pub args: Vec<String>,
     pub env: HashMap<String, String>,
     pub activation: PluginRuntimeSidecarActivationV4,
+    pub health_check: Option<PluginRuntimeSidecarHealthCheckV4>,
 }
 
 impl SidecarRuntimeSpec {
@@ -146,6 +157,15 @@ impl SidecarRpc {
         method: &str,
         params: serde_json::Value,
     ) -> Result<serde_json::Value, String> {
+        self.request_timeout(method, params, Duration::from_secs(5))
+    }
+
+    fn request_timeout(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+        timeout: Duration,
+    ) -> Result<serde_json::Value, String> {
         let stdin = self
             .stdin
             .lock()
@@ -172,7 +192,7 @@ impl SidecarRpc {
             self.pending.lock().unwrap().remove(&id);
             return Err(format!("Unable to send JSON-RPC request to sidecar: {err}"));
         }
-        match response_rx.recv_timeout(Duration::from_secs(5)) {
+        match response_rx.recv_timeout(timeout) {
             Ok(result) => result,
             Err(_) => {
                 self.pending.lock().unwrap().remove(&id);
@@ -347,6 +367,8 @@ impl SidecarRuntimeController {
         self.update_status(sidecar_ref, |status| {
             status.running = true;
             status.last_exit_code = None;
+            status.healthy = None;
+            status.last_health_error = None;
         });
     }
 
@@ -354,6 +376,7 @@ impl SidecarRuntimeController {
         self.update_status(sidecar_ref, |status| {
             status.running = false;
             status.last_exit_code = exit_code;
+            status.healthy = None;
         });
     }
 
@@ -362,12 +385,29 @@ impl SidecarRuntimeController {
             status.running = false;
             status.last_exit_code = exit_code;
             status.crash_count = status.crash_count.saturating_add(1);
+            status.healthy = Some(false);
         });
     }
 
     fn on_restart(&self, sidecar_ref: &str) {
         self.update_status(sidecar_ref, |status| {
             status.restart_count = status.restart_count.saturating_add(1);
+        });
+    }
+
+    fn on_health(&self, sidecar_ref: &str, result: Result<(), String>) {
+        self.update_status(sidecar_ref, |status| {
+            status.last_health_check_ms = Some(now_ms());
+            match result {
+                Ok(()) => {
+                    status.healthy = Some(true);
+                    status.last_health_error = None;
+                }
+                Err(error) => {
+                    status.healthy = Some(false);
+                    status.last_health_error = Some(error);
+                }
+            }
         });
     }
 
@@ -556,6 +596,7 @@ fn spawn_sidecar_runtime(
         })?;
     let (shutdown_tx, shutdown_rx) = mpsc::channel();
     let supervisor_rpc = rpc.clone();
+    let health_check = spec.health_check.clone();
     let thread = thread::Builder::new()
         .name(format!("bakingrl-sidecar-{sidecar_ref}"))
         .spawn(move || {
@@ -566,6 +607,7 @@ fn spawn_sidecar_runtime(
                 app_handle,
                 supervisor_rpc,
                 runtime_status,
+                health_check,
             )
         })
         .map_err(|source| SidecarRuntimeError::Spawn {
@@ -616,6 +658,7 @@ fn supervise_child(
     app_handle: AppHandle,
     rpc: SidecarRpc,
     runtime_status: Arc<Mutex<SidecarRuntimeState>>,
+    health_check: Option<PluginRuntimeSidecarHealthCheckV4>,
 ) {
     let stdin = child
         .stdin
@@ -638,6 +681,7 @@ fn supervise_child(
         .map(|stream| spawn_log_reader(sidecar_ref.clone(), "stderr", stream, app_handle.clone()));
 
     info!("Sidecar runtime '{}' started.", sidecar_ref);
+    let mut next_health_check = health_check.as_ref().map(|_| Instant::now());
     loop {
         if shutdown_rx.try_recv().is_ok() {
             if let Some(stdin) = stdin.as_ref() {
@@ -661,6 +705,17 @@ fn supervise_child(
             set_sidecar_stopped(&runtime_status, &sidecar_ref, sidecar_status);
             info!("Sidecar runtime '{}' stopped.", sidecar_ref);
             break;
+        }
+        if let (Some(health_check), Some(next_check)) = (&health_check, next_health_check) {
+            if Instant::now() >= next_check {
+                let timeout = Duration::from_millis(health_check.timeout_ms.unwrap_or(2_000));
+                let result = rpc
+                    .request_timeout(&health_check.method, serde_json::json!({}), timeout)
+                    .map(|_| ());
+                set_sidecar_health(&runtime_status, &sidecar_ref, result);
+                let interval = Duration::from_millis(health_check.interval_ms.unwrap_or(5_000));
+                next_health_check = Some(Instant::now() + interval);
+            }
         }
         match child.try_wait() {
             Ok(Some(status)) => {
@@ -695,6 +750,13 @@ fn supervise_child(
     }
     rpc.set_stdin(None);
     rpc.reject_pending("Sidecar process stopped before answering.");
+}
+
+fn now_ms() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0)
 }
 
 fn spawn_stdout_reader<R>(
@@ -750,6 +812,15 @@ fn required_string(params: &serde_json::Value, field: &str) -> Result<String, St
         .ok_or_else(|| format!("Sidecar JSON-RPC request parameter '{field}' is required."))
 }
 
+fn optional_string(params: &serde_json::Value, field: &str) -> Option<String> {
+    params
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
 fn sidecar_package_id(sidecar_ref: &str) -> &str {
     sidecar_ref.split('/').next().unwrap_or_default()
 }
@@ -766,6 +837,7 @@ fn set_sidecar_stopped(
         .or_default();
     status.running = false;
     status.last_exit_code = exit_code;
+    status.healthy = None;
 }
 
 fn set_sidecar_crash(
@@ -781,6 +853,30 @@ fn set_sidecar_crash(
     status.running = false;
     status.last_exit_code = exit_code;
     status.crash_count = status.crash_count.saturating_add(1);
+    status.healthy = Some(false);
+}
+
+fn set_sidecar_health(
+    runtime_state: &Arc<Mutex<SidecarRuntimeState>>,
+    sidecar_ref: &str,
+    result: Result<(), String>,
+) {
+    let mut state = runtime_state.lock().unwrap();
+    let status = state
+        .status_by_ref
+        .entry(sidecar_ref.to_string())
+        .or_default();
+    status.last_health_check_ms = Some(now_ms());
+    match result {
+        Ok(()) => {
+            status.healthy = Some(true);
+            status.last_health_error = None;
+        }
+        Err(error) => {
+            status.healthy = Some(false);
+            status.last_health_error = Some(error);
+        }
+    }
 }
 
 fn state_get(
@@ -910,11 +1006,20 @@ fn handle_sidecar_jsonrpc(
         "overlays/setStreamLayout" => sidecar_overlays_set_stream_layout(app_handle, params),
         "pages/list" => sidecar_pages_list(app_handle),
         "packages/list" => sidecar_packages_list(app_handle),
-        "packages/settings" | "packages/getSettings" => sidecar_package_settings(app_handle, params),
+        "packages/settings" | "packages/getSettings" => {
+            sidecar_package_settings(app_handle, params)
+        }
         "packages/readFile" => sidecar_package_read_file(app_handle, params),
         "packages/readText" | "packages/readFileText" => {
             sidecar_package_read_text(app_handle, params)
         }
+        "plugins/list" => sidecar_plugins_list(sidecar_ref, app_handle),
+        "extensions/listPoints" => sidecar_extensions_list_points(sidecar_ref, app_handle, params),
+        "extensions/listContributions" => {
+            sidecar_extensions_list_contributions(sidecar_ref, app_handle, params)
+        }
+        "resources/list" => sidecar_resources_list(sidecar_ref, app_handle, params),
+        "resources/read" => sidecar_resources_read(sidecar_ref, app_handle, params),
         "visuals/readSource" | "packages/readVisualExportSource" => {
             sidecar_read_visual_source(app_handle, params)
         }
@@ -962,6 +1067,57 @@ fn sidecar_packages_list(app_handle: &AppHandle) -> Result<serde_json::Value, St
 
 fn sidecar_pages_list(app_handle: &AppHandle) -> Result<serde_json::Value, String> {
     serde_json::to_value(plugin_host(app_handle)?.get_pages()).map_err(|err| err.to_string())
+}
+
+fn sidecar_plugins_list(
+    sidecar_ref: &str,
+    app_handle: &AppHandle,
+) -> Result<serde_json::Value, String> {
+    plugin_host(app_handle)?.list_runtime_packages(sidecar_package_id(sidecar_ref))
+}
+
+fn sidecar_extensions_list_points(
+    sidecar_ref: &str,
+    app_handle: &AppHandle,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let package_id = optional_string(&params, "packageId");
+    plugin_host(app_handle)?
+        .list_extension_points(sidecar_package_id(sidecar_ref), package_id.as_deref())
+}
+
+fn sidecar_extensions_list_contributions(
+    sidecar_ref: &str,
+    app_handle: &AppHandle,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let target = optional_string(&params, "target");
+    plugin_host(app_handle)?
+        .list_extension_contributions(sidecar_package_id(sidecar_ref), target.as_deref())
+}
+
+fn sidecar_resources_list(
+    sidecar_ref: &str,
+    app_handle: &AppHandle,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let package_id = optional_string(&params, "packageId");
+    plugin_host(app_handle)?
+        .list_package_resources(sidecar_package_id(sidecar_ref), package_id.as_deref())
+}
+
+fn sidecar_resources_read(
+    sidecar_ref: &str,
+    app_handle: &AppHandle,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let resource_ref = required_string(&params, "ref")?;
+    let path = optional_string(&params, "path");
+    plugin_host(app_handle)?.read_package_resource(
+        sidecar_package_id(sidecar_ref),
+        &resource_ref,
+        path.as_deref(),
+    )
 }
 
 fn sidecar_package_settings(
@@ -1052,13 +1208,17 @@ fn required_relative_path(params: &serde_json::Value) -> Result<String, String> 
         .or_else(|| params.get("path"))
         .and_then(serde_json::Value::as_str)
         .map(|value| value.to_string())
-        .ok_or_else(|| {
-            "Sidecar JSON-RPC request parameter 'relativePath' is required.".to_string()
-        })
+        .ok_or_else(|| "Sidecar JSON-RPC request parameter 'relativePath' is required.".to_string())
 }
 
 fn content_type_for_path(path: &str) -> &'static str {
-    match path.rsplit('.').next().unwrap_or_default().to_ascii_lowercase().as_str() {
+    match path
+        .rsplit('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
         "js" | "mjs" => "text/javascript; charset=utf-8",
         "css" => "text/css; charset=utf-8",
         "html" | "htm" => "text/html; charset=utf-8",

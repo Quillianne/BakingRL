@@ -8,6 +8,7 @@ use crate::plugin_package::manifest::{
 };
 
 use super::extension_host_runtime::ExtensionHostRuntimeSpec;
+use super::extension_host_runtime::ExtensionHostWebviewSpec;
 use super::sidecar_runtime::{SidecarProtocol, SidecarRuntimeSpec};
 use super::{merge_settings, PackageRecord};
 
@@ -123,7 +124,7 @@ pub(super) fn extension_host_specs_for_records(
                 service_methods: service_methods.clone(),
                 settings,
                 sidecars,
-                webviews: HashMap::new(),
+                webviews: webview_specs_for_manifest(&record.manifest),
                 node_path: None,
                 args: Vec::new(),
                 env: HashMap::new(),
@@ -197,7 +198,29 @@ fn sidecar_specs_for_manifest<'a>(
                     .map(|(key, value)| (key.clone(), value.clone()))
                     .collect(),
                 activation: sidecar.activation.clone(),
+                health_check: sidecar.health_check.clone(),
             })
+        })
+        .collect()
+}
+
+fn webview_specs_for_manifest(
+    manifest: &PluginPackageManifest,
+) -> HashMap<String, ExtensionHostWebviewSpec> {
+    manifest
+        .contributes_v4()
+        .webviews
+        .iter()
+        .map(|webview| {
+            (
+                webview.id.clone(),
+                ExtensionHostWebviewSpec {
+                    title: webview.title.clone(),
+                    entry: Some(webview.entry.clone()),
+                    path: None,
+                    route: None,
+                },
+            )
         })
         .collect()
 }
@@ -261,6 +284,7 @@ mod tests {
             platforms: platforms.into_iter().map(ToOwned::to_owned).collect(),
             protocol: PluginRuntimeSidecarProtocolV4::JsonRpcStdio,
             activation: PluginRuntimeSidecarActivationV4::OnStartup,
+            health_check: None,
         }
     }
 

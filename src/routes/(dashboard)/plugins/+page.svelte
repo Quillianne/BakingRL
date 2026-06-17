@@ -62,6 +62,40 @@
         }))
       },
       {
+        title: dashboard.t("packages.extensionPoints"),
+        count: pkg.contributions.extension_points.length,
+        rows: pkg.contributions.extension_points.map((point) => ({
+          name: point.title ?? point.name,
+          meta: point.reference
+        }))
+      },
+      {
+        title: dashboard.t("packages.contributionBindings"),
+        count: pkg.contributions.contributions.length,
+        rows: pkg.contributions.contributions.map((contribution) => ({
+          name: contribution.title ?? contribution.name,
+          meta: contribution.kind ? `${contribution.target} · ${contribution.kind}` : contribution.target
+        }))
+      },
+      {
+        title: dashboard.t("packages.resources"),
+        count: pkg.contributions.resources.length,
+        rows: pkg.contributions.resources.map((resource) => ({
+          name: resource.name,
+          meta: resource.resource_type
+            ? `${resource.resource_type} · ${resource.visibility}`
+            : resource.visibility
+        }))
+      },
+      {
+        title: dashboard.t("packages.webviews"),
+        count: pkg.contributions.webviews.length,
+        rows: pkg.contributions.webviews.map((webview) => ({
+          name: webview.title ?? webview.name,
+          meta: webview.entry ?? webview.path ?? webview.route ?? undefined
+        }))
+      },
+      {
         title: dashboard.t("packages.assets"),
         count: pkg.contributions.assets.length,
         rows: pkg.contributions.assets.map((asset) => ({ name: asset.name }))

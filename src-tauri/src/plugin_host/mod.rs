@@ -16,6 +16,7 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use tauri::{
     AppHandle, Emitter, Manager, Monitor, PhysicalPosition, PhysicalSize, State, WebviewUrl,
     WebviewWindowBuilder,
@@ -952,6 +953,185 @@ impl PluginHost {
         let bytes = self.read_package_file(package_id, relative_path)?;
         String::from_utf8(bytes)
             .map_err(|e| format!("Package file '{relative_path}' is not valid UTF-8: {e}"))
+    }
+
+    pub fn list_runtime_packages(
+        &self,
+        caller_package_id: &str,
+    ) -> Result<serde_json::Value, String> {
+        let records = self.records.lock().unwrap();
+        self.require_enabled_record(&records, caller_package_id)?;
+        let packages = records
+            .values()
+            .filter(|record| record.descriptor.enabled && record.descriptor.error.is_none())
+            .map(|record| {
+                serde_json::json!({
+                    "id": record.manifest.id(),
+                    "name": record.manifest.name(),
+                    "version": record.manifest.version(),
+                    "author": record.manifest.author(),
+                    "bakingrlApi": record.manifest.compatibility().and_then(|compatibility| compatibility.runtime_api.as_deref()),
+                    "enabled": record.descriptor.enabled,
+                    "active": record.descriptor.enabled && record.descriptor.error.is_none(),
+                    "dependencies": record.manifest.dependencies_v4(),
+                })
+            })
+            .collect::<Vec<_>>();
+        Ok(serde_json::Value::Array(packages))
+    }
+
+    pub fn list_extension_points(
+        &self,
+        caller_package_id: &str,
+        package_id: Option<&str>,
+    ) -> Result<serde_json::Value, String> {
+        let records = self.records.lock().unwrap();
+        self.require_enabled_record(&records, caller_package_id)?;
+        let points = records
+            .values()
+            .filter(|record| record.descriptor.enabled && record.descriptor.error.is_none())
+            .filter(|record| package_id.is_none_or(|package_id| record.manifest.id() == package_id))
+            .flat_map(|record| {
+                record
+                    .descriptor
+                    .contributions
+                    .extension_points
+                    .iter()
+                    .map(|point| {
+                        serde_json::json!({
+                            "packageId": record.manifest.id(),
+                            "id": point.name,
+                            "reference": point.reference,
+                            "version": point.version,
+                            "title": point.title,
+                            "description": point.description,
+                            "schema": point.schema,
+                            "service": point.service,
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        Ok(serde_json::Value::Array(points))
+    }
+
+    pub fn list_extension_contributions(
+        &self,
+        caller_package_id: &str,
+        target: Option<&str>,
+    ) -> Result<serde_json::Value, String> {
+        let records = self.records.lock().unwrap();
+        self.require_enabled_record(&records, caller_package_id)?;
+        let contributions = records
+            .values()
+            .filter(|record| record.descriptor.enabled && record.descriptor.error.is_none())
+            .flat_map(|record| {
+                record
+                    .descriptor
+                    .contributions
+                    .contributions
+                    .iter()
+                    .filter(|contribution| {
+                        target.is_none_or(|target| contribution.target == target)
+                    })
+                    .map(|contribution| {
+                        serde_json::json!({
+                            "packageId": record.manifest.id(),
+                            "id": contribution.name,
+                            "reference": format!("{}/{}", record.manifest.id(), contribution.name),
+                            "target": contribution.target,
+                            "kind": contribution.kind,
+                            "title": contribution.title,
+                            "description": contribution.description,
+                            "dataSchema": contribution.data_schema,
+                            "visual": contribution.visual,
+                            "service": contribution.service,
+                            "resources": contribution.resources,
+                            "metadata": contribution.metadata,
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        Ok(serde_json::Value::Array(contributions))
+    }
+
+    pub fn list_package_resources(
+        &self,
+        caller_package_id: &str,
+        package_id: Option<&str>,
+    ) -> Result<serde_json::Value, String> {
+        let records = self.records.lock().unwrap();
+        self.require_enabled_record(&records, caller_package_id)?;
+        let resources = records
+            .values()
+            .filter(|record| record.descriptor.enabled && record.descriptor.error.is_none())
+            .filter(|record| package_id.is_none_or(|package_id| record.manifest.id() == package_id))
+            .flat_map(|record| {
+                let is_owner = record.manifest.id() == caller_package_id;
+                record
+                    .descriptor
+                    .contributions
+                    .resources
+                    .iter()
+                    .filter(move |resource| is_owner || resource.public)
+                    .map(|resource| {
+                        serde_json::json!({
+                            "packageId": record.manifest.id(),
+                            "id": resource.name,
+                            "reference": resource.reference,
+                            "paths": resource.paths,
+                            "type": resource.resource_type,
+                            "visibility": resource.visibility,
+                            "public": resource.public,
+                            "metadata": resource.metadata,
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        Ok(serde_json::Value::Array(resources))
+    }
+
+    pub fn read_package_resource(
+        &self,
+        caller_package_id: &str,
+        resource_ref: &str,
+        requested_path: Option<&str>,
+    ) -> Result<serde_json::Value, String> {
+        let (provider_package_id, resource_id) = parse_export_ref(resource_ref)?;
+        let records = self.records.lock().unwrap();
+        self.require_enabled_record(&records, caller_package_id)?;
+        let provider = self.require_enabled_record(&records, provider_package_id)?;
+        let resource = provider
+            .descriptor
+            .contributions
+            .resources
+            .iter()
+            .find(|resource| resource.name == resource_id)
+            .ok_or_else(|| format!("Resource '{resource_ref}' does not exist."))?;
+        if !resource.public && caller_package_id != provider_package_id {
+            return Err(format!("Resource '{resource_ref}' is private."));
+        }
+        let relative_path = select_resource_path(resource_ref, &resource.paths, requested_path)?;
+        let bytes = read_binary_package_file(
+            Path::new(&provider.descriptor.path),
+            Path::new(&relative_path),
+        )?;
+        Ok(serde_json::json!({
+            "contentsBase64": BASE64_STANDARD.encode(bytes),
+            "contentType": resource.resource_type.clone().unwrap_or_else(|| content_type_for_path(&relative_path).to_string()),
+            "path": relative_path,
+            "resource": {
+                "packageId": provider_package_id,
+                "id": resource.name,
+                "reference": resource.reference,
+                "type": resource.resource_type,
+                "visibility": resource.visibility,
+                "public": resource.public,
+                "metadata": resource.metadata,
+            }
+        }))
     }
 
     pub fn validate_service_call(
@@ -1974,6 +2154,56 @@ fn validate_min_bakingrl_version(min_version: Option<&str>) -> Result<(), String
     Err(format!(
         "Marketplace version requires BakingRL {required} or newer; this app is {current}."
     ))
+}
+
+fn select_resource_path(
+    resource_ref: &str,
+    paths: &[String],
+    requested_path: Option<&str>,
+) -> Result<String, String> {
+    if paths.is_empty() {
+        return Err(format!(
+            "Resource '{resource_ref}' does not declare a file path."
+        ));
+    }
+    if paths.len() == 1 {
+        return Ok(paths[0].clone());
+    }
+    let requested_path = requested_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            format!("Resource '{resource_ref}' contains multiple files; a path is required.")
+        })?;
+    if paths.iter().any(|path| path == requested_path) {
+        return Ok(requested_path.to_string());
+    }
+    Err(format!(
+        "Resource '{resource_ref}' does not expose path '{requested_path}'."
+    ))
+}
+
+fn content_type_for_path(path: &str) -> &'static str {
+    match path
+        .rsplit('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "js" | "mjs" => "text/javascript; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "html" | "htm" => "text/html; charset=utf-8",
+        "json" => "application/json; charset=utf-8",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "woff" => "font/woff",
+        "woff2" => "font/woff2",
+        _ => "application/octet-stream",
+    }
 }
 
 fn monitor_id(monitor: &Monitor) -> String {

@@ -219,6 +219,11 @@ function settingsReader(settings: unknown) {
   });
 }
 
+function resourceBytes(payload: any): Buffer {
+  const encoded = typeof payload?.contentsBase64 === "string" ? payload.contentsBase64 : "";
+  return Buffer.from(encoded, "base64");
+}
+
 function createContext() {
   const settings = settingsReader(spec.settings);
   function subscribeEvents(
@@ -317,6 +322,33 @@ function createContext() {
         const local = localServices.get(localServiceRef(serviceRef)) ?? localServices.get(serviceRef);
         if (local?.[method]) return await invokeLocalService(serviceRef, method, input ?? null);
         return await rpc.request("services/call", { serviceRef, method, input: input ?? null });
+      }
+    },
+    plugins: {
+      list: () => rpc.request("plugins/list", {})
+    },
+    extensions: {
+      points: (filter?: { packageId?: string }) =>
+        rpc.request("extensions/listPoints", { packageId: filter?.packageId ?? null }),
+      contributions: (target?: string | { target?: string }) =>
+        rpc.request("extensions/listContributions", {
+          target: typeof target === "string" ? target : target?.target ?? null
+        })
+    },
+    resources: {
+      list: (filter?: { packageId?: string }) =>
+        rpc.request("resources/list", { packageId: filter?.packageId ?? null }),
+      async read(ref: string, path?: string) {
+        const payload = await rpc.request("resources/read", { ref, path: path ?? null });
+        return resourceBytes(payload);
+      },
+      async readText(ref: string, path?: string) {
+        const payload = await rpc.request("resources/read", { ref, path: path ?? null });
+        return resourceBytes(payload).toString("utf8");
+      },
+      async readJson<T = unknown>(ref: string, path?: string): Promise<T> {
+        const payload = await rpc.request("resources/read", { ref, path: path ?? null });
+        return JSON.parse(resourceBytes(payload).toString("utf8")) as T;
       }
     },
     bus: {

@@ -1098,6 +1098,11 @@ fn handle_host_request(
         "services/registerService" => register_service(context, params),
         "services/unregisterService" => unregister_service(context, params),
         "services/call" => call_service(context, params),
+        "plugins/list" => plugins_list(context),
+        "extensions/listPoints" => extensions_list_points(context, params),
+        "extensions/listContributions" => extensions_list_contributions(context, params),
+        "resources/list" => resources_list(context, params),
+        "resources/read" => resources_read(context, params),
         "bus/subscribe" => bus_subscribe(context, params),
         "bus/unsubscribe" => bus_unsubscribe(context, params),
         "bus/emit" => bus_emit(context, params),
@@ -1210,6 +1215,52 @@ fn call_service(
         ));
     }
     tauri::async_runtime::block_on(context.service_router.call(&service_ref, method, input))
+}
+
+fn plugin_host(
+    context: &ExtensionHostContext,
+) -> Result<tauri::State<'_, Arc<PluginHost>>, String> {
+    context
+        .app_handle
+        .try_state::<Arc<PluginHost>>()
+        .ok_or_else(|| "Plugin host state is not available.".to_string())
+}
+
+fn plugins_list(context: &ExtensionHostContext) -> Result<serde_json::Value, String> {
+    plugin_host(context)?.list_runtime_packages(&context.package_id)
+}
+
+fn extensions_list_points(
+    context: &ExtensionHostContext,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let package_id = optional_string(&params, "packageId");
+    plugin_host(context)?.list_extension_points(&context.package_id, package_id.as_deref())
+}
+
+fn extensions_list_contributions(
+    context: &ExtensionHostContext,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let target = optional_string(&params, "target");
+    plugin_host(context)?.list_extension_contributions(&context.package_id, target.as_deref())
+}
+
+fn resources_list(
+    context: &ExtensionHostContext,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let package_id = optional_string(&params, "packageId");
+    plugin_host(context)?.list_package_resources(&context.package_id, package_id.as_deref())
+}
+
+fn resources_read(
+    context: &ExtensionHostContext,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let resource_ref = required_string(&params, "ref")?;
+    let path = optional_string(&params, "path");
+    plugin_host(context)?.read_package_resource(&context.package_id, &resource_ref, path.as_deref())
 }
 
 fn bus_subscribe(
@@ -1805,6 +1856,15 @@ fn required_string(params: &serde_json::Value, key: &str) -> Result<String, Stri
         .filter(|value| !value.trim().is_empty())
         .map(str::to_string)
         .ok_or_else(|| format!("Missing required string parameter '{key}'."))
+}
+
+fn optional_string(params: &serde_json::Value, key: &str) -> Option<String> {
+    params
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn parse_diagnostic_severity(value: &str) -> PluginDiagnosticSeverity {
