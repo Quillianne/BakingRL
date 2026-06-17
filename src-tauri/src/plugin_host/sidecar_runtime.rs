@@ -10,11 +10,14 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use tauri::{AppHandle, Emitter};
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use tauri::{AppHandle, Emitter, Manager};
 use thiserror::Error;
 use tracing::{error, info, warn};
 
+use super::PluginHost;
 use crate::plugin_package::manifest::PluginRuntimeSidecarActivationV4;
+use crate::registry::Registry;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -903,12 +906,171 @@ fn handle_sidecar_jsonrpc(
             let status = get_status_snapshot(&runtime_state, sidecar_ref);
             Ok(serde_json::json!(status))
         }
+        "overlays/list" => sidecar_overlays_list(app_handle),
+        "overlays/setStreamLayout" => sidecar_overlays_set_stream_layout(app_handle, params),
+        "pages/list" => sidecar_pages_list(app_handle),
+        "packages/list" => sidecar_packages_list(app_handle),
+        "packages/settings" | "packages/getSettings" => sidecar_package_settings(app_handle, params),
+        "packages/readFile" => sidecar_package_read_file(app_handle, params),
+        "packages/readText" | "packages/readFileText" => {
+            sidecar_package_read_text(app_handle, params)
+        }
+        "visuals/readSource" | "packages/readVisualExportSource" => {
+            sidecar_read_visual_source(app_handle, params)
+        }
+        "registry/get" => sidecar_registry_get(sidecar_ref, app_handle, params),
+        "registry/entries" => sidecar_registry_entries(sidecar_ref, app_handle),
+        "services/call" => sidecar_service_call(sidecar_ref, app_handle, params),
         _ => Err(format!(
             "Sidecar JSON-RPC method '{method}' is not supported."
         )),
     };
     if let (Some(id), Some(stdin)) = (id, stdin.as_ref()) {
         send_jsonrpc_response(stdin, id, result);
+    }
+}
+
+fn plugin_host(app_handle: &AppHandle) -> Result<tauri::State<'_, Arc<PluginHost>>, String> {
+    app_handle
+        .try_state::<Arc<PluginHost>>()
+        .ok_or_else(|| "Plugin host state is not available.".to_string())
+}
+
+fn registry_state(app_handle: &AppHandle) -> Result<tauri::State<'_, Arc<Registry>>, String> {
+    app_handle
+        .try_state::<Arc<Registry>>()
+        .ok_or_else(|| "Registry state is not available.".to_string())
+}
+
+fn sidecar_overlays_list(app_handle: &AppHandle) -> Result<serde_json::Value, String> {
+    serde_json::to_value(plugin_host(app_handle)?.get_overlay_layouts())
+        .map_err(|err| err.to_string())
+}
+
+fn sidecar_overlays_set_stream_layout(
+    app_handle: &AppHandle,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let layout_id = required_string(&params, "layoutId")?;
+    serde_json::to_value(plugin_host(app_handle)?.set_stream_overlay_layout(layout_id)?)
+        .map_err(|err| err.to_string())
+}
+
+fn sidecar_packages_list(app_handle: &AppHandle) -> Result<serde_json::Value, String> {
+    serde_json::to_value(plugin_host(app_handle)?.list_packages()).map_err(|err| err.to_string())
+}
+
+fn sidecar_pages_list(app_handle: &AppHandle) -> Result<serde_json::Value, String> {
+    serde_json::to_value(plugin_host(app_handle)?.get_pages()).map_err(|err| err.to_string())
+}
+
+fn sidecar_package_settings(
+    app_handle: &AppHandle,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let package_id = required_string(&params, "packageId")?;
+    plugin_host(app_handle)?.get_package_settings(&package_id)
+}
+
+fn sidecar_package_read_file(
+    app_handle: &AppHandle,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let package_id = required_string(&params, "packageId")?;
+    let relative_path = required_relative_path(&params)?;
+    let bytes = plugin_host(app_handle)?.read_package_file(&package_id, &relative_path)?;
+    Ok(serde_json::json!({
+        "contentsBase64": BASE64_STANDARD.encode(bytes),
+        "contentType": content_type_for_path(&relative_path)
+    }))
+}
+
+fn sidecar_package_read_text(
+    app_handle: &AppHandle,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let package_id = required_string(&params, "packageId")?;
+    let relative_path = required_relative_path(&params)?;
+    let contents = plugin_host(app_handle)?.read_package_file_text(&package_id, &relative_path)?;
+    Ok(serde_json::json!({ "contents": contents }))
+}
+
+fn sidecar_read_visual_source(
+    app_handle: &AppHandle,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let package_id = required_string(&params, "packageId")?;
+    let export_name = required_string(&params, "exportName")?;
+    let source = plugin_host(app_handle)?.read_visual_export_source(&package_id, &export_name)?;
+    Ok(serde_json::json!({ "source": source }))
+}
+
+fn sidecar_registry_get(
+    sidecar_ref: &str,
+    app_handle: &AppHandle,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let key = required_string(&params, "key")?;
+    let host = plugin_host(app_handle)?;
+    host.can_package_read_registry(sidecar_package_id(sidecar_ref), &key)?;
+    Ok(registry_state(app_handle)?
+        .get(&key)
+        .unwrap_or(serde_json::Value::Null))
+}
+
+fn sidecar_registry_entries(
+    sidecar_ref: &str,
+    app_handle: &AppHandle,
+) -> Result<serde_json::Value, String> {
+    let host = plugin_host(app_handle)?;
+    host.can_package_read_registry(sidecar_package_id(sidecar_ref), "")?;
+    serde_json::to_value(registry_state(app_handle)?.entries()).map_err(|err| err.to_string())
+}
+
+fn sidecar_service_call(
+    sidecar_ref: &str,
+    app_handle: &AppHandle,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let service_ref = required_string(&params, "serviceRef")?;
+    let method = required_string(&params, "method")?;
+    let input = params
+        .get("input")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    tauri::async_runtime::block_on(plugin_host(app_handle)?.call_service_export(
+        sidecar_package_id(sidecar_ref),
+        &service_ref,
+        &method,
+        input,
+    ))
+}
+
+fn required_relative_path(params: &serde_json::Value) -> Result<String, String> {
+    params
+        .get("relativePath")
+        .or_else(|| params.get("path"))
+        .and_then(serde_json::Value::as_str)
+        .map(|value| value.to_string())
+        .ok_or_else(|| {
+            "Sidecar JSON-RPC request parameter 'relativePath' is required.".to_string()
+        })
+}
+
+fn content_type_for_path(path: &str) -> &'static str {
+    match path.rsplit('.').next().unwrap_or_default().to_ascii_lowercase().as_str() {
+        "js" | "mjs" => "text/javascript; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "html" | "htm" => "text/html; charset=utf-8",
+        "json" => "application/json; charset=utf-8",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "woff" => "font/woff",
+        "woff2" => "font/woff2",
+        _ => "application/octet-stream",
     }
 }
 
