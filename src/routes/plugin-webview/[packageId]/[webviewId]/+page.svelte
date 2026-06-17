@@ -26,6 +26,31 @@
     }
   }
 
+  async function savePackageSettings(values: Record<string, unknown>) {
+    return await invoke<Record<string, unknown>>("save_package_settings", {
+      packageId: data.packageId,
+      values
+    });
+  }
+
+  function subscribePackageSettings(callback: (settings: Record<string, unknown>) => void | Promise<void>) {
+    let active = true;
+    let unlisten: (() => void) | null = null;
+    void listen<string>("bakingrl-package-settings-changed", (event) => {
+      if (!active || event.payload !== data.packageId) return;
+      void packageSettings().then((settings) => {
+        if (active) void callback(settings);
+      });
+    }).then((cleanup) => {
+      if (active) unlisten = cleanup;
+      else cleanup();
+    });
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }
+
   onMount(() => {
     let disposed = false;
     let webviewHandle: PluginWebviewHandle | null = null;
@@ -49,25 +74,32 @@
             root,
             packageId: data.packageId,
             webviewId: data.webviewId,
-            settings,
+            settings: {
+              get: packageSettings,
+              save: savePackageSettings,
+              subscribe: subscribePackageSettings
+            },
             dimensions,
             mode: "runtime"
           });
-          if (typeof cleanup === "function") moduleCleanup = cleanup;
+          if (typeof cleanup === "function") {
+            if (disposed) cleanup();
+            else moduleCleanup = cleanup;
+          }
         }
         return;
       }
 
       if (data.path) {
-      webviewHandle = mountPluginWebview({
-        root,
-        src: adapter.packageHtmlUrl(data.packageId, data.path, Date.now()),
-        packageId: data.packageId,
-        exportName: data.webviewId,
-        runtimeApi: data.runtimeApi,
-        item: {
-          id: data.webviewId,
-          name: data.webviewId,
+        webviewHandle = mountPluginWebview({
+          root,
+          src: adapter.packageHtmlUrl(data.packageId, data.path, Date.now()),
+          packageId: data.packageId,
+          exportName: data.webviewId,
+          runtimeApi: data.runtimeApi,
+          item: {
+            id: data.webviewId,
+            name: data.webviewId,
             width: dimensions.width,
             height: dimensions.height,
             settings: {}
