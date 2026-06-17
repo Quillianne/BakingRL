@@ -130,6 +130,7 @@ export type JsonSchema = {
   minLength?: number;
   maxLength?: number;
   "x-bakingrl-secret"?: boolean;
+  "x-bakingrl-restart-required"?: boolean;
 };
 
 export type JsonSchemaOption = {

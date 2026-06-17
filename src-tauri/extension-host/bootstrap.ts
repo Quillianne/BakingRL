@@ -152,6 +152,7 @@ const busListeners = new Map<string, Set<(event: unknown) => unknown | Promise<u
 let pluginModule: any = null;
 let activationResult: unknown;
 let shuttingDown = false;
+let latestTelemetryEvent: unknown = null;
 
 rpc.on("bakingrl/shutdown", async () => {
   await shutdown(0);
@@ -166,8 +167,9 @@ rpc.on("services/callRegistered", async (params: any) => {
 
 rpc.on("bus/event", async (params: any) => {
   const event = params?.event;
-  const eventName = String(event?.event ?? params?.eventName ?? "");
+  const eventName = String(event?.Event ?? event?.event ?? params?.eventName ?? "");
   if (!eventName) return { ok: true };
+  latestTelemetryEvent = event;
   const callbacks = [...busListeners.entries()]
     .filter(([pattern]) => matchesEventPattern(pattern, eventName))
     .flatMap(([, listeners]) => [...listeners]);
@@ -342,7 +344,14 @@ function createContext() {
         );
       },
       publish(eventName: string, payload?: unknown) {
+        latestTelemetryEvent = { Event: String(eventName ?? ""), Data: payload ?? null };
         return rpc.request("telemetryHub/publish", { eventName, payload: payload ?? null });
+      },
+      snapshot() {
+        return rpc.request("telemetryHub/snapshot", {}).then((snapshot) => snapshot ?? latestTelemetryEvent);
+      },
+      getSnapshot() {
+        return rpc.request("telemetryHub/getSnapshot", {}).then((snapshot) => snapshot ?? latestTelemetryEvent);
       }
     },
     registry: {
@@ -377,6 +386,12 @@ function createContext() {
       },
       write(key: string, value: unknown) {
         return rpc.request("stateHub/write", { key, value });
+      },
+      snapshot() {
+        return rpc.request("stateHub/snapshot", {});
+      },
+      getSnapshot() {
+        return rpc.request("stateHub/getSnapshot", {});
       }
     },
     runtime: {

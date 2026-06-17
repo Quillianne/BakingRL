@@ -31,8 +31,24 @@ export type PluginWebviewMountOptions = {
   runtimeApi?: string | null;
   assetUrl(ref: string): string;
   subscribeTelemetry(callback: (event: unknown) => void): () => void;
+  getTelemetrySnapshot?(): unknown;
   emitEditorEvent?(eventName: string, payload?: unknown): void;
   setActive?(active: boolean): void;
+  configuration?: {
+    packageId: string;
+    settings: {
+      get(): Promise<Record<string, unknown>>;
+      update(values: Record<string, unknown>): Promise<Record<string, unknown>>;
+      save(values: Record<string, unknown>): Promise<Record<string, unknown>>;
+      reset(): Promise<Record<string, unknown>>;
+      subscribe(callback: (settings: Record<string, unknown>) => void | Promise<void>): () => void;
+    };
+    secrets: {
+      configured(key: string): Promise<boolean>;
+      set(key: string, value: string): Promise<unknown>;
+      clear(key: string): Promise<unknown>;
+    };
+  };
 };
 
 export type PluginWebviewHandle = {
@@ -61,6 +77,7 @@ export function mountPluginWebview(options: PluginWebviewMountOptions): PluginWe
   let currentItem = options.item;
   let currentSettings = options.settings;
   let disposed = false;
+  let latestTelemetryEvent: unknown = null;
   const targetOrigin = frameTargetOrigin(options.src);
 
   const post = (type: string, payload?: Record<string, unknown>, id?: string | number) => {
@@ -79,9 +96,20 @@ export function mountPluginWebview(options: PluginWebviewMountOptions): PluginWe
       api: options.runtimeApi ?? null
     },
     apis: {
-      telemetryHub: { subscribe: true, publish: true },
-      stateHub: { read: true, write: true }
+      telemetryHub: { subscribe: true, publish: true, snapshot: true, getSnapshot: true },
+      stateHub: { read: true, write: true, snapshot: true, getSnapshot: true },
+      configuration: options.configuration
+        ? {
+            settings: { get: true, update: true, save: true, reset: true, subscribe: true },
+            secrets: { configured: true, set: true, clear: true }
+          }
+        : false
     },
+    configuration: options.configuration
+      ? {
+          packageId: options.configuration.packageId
+        }
+      : undefined,
     item: currentItem,
     settings: currentSettings,
     dimensions: {
@@ -97,7 +125,11 @@ export function mountPluginWebview(options: PluginWebviewMountOptions): PluginWe
   const sendUpdate = () => post("bakingrl:webview:update", hostPayload());
 
   const telemetryCleanup = options.subscribeTelemetry((event) => {
+    latestTelemetryEvent = event;
     post("bakingrl:webview:telemetry", { event });
+  });
+  const configurationCleanup = options.configuration?.settings.subscribe((settings) => {
+    post("bakingrl:configuration-settings-changed", { settings });
   });
 
   const onMessage = (event: MessageEvent<WebviewMessage>) => {
@@ -113,6 +145,79 @@ export function mountPluginWebview(options: PluginWebviewMountOptions): PluginWe
     if (message.type === "bakingrl:asset-url") {
       const ref = typeof message.payload?.ref === "string" ? message.payload.ref : "";
       post("bakingrl:asset-url:result", { ref, url: options.assetUrl(ref) }, message.id);
+      return;
+    }
+
+    if (message.type === "bakingrl:telemetry-snapshot") {
+      const snapshot = options.getTelemetrySnapshot?.() ?? latestTelemetryEvent;
+      post("bakingrl:telemetry-snapshot:result", { snapshot }, message.id);
+      return;
+    }
+
+    if (message.type === "bakingrl:state-snapshot") {
+      post("bakingrl:state-snapshot:result", { snapshot: hostPayload() }, message.id);
+      return;
+    }
+
+    if (message.type === "bakingrl:configuration-settings-get" && options.configuration) {
+      void options.configuration.settings
+        .get()
+        .then((settings) => post("bakingrl:configuration-settings-get:result", { settings }, message.id))
+        .catch((error) => post("bakingrl:configuration-settings-get:result", { error: String(error) }, message.id));
+      return;
+    }
+
+    if (message.type === "bakingrl:configuration-settings-update" && options.configuration) {
+      const values = recordPayloadValue(message.payload?.values);
+      void options.configuration.settings
+        .update(values)
+        .then((settings) => post("bakingrl:configuration-settings-update:result", { settings }, message.id))
+        .catch((error) => post("bakingrl:configuration-settings-update:result", { error: String(error) }, message.id));
+      return;
+    }
+
+    if (message.type === "bakingrl:configuration-settings-save" && options.configuration) {
+      const values = recordPayloadValue(message.payload?.values);
+      void options.configuration.settings
+        .save(values)
+        .then((settings) => post("bakingrl:configuration-settings-save:result", { settings }, message.id))
+        .catch((error) => post("bakingrl:configuration-settings-save:result", { error: String(error) }, message.id));
+      return;
+    }
+
+    if (message.type === "bakingrl:configuration-settings-reset" && options.configuration) {
+      void options.configuration.settings
+        .reset()
+        .then((settings) => post("bakingrl:configuration-settings-reset:result", { settings }, message.id))
+        .catch((error) => post("bakingrl:configuration-settings-reset:result", { error: String(error) }, message.id));
+      return;
+    }
+
+    if (message.type === "bakingrl:configuration-secret-configured" && options.configuration) {
+      const key = typeof message.payload?.key === "string" ? message.payload.key : "";
+      void options.configuration.secrets
+        .configured(key)
+        .then((configured) => post("bakingrl:configuration-secret-configured:result", { configured }, message.id))
+        .catch((error) => post("bakingrl:configuration-secret-configured:result", { error: String(error) }, message.id));
+      return;
+    }
+
+    if (message.type === "bakingrl:configuration-secret-set" && options.configuration) {
+      const key = typeof message.payload?.key === "string" ? message.payload.key : "";
+      const value = typeof message.payload?.value === "string" ? message.payload.value : "";
+      void options.configuration.secrets
+        .set(key, value)
+        .then((state) => post("bakingrl:configuration-secret-set:result", { state: recordPayloadValue(state) }, message.id))
+        .catch((error) => post("bakingrl:configuration-secret-set:result", { error: String(error) }, message.id));
+      return;
+    }
+
+    if (message.type === "bakingrl:configuration-secret-clear" && options.configuration) {
+      const key = typeof message.payload?.key === "string" ? message.payload.key : "";
+      void options.configuration.secrets
+        .clear(key)
+        .then((state) => post("bakingrl:configuration-secret-clear:result", { state: recordPayloadValue(state) }, message.id))
+        .catch((error) => post("bakingrl:configuration-secret-clear:result", { error: String(error) }, message.id));
       return;
     }
 
@@ -139,11 +244,16 @@ export function mountPluginWebview(options: PluginWebviewMountOptions): PluginWe
     cleanup() {
       disposed = true;
       telemetryCleanup();
+      configurationCleanup?.();
       iframe.removeEventListener("load", sendInit);
       window.removeEventListener("message", onMessage);
       iframe.remove();
     }
   };
+}
+
+function recordPayloadValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
 function frameTargetOrigin(src: string) {

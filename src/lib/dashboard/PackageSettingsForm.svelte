@@ -18,6 +18,7 @@
     minLength?: number;
     maxLength?: number;
     secret: boolean;
+    restartRequired: boolean;
   };
 
   const {
@@ -55,6 +56,7 @@
   const visibleFields = $derived(secretOnly ? [] : fields);
   const visibleSecrets = $derived(secretOnly ? secrets : []);
   const settingsDirty = $derived(JSON.stringify(values) !== JSON.stringify(savedValues));
+  const restartRequiredDirty = $derived(visibleFields.some((field) => field.restartRequired && fieldDirty(field)));
 
   $effect(() => {
     const signature = JSON.stringify(configuration);
@@ -99,7 +101,8 @@
       maximum: property.maximum,
       minLength: property.minLength,
       maxLength: property.maxLength,
-      secret: property["x-bakingrl-secret"] === true
+      secret: property["x-bakingrl-secret"] === true,
+      restartRequired: property["x-bakingrl-restart-required"] === true
     };
   }
 
@@ -141,6 +144,19 @@
     if (field.type === "boolean") return false;
     if (field.type === "number" || field.type === "integer") return "";
     return "";
+  }
+
+  function savedFieldValue(field: SettingsField) {
+    if (Object.prototype.hasOwnProperty.call(savedValues, field.key)) return savedValues[field.key];
+    if (field.defaultValue !== undefined) return field.defaultValue;
+    if (field.type === "array") return [];
+    if (field.type === "boolean") return false;
+    if (field.type === "number" || field.type === "integer") return "";
+    return "";
+  }
+
+  function fieldDirty(field: SettingsField) {
+    return JSON.stringify(fieldValue(field)) !== JSON.stringify(savedFieldValue(field));
   }
 
   async function saveValues() {
@@ -273,6 +289,7 @@
             <span class="field-label">
               {field.label}
               {#if field.required}<em>{t["common.required"]}</em>{/if}
+              {#if field.restartRequired}<strong class="restart-required">{t["packageSettings.restartRequired"]}</strong>{/if}
             </span>
             {#if field.description}
               <small>{field.description}</small>
@@ -329,6 +346,9 @@
         {/each}
       </div>
       <div class="settings-actions">
+        {#if restartRequiredDirty}
+          <p class="settings-restart-hint">{t["packageSettings.restartRequiredPending"]}</p>
+        {/if}
         <button type="button" class="btn-outline" disabled={busy || !settingsDirty} onclick={resetValues}>
           {t["common.cancel"]}
         </button>
@@ -459,6 +479,11 @@
     color: var(--success);
   }
 
+  .field-label strong.restart-required {
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
+    color: var(--accent);
+  }
+
   input,
   select {
     width: 100%;
@@ -505,8 +530,16 @@
 
   .settings-actions {
     display: flex;
+    align-items: center;
     justify-content: flex-end;
     gap: 8px;
+  }
+
+  .settings-restart-hint {
+    margin: 0 auto 0 0;
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 700;
   }
 
   .btn-primary,

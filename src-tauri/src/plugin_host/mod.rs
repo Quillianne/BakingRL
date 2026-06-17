@@ -25,7 +25,7 @@ use tracing::{info, warn};
 use crate::bus::EventBus;
 use crate::models::{
     AppSettings, OverlayLayout, OverlayLayoutsFile, PackageSettingsFile, PackageStateFile,
-    PageLayout, PagesFile,
+    PageBackground, PageItem, PageLayer, PageLayout, PageSettings, PagesFile,
 };
 use crate::plugin_package::bundle::BundleInspection;
 use crate::plugin_package::install::{
@@ -1171,7 +1171,7 @@ impl PluginHost {
         Ok(PackageConfigurationState {
             package_id,
             title,
-            has_custom_page: false,
+            has_custom_page: record.descriptor.contributions.configuration.is_some(),
             schema,
             values,
             secrets,
@@ -1238,10 +1238,64 @@ impl PluginHost {
 
     pub fn get_package_configuration_page(&self, package_id: String) -> Result<PageLayout, String> {
         let records = self.records.lock().unwrap();
-        let _record = self.require_enabled_record(&records, &package_id)?;
-        Err(format!(
-            "Package '{package_id}' does not expose a custom configuration page in manifest V4."
-        ))
+        let record = self.require_enabled_record(&records, &package_id)?;
+        let configuration = record
+            .descriptor
+            .contributions
+            .configuration
+            .as_ref()
+            .ok_or_else(|| {
+                format!(
+                    "Package '{package_id}' does not expose a custom configuration page in manifest V4."
+                )
+            })?;
+        let visual = configuration
+            .visuals
+            .first()
+            .ok_or_else(|| format!("Package '{package_id}' configuration page has no visual."))?;
+        let now = now_ms();
+        Ok(PageLayout {
+            id: format!("configuration-{package_id}"),
+            name: configuration
+                .title
+                .clone()
+                .unwrap_or_else(|| format!("{} Settings", record.descriptor.name)),
+            favorite: false,
+            width: visual.default_width.max(320.0),
+            height: visual.default_height.max(240.0),
+            background: PageBackground::default(),
+            settings: PageSettings {
+                open_target: "window".to_string(),
+            },
+            layers: vec![PageLayer {
+                id: "configuration".to_string(),
+                name: "Configuration".to_string(),
+                kind: "normal".to_string(),
+                visible: true,
+                locked: true,
+                order: 0,
+                items: vec![PageItem {
+                    id: format!("{package_id}-configuration-{visual}", visual = visual.name),
+                    kind: "visual".to_string(),
+                    package_id: Some(package_id.clone()),
+                    export_name: Some(visual.name.clone()),
+                    name: record.descriptor.name.clone(),
+                    x: 0.0,
+                    y: 0.0,
+                    width: visual.default_width.max(320.0),
+                    height: visual.default_height.max(240.0),
+                    z_index: 0,
+                    visible: true,
+                    locked: true,
+                    opacity: 1.0,
+                    settings: serde_json::json!({}),
+                }],
+            }],
+            created_at_ms: now,
+            updated_at_ms: now,
+            template_source: Some(format!("package:{package_id}:configuration")),
+            thumbnail: None,
+        })
     }
 
     pub fn save_overlay_layout(&self, layout: OverlayLayout) -> Result<OverlayLayoutsFile, String> {

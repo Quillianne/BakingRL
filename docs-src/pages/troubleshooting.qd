@@ -70,7 +70,8 @@ removing or updating it.
 
 The package configuration action appears when the manifest declares
 `contributes.settings`. Automatic settings use the declared JSON Schema.
-Custom configuration visuals are not part of the supported V4 host contract yet.
+Custom configuration visuals use `contributes.settings.ui` to reference a
+`contributes.visuals` entry with `kind: "config"`.
 
 Run the package helper validation command after changing the manifest:
 

@@ -104,6 +104,7 @@
 
   type LayoutModel = OverlayLayout & {
     background?: PageBackground;
+    template_source?: string | null;
   };
 
   type OverlayLayoutCatalog = {
@@ -120,6 +121,41 @@
     log(message: string, data?: unknown): void;
     warn(message: string, data?: unknown): void;
     error(message: string, data?: unknown): void;
+  };
+
+  type PackageSecretDescriptor = {
+    key: string;
+    label: string;
+    description?: string | null;
+    required: boolean;
+    configured: boolean;
+  };
+
+  type PackageConfigurationState = {
+    packageId: string;
+    title: string;
+    hasCustomPage: boolean;
+    schema: unknown;
+    values: Record<string, unknown>;
+    secrets: PackageSecretDescriptor[];
+    secretStoreAvailable: boolean;
+    secretStoreError?: string | null;
+  };
+
+  type ConfigurationContext = {
+    packageId: string;
+    settings: {
+      get(): Promise<Record<string, unknown>>;
+      update(values: Record<string, unknown>): Promise<Record<string, unknown>>;
+      save(values: Record<string, unknown>): Promise<Record<string, unknown>>;
+      reset(): Promise<Record<string, unknown>>;
+      subscribe(callback: (settings: Record<string, unknown>) => void | Promise<void>): () => void;
+    };
+    secrets: {
+      configured(key: string): Promise<boolean>;
+      set(key: string, value: string): Promise<PackageConfigurationState>;
+      clear(key: string): Promise<PackageConfigurationState>;
+    };
   };
 
   type VisualContext = {
@@ -139,6 +175,8 @@
     telemetryHub: {
       subscribe(eventName: string, callback: (event: unknown) => void): () => void;
       publish(eventName: string, payload?: unknown): void;
+      snapshot(): unknown;
+      getSnapshot(): unknown;
     };
     runtime: {
       packageId: string;
@@ -150,6 +188,7 @@
     services: {
       call(ref: string, method: string, input?: unknown): Promise<unknown>;
     };
+    configuration?: ConfigurationContext;
     assets: {
       url(ref: string): string;
     };
@@ -509,12 +548,101 @@
     return visualContextMode;
   }
 
+  function configurationPackageIdForLayout(layout: LayoutModel) {
+    const source = layout.template_source ?? "";
+    const match = /^package:(.+):configuration$/.exec(source);
+    return match?.[1] ?? null;
+  }
+
+  function isConfigurationLayout(layout: LayoutModel) {
+    return source === "configuration" || configurationPackageIdForLayout(layout) !== null;
+  }
+
+  function isConfigurationVisualItem(layout: LayoutModel, item: OverlayItem) {
+    if (!item.package_id || itemKind(item) !== "visual") return false;
+    if (isConfigurationLayout(layout)) return true;
+    return item.locked === true && item.id.includes("-configuration-");
+  }
+
   async function getPackageSettings(packageId: string) {
     const cached = settingsCache.get(packageId);
     if (cached) return cached;
     const settings = await adapter.invoke<Record<string, unknown>>("get_package_settings", { packageId });
     settingsCache.set(packageId, settings);
     return settings;
+  }
+
+  async function savePackageSettings(packageId: string, values: Record<string, unknown>) {
+    const settings = await adapter.invoke<Record<string, unknown>>("save_package_settings", { packageId, values });
+    settingsCache.set(packageId, settings);
+    return settings;
+  }
+
+  async function getPackageConfigurationState(packageId: string) {
+    return adapter.invoke<PackageConfigurationState>("get_package_configuration_state", { packageId });
+  }
+
+  function createConfigurationContext(packageId: string, registerCleanup?: (cleanup: () => void) => void): ConfigurationContext {
+    return {
+      packageId,
+      settings: {
+        get() {
+          return getPackageSettings(packageId);
+        },
+        async update(values) {
+          const current = await getPackageSettings(packageId);
+          return savePackageSettings(packageId, { ...current, ...values });
+        },
+        save(values) {
+          return savePackageSettings(packageId, values);
+        },
+        reset() {
+          return savePackageSettings(packageId, {});
+        },
+        subscribe(callback) {
+          let disposed = false;
+          let unlisten: (() => void) | undefined;
+          const cleanup = () => {
+            disposed = true;
+            unlisten?.();
+          };
+          void adapter.listen<string>("bakingrl-package-settings-changed", (changedPackageId) => {
+            if (changedPackageId !== packageId) return;
+            settingsCache.delete(packageId);
+            void getPackageSettings(packageId).then((settings) => {
+              if (!disposed) void callback(settings);
+            });
+          }).then((nextUnlisten) => {
+            if (disposed) {
+              nextUnlisten();
+            } else {
+              unlisten = nextUnlisten;
+            }
+          });
+          registerCleanup?.(cleanup);
+          return cleanup;
+        }
+      },
+      secrets: {
+        async configured(key) {
+          const state = await getPackageConfigurationState(packageId);
+          return state.secrets.some((secret) => secret.key === key && secret.configured);
+        },
+        set(key, value) {
+          return adapter.invoke<PackageConfigurationState>("set_package_secret", {
+            packageId,
+            key: String(key),
+            value: String(value)
+          });
+        },
+        clear(key) {
+          return adapter.invoke<PackageConfigurationState>("delete_package_secret", {
+            packageId,
+            key: String(key)
+          });
+        }
+      }
+    };
   }
 
   function invalidateMountedModules() {
@@ -630,6 +758,7 @@
           root.remove();
         };
         const settings = { ...(await getPackageSettings(packageId)), ...settingsObject(item) };
+        const configuration = isConfigurationVisualItem(layout, item) ? createConfigurationContext(packageId) : undefined;
         webviewHandle = mountPluginWebview({
           root,
           src: packageHtmlUrl(mountedPackage.id, webviewEntry),
@@ -645,10 +774,14 @@
           },
           settings,
           mode: mountedContextMode(),
+          configuration,
           assetUrl(ref) {
             return packageAssetUrl(mountedPackage.id, ref);
           },
           subscribeTelemetry: subscribe,
+          getTelemetrySnapshot() {
+            return latestEvent;
+          },
           emitEditorEvent(eventName, payload) {
             publishEditorTelemetry(eventName, payload);
           },
@@ -741,7 +874,7 @@
         }
       };
 
-      const createContext = (nextLayer: OverlayLayer, nextItem: OverlayItem, nextSettings: Record<string, unknown>): VisualContext => ({
+      const createContext = (nextLayout: LayoutModel, nextLayer: OverlayLayer, nextItem: OverlayItem, nextSettings: Record<string, unknown>): VisualContext => ({
         root,
         package: mountedPackage,
         exportName: nextItem.export_name ?? mountedVisual.name,
@@ -801,6 +934,12 @@
               Event: String(eventName ?? ""),
               Data: payload ?? null
             });
+          },
+          snapshot() {
+            return latestEvent;
+          },
+          getSnapshot() {
+            return latestEvent;
           }
         },
         runtime: {
@@ -822,6 +961,9 @@
             });
           }
         },
+        configuration: isConfigurationVisualItem(nextLayout, nextItem)
+          ? createConfigurationContext(mountedPackage.id, (cleanup) => busCleanups.add(cleanup))
+          : undefined,
         assets: {
           url(ref) {
             return packageAssetUrl(mountedPackage.id, ref);
@@ -830,7 +972,7 @@
         diagnostics
       });
 
-      const mountContext = createContext(layer, item, settings);
+      const mountContext = createContext(layout, layer, item, settings);
       const mountResult = await mountVisual(mountContext);
 
       if (disposed) {
@@ -868,7 +1010,7 @@
           if (!loadedVisual.update) return;
           const nextPackageSettings = await getPackageSettings(mountedPackage.id);
           const nextSettings = { ...nextPackageSettings, ...settingsObject(nextItem) };
-          const nextContext = createContext(nextLayer, nextItem, nextSettings);
+          const nextContext = createContext(nextLayout, nextLayer, nextItem, nextSettings);
           root.dataset.mountSignature = visualMountSignature(nextItem);
           applyItemStyle(root, nextLayer, nextItem, nextLayout);
           await loadedVisual.update(nextContext);

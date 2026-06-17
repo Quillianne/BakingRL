@@ -150,6 +150,9 @@ pub(super) fn descriptor_for_manifest(
     let enabled = enabled && compatibility.is_compatible();
     let (has_public_settings, has_secrets) = package_settings_capabilities(manifest, &path);
     let contributes = manifest.contributes_v4();
+    let configuration = manifest
+        .settings_ui_visual()
+        .and_then(|ui| configuration_descriptor_for_visuals(ui, &contributes.visuals));
     PackageDescriptor {
         manifest_schema: manifest.manifest_schema().to_string(),
         id: manifest.id().to_string(),
@@ -198,14 +201,36 @@ pub(super) fn descriptor_for_manifest(
             pages: Vec::new(),
             overlays: Vec::new(),
             webviews: Vec::new(),
-            configuration: None,
+            configuration,
         },
         compatibility,
         settings: manifest.settings().map(ToOwned::to_owned),
-        has_public_settings,
+        has_public_settings: has_public_settings || manifest.settings_ui_visual().is_some(),
         has_secrets,
         error: None,
     }
+}
+
+fn configuration_descriptor_for_visuals(
+    ui: &str,
+    visuals: &[crate::plugin_package::manifest::PluginVisualContributionV4],
+) -> Option<ConfigurationContributionDescriptor> {
+    let visual = visuals
+        .iter()
+        .find(|visual| visual.id == ui && visual.kind.as_deref() == Some("config"))?;
+    let [default_width, default_height] = visual.default_size.unwrap_or([1200.0, 740.0]);
+    Some(ConfigurationContributionDescriptor {
+        title: None,
+        description: None,
+        path: visual.entry.clone(),
+        visuals: vec![VisualContributionDescriptor {
+            name: visual.id.clone(),
+            entry: visual.entry.clone(),
+            default_width,
+            default_height,
+            settings: visual.instance_settings.clone(),
+        }],
+    })
 }
 
 fn package_settings_capabilities(manifest: &PluginPackageManifest, path: &str) -> (bool, bool) {
@@ -316,6 +341,12 @@ mod tests {
                         "entry": "dist/visuals/scoreboard.js",
                         "defaultSize": [760, 128],
                         "instanceSettings": "schemas/scoreboard-settings.json"
+                    },
+                    {
+                        "id": "settingsPanel",
+                        "kind": "config",
+                        "entry": "dist/visuals/settings-panel.js",
+                        "defaultSize": [1000, 620]
                     }
                 ],
                 "services": [
@@ -326,7 +357,8 @@ mod tests {
                     }
                 ],
                 "settings": {
-                    "schema": "schemas/plugin-settings.json"
+                    "schema": "schemas/plugin-settings.json",
+                    "ui": "settingsPanel"
                     }
             }
         }));
@@ -377,6 +409,10 @@ mod tests {
             Some("schemas/plugin-settings.json")
         );
         assert!(descriptor.contributions.views.is_empty());
+        let configuration = descriptor.contributions.configuration.as_ref().unwrap();
+        assert_eq!(configuration.path, "dist/visuals/settings-panel.js");
+        assert_eq!(configuration.visuals[0].name, "settingsPanel");
+        assert_eq!(configuration.visuals[0].default_width, 1000.0);
         assert!(descriptor
             .contributes
             .as_ref()

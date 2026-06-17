@@ -133,8 +133,11 @@ layout item
 ```
 
 Configuration mounting uses host-generated settings UI from the package settings
-schema. Custom configuration visuals are reserved for a later V4 settings
-ticket.
+schema by default. Packages can provide a custom configuration visual by
+declaring `contributes.settings.ui` with the id of a visual whose `kind` is
+`config`. The custom visual is mounted with `VisualContext.configuration` so it
+can call host-owned settings and secret configuration APIs without writing
+directly to package files.
 
 ## Reload
 

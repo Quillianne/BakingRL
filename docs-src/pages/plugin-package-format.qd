@@ -154,6 +154,38 @@ Non-sensitive values are exposed through host-managed settings APIs.
 Fields marked with `x-bakingrl-secret: true` are stored by the host and should
 not be written to bundle files, logs, or normal settings JSON.
 
+Fields marked with `x-bakingrl-restart-required: true` are shown as requiring
+a package reload when changed. The host reloads package runtimes after saving
+package settings.
+
+`contributes.settings.ui` can reference the `id` of a visual declared in
+`contributes.visuals` with `kind: "config"`. The host exposes that visual as
+the package configuration surface. Configuration visuals receive the normal
+`VisualContext.settings` snapshot plus `VisualContext.configuration`, which can
+read, save, update, reset, and subscribe to host-owned package settings. Secret
+values remain host-mediated: the configuration context can test whether a
+declared secret is configured and can set or clear it, but it does not expose
+secret values through normal settings JSON.
+
+```json
+{
+  "contributes": {
+    "visuals": [
+      {
+        "id": "settingsPanel",
+        "kind": "config",
+        "entry": "dist/settings-panel.js",
+        "defaultSize": [1200, 740]
+      }
+    ],
+    "settings": {
+      "schema": "schemas/settings.json",
+      "ui": "settingsPanel"
+    }
+  }
+}
+```
+
 ## Bundle Layout
 
 Typical package contents:

@@ -288,6 +288,7 @@ struct ExtensionHostContext {
     service_methods: HashMap<String, Vec<String>>,
     bus: Arc<EventBus>,
     bus_subscriptions: Arc<Mutex<HashSet<String>>>,
+    latest_telemetry: Arc<Mutex<Option<serde_json::Value>>>,
     registry: Arc<Registry>,
     service_router: ServiceCallRouter,
     service_call_tx: tokio_mpsc::Sender<ServiceCallRequest>,
@@ -516,6 +517,7 @@ fn spawn_extension_host_runtime(
         service_methods: spec.service_methods,
         bus,
         bus_subscriptions: Arc::new(Mutex::new(HashSet::new())),
+        latest_telemetry: Arc::new(Mutex::new(None)),
         registry,
         service_router,
         service_call_tx,
@@ -970,9 +972,6 @@ fn spawn_bus_forwarder(
             match bus_rx.try_recv() {
                 Ok(event) => {
                     let name = event.name().to_string();
-                    if !is_bus_subscribed(&context.bus_subscriptions, &name) {
-                        continue;
-                    }
                     let value = match event {
                         BusEvent::GameData(event) => {
                             serde_json::to_value(&*event).unwrap_or(serde_json::Value::Null)
@@ -981,6 +980,10 @@ fn spawn_bus_forwarder(
                             serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null)
                         }
                     };
+                    *context.latest_telemetry.lock().unwrap() = Some(value.clone());
+                    if !is_bus_subscribed(&context.bus_subscriptions, &name) {
+                        continue;
+                    }
                     if let Err(err) = context
                         .rpc
                         .notify("bus/event", serde_json::json!({ "event": value }))
@@ -1100,6 +1103,7 @@ fn handle_host_request(
         "telemetryHub/subscribe" => bus_subscribe(context, params),
         "telemetryHub/unsubscribe" => bus_unsubscribe(context, params),
         "telemetryHub/publish" => telemetry_hub_publish(context, params),
+        "telemetryHub/snapshot" | "telemetryHub/getSnapshot" => telemetry_hub_snapshot(context),
         "registry/get" => registry_get(context, params),
         "registry/set" => registry_set(context, params),
         "registry/entries" => registry_entries(context),
@@ -1115,6 +1119,7 @@ fn handle_host_request(
         "telemetry/event" => telemetry_event(context, params),
         "stateHub/read" => state_hub_read(context, params),
         "stateHub/write" => state_hub_write(context, params),
+        "stateHub/snapshot" | "stateHub/getSnapshot" => state_hub_snapshot(context),
         "webviews/open" => webview_open(runtime_key, context, params),
         "webviews/close" => webview_close(runtime_key, context, params),
         "overlays/list" => Ok(serde_json::json!([])),
@@ -1252,6 +1257,10 @@ fn telemetry_hub_publish(
         .get("payload")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
+    *context.latest_telemetry.lock().unwrap() = Some(serde_json::json!({
+        "Event": event_name.clone(),
+        "Data": payload.clone(),
+    }));
     bus_emit(
         context,
         serde_json::json!({
@@ -1259,6 +1268,15 @@ fn telemetry_hub_publish(
             "payload": payload
         }),
     )
+}
+
+fn telemetry_hub_snapshot(context: &ExtensionHostContext) -> Result<serde_json::Value, String> {
+    Ok(context
+        .latest_telemetry
+        .lock()
+        .unwrap()
+        .clone()
+        .unwrap_or(serde_json::Value::Null))
 }
 
 fn telemetry_event(
@@ -1423,6 +1441,10 @@ fn state_hub_write(
     state.insert(key, value);
     write_state_hub(context, state)?;
     Ok(serde_json::json!({ "ok": true }))
+}
+
+fn state_hub_snapshot(context: &ExtensionHostContext) -> Result<serde_json::Value, String> {
+    Ok(serde_json::Value::Object(read_state_hub(context)?))
 }
 
 fn resolve_storage_uri(storage_root: &Path, uri: &str) -> Result<PathBuf, String> {

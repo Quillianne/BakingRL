@@ -190,6 +190,8 @@ const en = {
   "packageSettings.saveSecret": "Save",
   "packageSettings.clearSecret": "Clear",
   "packageSettings.empty": "No typed setting declared.",
+  "packageSettings.restartRequired": "reload",
+  "packageSettings.restartRequiredPending": "Saving this change reloads the package.",
 
   "overlays.generalUrl": "General overlay URL",
   "overlays.layoutsTitle": "Layouts",
@@ -524,6 +526,8 @@ const fr: Record<TranslationKey, string> = {
   "packageSettings.saveSecret": "Sauvegarder",
   "packageSettings.clearSecret": "Effacer",
   "packageSettings.empty": "Aucun setting typé déclaré.",
+  "packageSettings.restartRequired": "reload",
+  "packageSettings.restartRequiredPending": "Sauvegarder ce changement recharge le package.",
 
   "overlays.generalUrl": "URL générale d'overlay",
   "overlays.layoutsTitle": "Layouts",

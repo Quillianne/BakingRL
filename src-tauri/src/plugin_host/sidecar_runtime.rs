@@ -810,6 +810,20 @@ fn state_set(
         .insert(key, value);
 }
 
+fn state_snapshot(
+    runtime_state: &Arc<Mutex<SidecarRuntimeState>>,
+    sidecar_ref: &str,
+) -> serde_json::Map<String, serde_json::Value> {
+    let package_id = sidecar_package_id(sidecar_ref);
+    runtime_state
+        .lock()
+        .unwrap()
+        .package_state
+        .get(package_id)
+        .map(|state| state.clone().into_iter().collect())
+        .unwrap_or_default()
+}
+
 fn get_status_snapshot(
     runtime_state: &Arc<Mutex<SidecarRuntimeState>>,
     sidecar_ref: &str,
@@ -843,11 +857,15 @@ fn handle_sidecar_jsonrpc(
         .cloned()
         .unwrap_or(serde_json::Value::Null);
     let result = match method.as_str() {
-        "diagnostics/log" => {
+        "diagnostics/log" | "diagnostics/info" | "diagnostics/warn" | "diagnostics/error" => {
             let severity = params
                 .get("severity")
                 .and_then(serde_json::Value::as_str)
-                .unwrap_or("info");
+                .unwrap_or_else(|| match method.as_str() {
+                    "diagnostics/warn" => "warning",
+                    "diagnostics/error" => "error",
+                    _ => "info",
+                });
             let message = params
                 .get("message")
                 .and_then(serde_json::Value::as_str)
@@ -865,12 +883,12 @@ fn handle_sidecar_jsonrpc(
             );
             Ok(serde_json::json!({ "ok": true }))
         }
-        "state/get" => required_string(&params, "key").map(|key| {
+        "state/get" | "stateHub/read" => required_string(&params, "key").map(|key| {
             let value =
                 state_get(&runtime_state, sidecar_ref, &key).unwrap_or(serde_json::Value::Null);
             serde_json::json!({ "value": value })
         }),
-        "state/set" => required_string(&params, "key").map(|key| {
+        "state/set" | "stateHub/write" => required_string(&params, "key").map(|key| {
             let value = params
                 .get("value")
                 .cloned()
@@ -878,7 +896,10 @@ fn handle_sidecar_jsonrpc(
             state_set(&runtime_state, sidecar_ref, key, value);
             serde_json::json!({ "ok": true })
         }),
-        "runtime/status" => {
+        "state/snapshot" | "stateHub/snapshot" | "stateHub/getSnapshot" => Ok(
+            serde_json::Value::Object(state_snapshot(&runtime_state, sidecar_ref)),
+        ),
+        "runtime/status" | "runtime/snapshot" | "runtime/getStatus" => {
             let status = get_status_snapshot(&runtime_state, sidecar_ref);
             Ok(serde_json::json!(status))
         }
@@ -995,6 +1016,28 @@ mod tests {
             Some(serde_json::json!("ok"))
         );
         assert_eq!(manager.state_get("com.pkg.b", "ping"), None);
+    }
+
+    #[test]
+    fn runtime_state_snapshot_is_package_local() {
+        let runtime_state = Arc::new(Mutex::new(SidecarRuntimeState::default()));
+        state_set(
+            &runtime_state,
+            "com.pkg.a/helper",
+            "ping".to_string(),
+            serde_json::json!("ok"),
+        );
+        state_set(
+            &runtime_state,
+            "com.pkg.b/helper",
+            "ping".to_string(),
+            serde_json::json!("nope"),
+        );
+
+        assert_eq!(
+            state_snapshot(&runtime_state, "com.pkg.a/helper").get("ping"),
+            Some(&serde_json::json!("ok"))
+        );
     }
 }
 

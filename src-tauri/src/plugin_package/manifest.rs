@@ -84,6 +84,14 @@ impl PluginPackageManifest {
             .and_then(|settings| settings.schema.as_deref())
     }
 
+    pub fn settings_ui_visual(&self) -> Option<&str> {
+        self.v4
+            .contributes
+            .settings
+            .as_ref()
+            .and_then(|settings| settings.ui.as_deref())
+    }
+
     pub fn runtime_v4(&self) -> Option<&PluginRuntimeV4> {
         self.v4.runtime.as_ref()
     }
@@ -291,6 +299,17 @@ impl PluginContributesV4 {
         }
         if let Some(settings) = &self.settings {
             settings.validate()?;
+            if let Some(ui) = &settings.ui {
+                let references_config_visual = self
+                    .visuals
+                    .iter()
+                    .any(|visual| visual.id == *ui && visual.kind.as_deref() == Some("config"));
+                if !references_config_visual {
+                    return Err(format!(
+                        "contributes.settings.ui must reference an existing contributes.visuals id with kind 'config' (missing '{ui}')"
+                    ));
+                }
+            }
         }
 
         Ok(())
@@ -315,6 +334,13 @@ pub struct PluginVisualContributionV4 {
 impl PluginVisualContributionV4 {
     fn validate(&self) -> Result<(), String> {
         validate_export_name("contributes.visuals", &self.id)?;
+        if let Some(kind) = &self.kind {
+            if !matches!(kind.as_str(), "overlay" | "config" | "external") {
+                return Err(
+                    "contributes.visuals.kind must be overlay, config, or external".to_string(),
+                );
+            }
+        }
         validate_js_entry("contributes.visuals.entry", &self.entry)?;
         if let Some(size) = self.default_size {
             if size[0] <= 0.0 || size[1] <= 0.0 {
@@ -424,13 +450,13 @@ impl PluginCommandContributionV4 {
 #[serde(deny_unknown_fields)]
 pub struct PluginSettingsContributionV4 {
     pub schema: Option<String>,
-    pub ui: Option<serde_json::Value>,
+    pub ui: Option<String>,
 }
 
 impl PluginSettingsContributionV4 {
     fn validate(&self) -> Result<(), String> {
-        if self.ui.is_some() {
-            return Err("contributes.settings.ui is not supported yet".to_string());
+        if let Some(ui) = &self.ui {
+            validate_export_name("contributes.settings.ui", ui)?;
         }
         if let Some(schema) = &self.schema {
             validate_relative_plugin_path("contributes.settings.schema", schema)?;
@@ -679,7 +705,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_v4_settings_ui() {
+    fn accepts_v4_settings_ui_referencing_config_visual() {
         let raw = serde_json::json!({
             "schemaVersion": "bakingrl.plugin/4",
             "id": "com.example.settings-ui",
@@ -687,17 +713,49 @@ mod tests {
             "version": "1.0.0",
             "bakingrlApi": "2.0.0",
             "contributes": {
-                "settings": {
-                    "ui": {
-                        "mode": "compact"
+                "visuals": [
+                    {
+                        "id": "settingsPanel",
+                        "kind": "config",
+                        "entry": "dist/settings-panel.js"
                     }
+                ],
+                "settings": {
+                    "ui": "settingsPanel"
+                }
+            }
+        })
+        .to_string();
+
+        let manifest = PluginPackageManifest::parse(&raw).unwrap();
+        assert_eq!(manifest.settings_ui_visual(), Some("settingsPanel"));
+    }
+
+    #[test]
+    fn rejects_v4_settings_ui_without_config_visual() {
+        let raw = serde_json::json!({
+            "schemaVersion": "bakingrl.plugin/4",
+            "id": "com.example.settings-ui",
+            "name": "Settings UI",
+            "version": "1.0.0",
+            "bakingrlApi": "2.0.0",
+            "contributes": {
+                "visuals": [
+                    {
+                        "id": "settingsPanel",
+                        "kind": "overlay",
+                        "entry": "dist/settings-panel.js"
+                    }
+                ],
+                "settings": {
+                    "ui": "settingsPanel"
                 }
             }
         })
         .to_string();
 
         let error = PluginPackageManifest::parse(&raw).unwrap_err();
-        assert!(error.contains("contributes.settings.ui is not supported yet"));
+        assert!(error.contains("contributes.settings.ui must reference"));
     }
 
     #[test]
