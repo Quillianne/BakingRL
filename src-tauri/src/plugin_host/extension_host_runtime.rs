@@ -23,13 +23,13 @@ use super::settings_contract::{read_package_secret, read_package_secret_configur
 use super::sidecar_runtime::{SidecarRuntimeController, SidecarRuntimeSpec};
 use crate::bus::{BusEvent, EventBus};
 use crate::models::GameEvent;
-use crate::plugin_package::manifest::PluginRuntimeSidecarActivationV3;
-use crate::plugin_package::permissions::EffectivePackagePermissions;
+use crate::plugin_package::manifest::PluginRuntimeSidecarActivationV4;
 use crate::registry::Registry;
 
 const MAX_CRASHES_IN_WINDOW: usize = 3;
 const CRASH_WINDOW: Duration = Duration::from_secs(60);
 const RESTART_DELAY: Duration = Duration::from_millis(500);
+const STATE_HUB_FILE: &str = "runtime-state.json";
 
 #[derive(Debug, Error)]
 pub enum ExtensionHostRuntimeError {
@@ -85,7 +85,6 @@ pub struct ExtensionHostRuntimeSpec {
     pub package_settings_path: PathBuf,
     pub service_imports: Vec<String>,
     pub service_methods: HashMap<String, Vec<String>>,
-    pub permissions: EffectivePackagePermissions,
     pub settings: serde_json::Value,
     pub sidecars: Vec<SidecarRuntimeSpec>,
     pub webviews: HashMap<String, ExtensionHostWebviewSpec>,
@@ -282,11 +281,11 @@ impl Drop for ExtensionHostRuntimeManager {
 #[derive(Clone)]
 struct ExtensionHostContext {
     package_id: String,
+    runtime_api: Option<semver::VersionReq>,
     storage_root: PathBuf,
     package_settings_path: PathBuf,
     service_imports: Vec<String>,
     service_methods: HashMap<String, Vec<String>>,
-    permissions: EffectivePackagePermissions,
     bus: Arc<EventBus>,
     bus_subscriptions: Arc<Mutex<HashSet<String>>>,
     registry: Arc<Registry>,
@@ -427,6 +426,7 @@ struct ExtensionHostBootstrapSpec {
     package_id: String,
     package_root: String,
     entry_url: String,
+    runtime_api: Option<String>,
     storage_root: String,
     settings: serde_json::Value,
     service_imports: Vec<String>,
@@ -482,6 +482,10 @@ fn spawn_extension_host_runtime(
         package_id: spec.package_id.clone(),
         package_root: package_root.to_string_lossy().to_string(),
         entry_url,
+        runtime_api: spec
+            .runtime_api
+            .as_ref()
+            .map(std::string::ToString::to_string),
         storage_root: spec.storage_root.to_string_lossy().to_string(),
         settings: spec.settings.clone(),
         service_imports: spec.service_imports.clone(),
@@ -505,11 +509,11 @@ fn spawn_extension_host_runtime(
     };
     let context = ExtensionHostContext {
         package_id: spec.package_id,
+        runtime_api: spec.runtime_api.clone(),
         storage_root: spec.storage_root,
         package_settings_path: spec.package_settings_path,
         service_imports: spec.service_imports,
         service_methods: spec.service_methods,
-        permissions: spec.permissions,
         bus,
         bus_subscriptions: Arc::new(Mutex::new(HashSet::new())),
         registry,
@@ -527,7 +531,7 @@ fn spawn_extension_host_runtime(
     for sidecar in context
         .sidecar_specs
         .values()
-        .filter(|sidecar| sidecar.activation == PluginRuntimeSidecarActivationV3::OnActivation)
+        .filter(|sidecar| sidecar.activation == PluginRuntimeSidecarActivationV4::OnEnable)
     {
         if let Err(err) = context
             .sidecars
@@ -966,9 +970,6 @@ fn spawn_bus_forwarder(
             match bus_rx.try_recv() {
                 Ok(event) => {
                     let name = event.name().to_string();
-                    if !context.permissions.can_read_bus(&name) {
-                        continue;
-                    }
                     if !is_bus_subscribed(&context.bus_subscriptions, &name) {
                         continue;
                     }
@@ -1096,6 +1097,9 @@ fn handle_host_request(
         "bus/subscribe" => bus_subscribe(context, params),
         "bus/unsubscribe" => bus_unsubscribe(context, params),
         "bus/emit" => bus_emit(context, params),
+        "telemetryHub/subscribe" => bus_subscribe(context, params),
+        "telemetryHub/unsubscribe" => bus_unsubscribe(context, params),
+        "telemetryHub/publish" => telemetry_hub_publish(context, params),
         "registry/get" => registry_get(context, params),
         "registry/set" => registry_set(context, params),
         "registry/entries" => registry_entries(context),
@@ -1108,16 +1112,9 @@ fn handle_host_request(
         "sidecars/stop" => sidecar_stop(context, params),
         "sidecars/restart" => sidecar_restart(context, params),
         "sidecars/call" => sidecar_call(context, params),
-        "telemetry/event" => {
-            emit_runtime_log(
-                &context.app_handle,
-                "extensionHost",
-                runtime_key,
-                "telemetry",
-                &params.to_string(),
-            );
-            Ok(serde_json::json!({ "ok": true }))
-        }
+        "telemetry/event" => telemetry_event(context, params),
+        "stateHub/read" => state_hub_read(context, params),
+        "stateHub/write" => state_hub_write(context, params),
         "webviews/open" => webview_open(runtime_key, context, params),
         "webviews/close" => webview_close(runtime_key, context, params),
         "overlays/list" => Ok(serde_json::json!([])),
@@ -1152,7 +1149,7 @@ fn register_service(
     }
     context.service_router.insert(
         service_ref.clone(),
-        ServiceCallClient::new(
+        ServiceCallClient::new_extension_host(
             format!("extensionHost:{}", context.package_id),
             context.service_call_tx.clone(),
         ),
@@ -1213,12 +1210,6 @@ fn bus_subscribe(
     params: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let event_name = required_string(&params, "eventName")?;
-    if !context.permissions.can_read_bus(&event_name) {
-        return Err(format!(
-            "Package '{}' cannot subscribe to '{}'.",
-            context.package_id, event_name
-        ));
-    }
     context.bus_subscriptions.lock().unwrap().insert(event_name);
     Ok(serde_json::json!({ "ok": true }))
 }
@@ -1241,12 +1232,6 @@ fn bus_emit(
     params: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let event_name = required_string(&params, "eventName")?;
-    if !context.permissions.can_publish_bus(&event_name) {
-        return Err(format!(
-            "Package '{}' cannot publish '{}'.",
-            context.package_id, event_name
-        ));
-    }
     let payload = params
         .get("payload")
         .cloned()
@@ -1258,17 +1243,54 @@ fn bus_emit(
     Ok(serde_json::json!({ "ok": true }))
 }
 
+fn telemetry_hub_publish(
+    context: &ExtensionHostContext,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let event_name = required_string(&params, "eventName")?;
+    let payload = params
+        .get("payload")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    bus_emit(
+        context,
+        serde_json::json!({
+            "eventName": event_name,
+            "payload": payload
+        }),
+    )
+}
+
+fn telemetry_event(
+    context: &ExtensionHostContext,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let name = required_string(&params, "name")?;
+    let properties = params
+        .get("properties")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    emit_runtime_log(
+        &context.app_handle,
+        "extensionHost",
+        &context.package_id,
+        "telemetry",
+        &params.to_string(),
+    );
+    telemetry_hub_publish(
+        context,
+        serde_json::json!({
+            "eventName": name,
+            "payload": properties
+        }),
+    )
+}
+
 fn registry_get(
     context: &ExtensionHostContext,
     params: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let key = required_string(&params, "key")?;
-    if !context.permissions.can_read_registry(&key) {
-        return Err(format!(
-            "Package '{}' cannot read registry key '{}'.",
-            context.package_id, key
-        ));
-    }
     Ok(context
         .registry
         .get(&key)
@@ -1280,12 +1302,6 @@ fn registry_set(
     params: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let key = required_string(&params, "key")?;
-    if !context.permissions.can_write_registry(&key) {
-        return Err(format!(
-            "Package '{}' cannot write registry key '{}'.",
-            context.package_id, key
-        ));
-    }
     let value = params
         .get("value")
         .cloned()
@@ -1295,12 +1311,7 @@ fn registry_set(
 }
 
 fn registry_entries(context: &ExtensionHostContext) -> Result<serde_json::Value, String> {
-    let entries = context
-        .registry
-        .entries()
-        .into_iter()
-        .filter(|entry| context.permissions.can_read_registry(&entry.key))
-        .collect::<Vec<_>>();
+    let entries = context.registry.entries().into_iter().collect::<Vec<_>>();
     serde_json::to_value(entries).map_err(|err| err.to_string())
 }
 
@@ -1309,18 +1320,6 @@ fn storage_read_text(
     params: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let uri = required_string(&params, "uri")?;
-    if !context
-        .permissions
-        .storage
-        .read
-        .iter()
-        .any(|pattern| pattern == "plugin://self/*")
-    {
-        return Err(format!(
-            "Package '{}' cannot read storage URI '{}'.",
-            context.package_id, uri
-        ));
-    }
     let path = resolve_storage_uri(&context.storage_root, &uri)?;
     fs::read_to_string(path)
         .map(serde_json::Value::String)
@@ -1337,23 +1336,92 @@ fn storage_write_text(
         .and_then(serde_json::Value::as_str)
         .unwrap_or("")
         .to_string();
-    if !context
-        .permissions
-        .storage
-        .write
-        .iter()
-        .any(|pattern| pattern == "plugin://self/*")
-    {
-        return Err(format!(
-            "Package '{}' cannot write storage URI '{}'.",
-            context.package_id, uri
-        ));
-    }
     let path = resolve_storage_uri(&context.storage_root, &uri)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|err| err.to_string())?;
     }
     fs::write(path, contents).map_err(|err| err.to_string())?;
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+fn read_state_hub(
+    context: &ExtensionHostContext,
+) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    let path = state_hub_path(&context.storage_root);
+    match fs::read_to_string(path.clone()) {
+        Ok(raw) if raw.trim().is_empty() => Ok(serde_json::Map::new()),
+        Ok(raw) => {
+            let value = serde_json::from_str::<serde_json::Value>(&raw).map_err(|err| {
+                format!(
+                    "Unable to read state hub JSON from '{}': {}",
+                    path.display(),
+                    err
+                )
+            })?;
+            value.as_object().cloned().ok_or_else(|| {
+                format!(
+                    "State hub file '{}' must contain a JSON object.",
+                    path.display()
+                )
+            })
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(serde_json::Map::new()),
+        Err(err) => Err(format!(
+            "Unable to read state hub file '{}': {}",
+            path.display(),
+            err
+        )),
+    }
+}
+
+fn write_state_hub(
+    context: &ExtensionHostContext,
+    state: serde_json::Map<String, serde_json::Value>,
+) -> Result<(), String> {
+    let path = state_hub_path(&context.storage_root);
+    let payload = serde_json::Value::Object(state);
+    let raw = serde_json::to_string_pretty(&payload).map_err(|err| {
+        format!(
+            "Unable to serialize state hub file '{}': {}",
+            path.display(),
+            err
+        )
+    })?;
+    fs::write(&path, raw).map_err(|err| {
+        format!(
+            "Unable to write state hub file '{}': {}",
+            path.display(),
+            err
+        )
+    })?;
+    Ok(())
+}
+
+fn state_hub_path(storage_root: &Path) -> PathBuf {
+    storage_root.join(STATE_HUB_FILE)
+}
+
+fn state_hub_read(
+    context: &ExtensionHostContext,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let key = required_string(&params, "key")?;
+    let state = read_state_hub(context)?;
+    Ok(state.get(&key).cloned().unwrap_or(serde_json::Value::Null))
+}
+
+fn state_hub_write(
+    context: &ExtensionHostContext,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let key = required_string(&params, "key")?;
+    let value = params
+        .get("value")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let mut state = read_state_hub(context)?;
+    state.insert(key, value);
+    write_state_hub(context, state)?;
     Ok(serde_json::json!({ "ok": true }))
 }
 
@@ -1517,7 +1585,12 @@ fn webview_open(
         .get("options")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
-    let path = webview_route(&context.package_id, &id, webview)?;
+    let path = webview_route(
+        &context.package_id,
+        &id,
+        webview,
+        context.runtime_api.as_ref(),
+    )?;
     let label = webview_window_label(&context.package_id, &id);
     let title = webview_option_string(&options, "title")
         .or_else(|| webview.title.clone())
@@ -1576,6 +1649,7 @@ fn webview_route(
     package_id: &str,
     id: &str,
     webview: &ExtensionHostWebviewSpec,
+    runtime_api: Option<&semver::VersionReq>,
 ) -> Result<String, String> {
     if let Some(route) = webview
         .route
@@ -1592,6 +1666,9 @@ fn webview_route(
         .ok_or_else(|| format!("Webview '{id}' must declare entry or path."))?;
     let mut query = url::form_urlencoded::Serializer::new(String::new());
     query.append_pair(source.0, source.1);
+    if let Some(runtime_api) = runtime_api {
+        query.append_pair("runtimeApi", &runtime_api.to_string());
+    }
     Ok(format!(
         "/plugin-webview/{}/{}?{}",
         encode_path_segment(package_id),

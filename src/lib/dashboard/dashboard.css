@@ -353,10 +353,6 @@
   line-height: 1.55;
 }
 
-.obs-copy-actions {
-  margin-top: -2px;
-}
-
 .metric-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1531,101 +1527,23 @@ pre {
   overflow-wrap: anywhere;
 }
 
-.permissions-view,
-.permission-card,
 .technical-details {
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
 
-.permission-summary {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  width: fit-content;
-  padding: 6px 10px;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-  background: var(--bg-panel-hover);
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.permission-count {
-  display: inline-grid;
-  place-items: center;
-  min-width: 20px;
-  height: 20px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-  color: var(--accent);
-}
-
-.permission-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 10px;
-}
-
-.permission-grid.expanded {
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-}
-
-.permission-card {
-  padding: 12px;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--bg-dark) 28%, transparent);
-}
-
-.permission-card h4,
 .technical-details h4 {
   margin: 0;
   color: var(--text-primary);
   font-size: 12px;
 }
 
-.permission-row {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-
-.permission-label {
-  color: var(--text-muted);
-  font-size: 11px;
-  font-weight: 750;
-  text-transform: uppercase;
-}
-
-.permission-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-}
-
-.permission-chip {
-  max-width: 100%;
-  padding: 3px 6px;
-  border-radius: 999px;
-  background: var(--bg-panel-hover);
-  color: var(--text-secondary);
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 11px;
-  overflow-wrap: anywhere;
-}
-
-.permission-empty,
-.permission-none {
-  color: var(--text-muted);
-  font-size: 12px;
-}
-
-.permission-none {
+.empty-note {
   margin: 0;
+  color: var(--text-muted);
   padding: 10px;
+  font-size: 12px;
   border: 1px dashed var(--border-color);
   border-radius: var(--radius-sm);
 }
@@ -2339,18 +2257,8 @@ pre {
 .install-modal .install-identity,
 .install-modal .install-metrics,
 .install-modal .security-strip,
-.install-modal .technical-details,
-.install-modal .modal-actions {
+.install-modal .technical-details {
   flex: none;
-}
-
-.install-modal .permissions-view {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
-  overscroll-behavior: contain;
-  padding-right: 4px;
-  scrollbar-gutter: stable;
 }
 
 .modal-heading {

@@ -305,24 +305,6 @@ impl Default for AppBehaviorSettings {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ObsSettings {
-    pub host: String,
-    pub port: u16,
-    #[serde(default)]
-    pub access_token: String,
-}
-
-impl Default for ObsSettings {
-    fn default() -> Self {
-        Self {
-            host: "127.0.0.1".to_string(),
-            port: 8080,
-            access_token: String::new(),
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SecuritySettings {
     #[serde(default)]
     pub plugins_safe_mode: bool,
@@ -432,21 +414,12 @@ impl TelemetryConnectionStatus {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ObsGatewayStatus {
-    pub running: bool,
-    pub address: String,
-    pub message: Option<String>,
-}
-
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct AppSettings {
     #[serde(default)]
     pub behavior: AppBehaviorSettings,
     #[serde(default)]
     pub security: SecuritySettings,
-    #[serde(default)]
-    pub obs: ObsSettings,
     #[serde(default)]
     pub overlay: OverlaySettings,
     #[serde(default)]
@@ -502,7 +475,8 @@ pub struct OverlayLayer {
 
 /// Host-owned composition that can be routed to an overlay runtime.
 ///
-/// The overlay runtime is the display surface (in-game window or OBS route).
+/// The overlay runtime is the display surface, such as the in-game window or a
+/// plugin-owned external surface.
 /// The layout is the editable content model rendered on that surface.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct OverlayLayout {

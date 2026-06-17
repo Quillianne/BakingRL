@@ -4,7 +4,6 @@
   import { invoke } from "@tauri-apps/api/core";
   import { adapter } from "$lib/adapter/index";
   import { mountPluginWebview, type PluginWebviewHandle } from "$lib/pluginWebview";
-  import type { AppSettings } from "$lib/dashboard/types";
   import type { GameEventFrame } from "$lib/rlTelemetry";
 
   const { data } = $props();
@@ -13,15 +12,6 @@
   let message = $state("");
 
   type TelemetryCallback = (event: unknown) => void;
-
-  async function configureAdapter() {
-    try {
-      const settings = await invoke<AppSettings>("get_app_settings");
-      adapter.configureGateway(settings.obs.host, settings.obs.port, settings.obs.access_token);
-    } catch {
-      // Browser fallback keeps adapter defaults.
-    }
-  }
 
   function publishTelemetry(callbacks: Set<TelemetryCallback>, event: unknown) {
     for (const callback of callbacks) callback(event);
@@ -44,7 +34,6 @@
 
     async function mount() {
       if (!root) return;
-      await configureAdapter();
       const settings = await packageSettings();
       const dimensions = {
         width: Math.max(1, root.clientWidth || window.innerWidth),
@@ -70,14 +59,15 @@
       }
 
       if (data.path) {
-        webviewHandle = mountPluginWebview({
-          root,
-          src: adapter.packageHtmlUrl(data.packageId, data.path, Date.now()),
-          packageId: data.packageId,
-          exportName: data.webviewId,
-          item: {
-            id: data.webviewId,
-            name: data.webviewId,
+      webviewHandle = mountPluginWebview({
+        root,
+        src: adapter.packageHtmlUrl(data.packageId, data.path, Date.now()),
+        packageId: data.packageId,
+        exportName: data.webviewId,
+        runtimeApi: data.runtimeApi,
+        item: {
+          id: data.webviewId,
+          name: data.webviewId,
             width: dimensions.width,
             height: dimensions.height,
             settings: {}

@@ -14,7 +14,34 @@ use tauri::{AppHandle, Emitter};
 use thiserror::Error;
 use tracing::{error, info, warn};
 
-use crate::plugin_package::manifest::PluginRuntimeSidecarActivationV3;
+use crate::plugin_package::manifest::PluginRuntimeSidecarActivationV4;
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SidecarRuntimeStatus {
+    pub running: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_exit_code: Option<i32>,
+    pub restart_count: u32,
+    pub crash_count: u32,
+}
+
+impl Default for SidecarRuntimeStatus {
+    fn default() -> Self {
+        Self {
+            running: false,
+            last_exit_code: None,
+            restart_count: 0,
+            crash_count: 0,
+        }
+    }
+}
+
+#[derive(Default)]
+struct SidecarRuntimeState {
+    status_by_ref: HashMap<String, SidecarRuntimeStatus>,
+    package_state: HashMap<String, HashMap<String, serde_json::Value>>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SidecarProtocol {
@@ -57,7 +84,7 @@ pub struct SidecarRuntimeSpec {
     pub protocol: SidecarProtocol,
     pub args: Vec<String>,
     pub env: HashMap<String, String>,
-    pub activation: PluginRuntimeSidecarActivationV3,
+    pub activation: PluginRuntimeSidecarActivationV4,
 }
 
 impl SidecarRuntimeSpec {
@@ -235,6 +262,22 @@ impl SidecarRuntimeManager {
             .call(package_id, sidecar_name, method, params)
     }
 
+    pub fn status(&self, package_id: &str, sidecar_name: &str) -> Option<SidecarRuntimeStatus> {
+        self.controller.status(package_id, sidecar_name)
+    }
+
+    pub fn status_map(&self) -> HashMap<String, SidecarRuntimeStatus> {
+        self.controller.status_map()
+    }
+
+    pub fn state_get(&self, package_id: &str, key: &str) -> Option<serde_json::Value> {
+        self.controller.state_get(package_id, key)
+    }
+
+    pub fn state_set(&self, package_id: &str, key: String, value: serde_json::Value) {
+        self.controller.state_set(package_id, key, value)
+    }
+
     pub fn stop_all(&self) {
         self.controller.stop_all();
     }
@@ -249,9 +292,82 @@ impl Drop for SidecarRuntimeManager {
 #[derive(Clone, Default)]
 pub(crate) struct SidecarRuntimeController {
     handles: Arc<Mutex<HashMap<String, SidecarRuntimeHandle>>>,
+    state: Arc<Mutex<SidecarRuntimeState>>,
 }
 
 impl SidecarRuntimeController {
+    fn update_status<F>(&self, sidecar_ref: &str, update: F)
+    where
+        F: FnOnce(&mut SidecarRuntimeStatus),
+    {
+        let mut state = self.state.lock().unwrap();
+        let status = state
+            .status_by_ref
+            .entry(sidecar_ref.to_string())
+            .or_default();
+        update(status);
+    }
+
+    fn status(&self, package_id: &str, sidecar_name: &str) -> Option<SidecarRuntimeStatus> {
+        let sidecar_ref = format!("{package_id}/{sidecar_name}");
+        self.state
+            .lock()
+            .unwrap()
+            .status_by_ref
+            .get(&sidecar_ref)
+            .cloned()
+    }
+
+    fn status_map(&self) -> HashMap<String, SidecarRuntimeStatus> {
+        self.state.lock().unwrap().status_by_ref.clone()
+    }
+
+    fn state_get(&self, package_id: &str, key: &str) -> Option<serde_json::Value> {
+        self.state
+            .lock()
+            .unwrap()
+            .package_state
+            .get(package_id)
+            .and_then(|state| state.get(key).cloned())
+    }
+
+    fn state_set(&self, package_id: &str, key: String, value: serde_json::Value) {
+        let mut state = self.state.lock().unwrap();
+        state
+            .package_state
+            .entry(package_id.to_string())
+            .or_default()
+            .insert(key, value);
+    }
+
+    fn on_start(&self, sidecar_ref: &str) {
+        self.update_status(sidecar_ref, |status| {
+            status.running = true;
+            status.last_exit_code = None;
+        });
+    }
+
+    fn on_stop(&self, sidecar_ref: &str, exit_code: Option<i32>) {
+        self.update_status(sidecar_ref, |status| {
+            status.running = false;
+            status.last_exit_code = exit_code;
+        });
+    }
+
+    fn on_crash(&self, sidecar_ref: &str, exit_code: Option<i32>) {
+        self.update_status(sidecar_ref, |status| {
+            status.running = false;
+            status.last_exit_code = exit_code;
+            status.crash_count = status.crash_count.saturating_add(1);
+        });
+    }
+
+    fn on_restart(&self, sidecar_ref: &str) {
+        self.update_status(sidecar_ref, |status| {
+            status.restart_count = status.restart_count.saturating_add(1);
+        });
+    }
+
     pub fn reload_with_app_handle(
         &self,
         specs: Vec<SidecarRuntimeSpec>,
@@ -266,6 +382,7 @@ impl SidecarRuntimeController {
             .cloned()
             .collect();
         for sidecar_ref in stale {
+            self.on_stop(&sidecar_ref, None);
             if let Some(handle) = handles.remove(&sidecar_ref) {
                 handle.shutdown();
             }
@@ -284,8 +401,10 @@ impl SidecarRuntimeController {
             if let Some(handle) = handles.remove(&sidecar_ref) {
                 handle.shutdown();
             }
-            match spawn_sidecar_runtime(spec, app_handle.clone()) {
+            self.on_stop(&sidecar_ref, None);
+            match spawn_sidecar_runtime(spec, app_handle.clone(), self.state.clone()) {
                 Ok(handle) => {
+                    self.on_start(&sidecar_ref);
                     handles.insert(sidecar_ref, handle);
                 }
                 Err(err) => {
@@ -319,10 +438,12 @@ impl SidecarRuntimeController {
             return Ok(());
         }
         if let Some(handle) = handles.remove(&sidecar_ref) {
+            self.on_stop(&sidecar_ref, None);
             handle.shutdown();
         }
-        match spawn_sidecar_runtime(spec, app_handle.clone()) {
+        match spawn_sidecar_runtime(spec, app_handle.clone(), self.state.clone()) {
             Ok(handle) => {
+                self.on_start(&sidecar_ref);
                 handles.insert(sidecar_ref, handle);
                 Ok(())
             }
@@ -347,6 +468,7 @@ impl SidecarRuntimeController {
                 return Ok(false);
             };
             let spec = handle.spec.clone();
+            self.on_restart(&sidecar_ref);
             handle.shutdown();
             spec
         };
@@ -357,6 +479,7 @@ impl SidecarRuntimeController {
     pub fn stop(&self, package_id: &str, sidecar_name: &str) -> bool {
         let sidecar_ref = format!("{package_id}/{sidecar_name}");
         let mut handles = self.handles.lock().unwrap();
+        self.on_stop(&sidecar_ref, None);
         if let Some(handle) = handles.remove(&sidecar_ref) {
             handle.shutdown();
             true
@@ -386,6 +509,7 @@ impl SidecarRuntimeController {
     pub fn stop_all(&self) {
         let mut handles = self.handles.lock().unwrap();
         for (_, handle) in handles.drain() {
+            self.on_stop(&handle.spec.sidecar_ref(), None);
             handle.shutdown();
         }
     }
@@ -394,6 +518,7 @@ impl SidecarRuntimeController {
 fn spawn_sidecar_runtime(
     spec: SidecarRuntimeSpec,
     app_handle: AppHandle,
+    runtime_status: Arc<Mutex<SidecarRuntimeState>>,
 ) -> Result<SidecarRuntimeHandle, SidecarRuntimeError> {
     let sidecar_ref = spec.sidecar_ref();
     if spec.protocol != SidecarProtocol::JsonRpcStdio {
@@ -430,7 +555,16 @@ fn spawn_sidecar_runtime(
     let supervisor_rpc = rpc.clone();
     let thread = thread::Builder::new()
         .name(format!("bakingrl-sidecar-{sidecar_ref}"))
-        .spawn(move || supervise_child(sidecar_ref, child, shutdown_rx, app_handle, supervisor_rpc))
+        .spawn(move || {
+            supervise_child(
+                sidecar_ref,
+                child,
+                shutdown_rx,
+                app_handle,
+                supervisor_rpc,
+                runtime_status,
+            )
+        })
         .map_err(|source| SidecarRuntimeError::Spawn {
             sidecar_ref: spec.sidecar_ref(),
             source,
@@ -478,6 +612,7 @@ fn supervise_child(
     shutdown_rx: mpsc::Receiver<()>,
     app_handle: AppHandle,
     rpc: SidecarRpc,
+    runtime_status: Arc<Mutex<SidecarRuntimeState>>,
 ) {
     let stdin = child
         .stdin
@@ -491,6 +626,7 @@ fn supervise_child(
             stream,
             app_handle.clone(),
             rpc.clone(),
+            runtime_status.clone(),
         )
     });
     let stderr = child
@@ -505,28 +641,33 @@ fn supervise_child(
                 send_jsonrpc_notification(stdin, "bakingrl/shutdown", serde_json::json!({}));
             }
             let start = std::time::Instant::now();
-            loop {
+            let sidecar_status = loop {
                 match child.try_wait() {
-                    Ok(Some(_)) => break,
+                    Ok(Some(status)) => {
+                        break status.code();
+                    }
                     Ok(None) if start.elapsed() < Duration::from_secs(2) => {
                         thread::sleep(Duration::from_millis(25));
                     }
                     _ => {
                         let _ = child.kill();
-                        let _ = child.wait();
-                        break;
+                        break child.wait().ok().and_then(|status| status.code());
                     }
                 }
-            }
+            };
+            set_sidecar_stopped(&runtime_status, &sidecar_ref, sidecar_status);
             info!("Sidecar runtime '{}' stopped.", sidecar_ref);
             break;
         }
         match child.try_wait() {
             Ok(Some(status)) => {
+                let exit_code = status.code();
                 if status.success() {
                     info!("Sidecar runtime '{}' exited with {}.", sidecar_ref, status);
+                    set_sidecar_stopped(&runtime_status, &sidecar_ref, exit_code);
                 } else {
                     let message = format!("Sidecar runtime exited with {status}.");
+                    set_sidecar_crash(&runtime_status, &sidecar_ref, exit_code);
                     warn!("Sidecar '{}': {}", sidecar_ref, message);
                     emit_runtime_error(&app_handle, "sidecar", &sidecar_ref, &message);
                 }
@@ -535,6 +676,7 @@ fn supervise_child(
             Ok(None) => thread::sleep(Duration::from_millis(100)),
             Err(err) => {
                 let message = format!("Unable to inspect sidecar process: {err}");
+                set_sidecar_crash(&runtime_status, &sidecar_ref, None);
                 error!("Sidecar '{}': {}", sidecar_ref, message);
                 emit_runtime_error(&app_handle, "sidecar", &sidecar_ref, &message);
                 break;
@@ -558,6 +700,7 @@ fn spawn_stdout_reader<R>(
     stream: R,
     app_handle: AppHandle,
     rpc: SidecarRpc,
+    runtime_state: Arc<Mutex<SidecarRuntimeState>>,
 ) -> thread::JoinHandle<()>
 where
     R: std::io::Read + Send + 'static,
@@ -568,7 +711,13 @@ where
             match serde_json::from_str::<serde_json::Value>(&line) {
                 Ok(message) if is_jsonrpc_message(&message) => {
                     if !rpc.resolve_response(&message) {
-                        handle_sidecar_jsonrpc(&sidecar_ref, &stdin, &app_handle, message);
+                        handle_sidecar_jsonrpc(
+                            &sidecar_ref,
+                            &stdin,
+                            &app_handle,
+                            runtime_state.clone(),
+                            message,
+                        );
                     }
                 }
                 _ => {
@@ -590,10 +739,95 @@ fn is_jsonrpc_message(message: &serde_json::Value) -> bool {
         .is_some_and(|version| version == "2.0")
 }
 
+fn required_string(params: &serde_json::Value, field: &str) -> Result<String, String> {
+    params
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .map(|value| value.to_string())
+        .ok_or_else(|| format!("Sidecar JSON-RPC request parameter '{field}' is required."))
+}
+
+fn sidecar_package_id(sidecar_ref: &str) -> &str {
+    sidecar_ref.split('/').next().unwrap_or_default()
+}
+
+fn set_sidecar_stopped(
+    runtime_state: &Arc<Mutex<SidecarRuntimeState>>,
+    sidecar_ref: &str,
+    exit_code: Option<i32>,
+) {
+    let mut state = runtime_state.lock().unwrap();
+    let status = state
+        .status_by_ref
+        .entry(sidecar_ref.to_string())
+        .or_default();
+    status.running = false;
+    status.last_exit_code = exit_code;
+}
+
+fn set_sidecar_crash(
+    runtime_state: &Arc<Mutex<SidecarRuntimeState>>,
+    sidecar_ref: &str,
+    exit_code: Option<i32>,
+) {
+    let mut state = runtime_state.lock().unwrap();
+    let status = state
+        .status_by_ref
+        .entry(sidecar_ref.to_string())
+        .or_default();
+    status.running = false;
+    status.last_exit_code = exit_code;
+    status.crash_count = status.crash_count.saturating_add(1);
+}
+
+fn state_get(
+    runtime_state: &Arc<Mutex<SidecarRuntimeState>>,
+    sidecar_ref: &str,
+    key: &str,
+) -> Option<serde_json::Value> {
+    let package_id = sidecar_package_id(sidecar_ref);
+    runtime_state
+        .lock()
+        .unwrap()
+        .package_state
+        .get(package_id)
+        .and_then(|state| state.get(key).cloned())
+}
+
+fn state_set(
+    runtime_state: &Arc<Mutex<SidecarRuntimeState>>,
+    sidecar_ref: &str,
+    key: String,
+    value: serde_json::Value,
+) {
+    let package_id = sidecar_package_id(sidecar_ref);
+    runtime_state
+        .lock()
+        .unwrap()
+        .package_state
+        .entry(package_id.to_string())
+        .or_default()
+        .insert(key, value);
+}
+
+fn get_status_snapshot(
+    runtime_state: &Arc<Mutex<SidecarRuntimeState>>,
+    sidecar_ref: &str,
+) -> SidecarRuntimeStatus {
+    runtime_state
+        .lock()
+        .unwrap()
+        .status_by_ref
+        .get(sidecar_ref)
+        .cloned()
+        .unwrap_or_default()
+}
+
 fn handle_sidecar_jsonrpc(
     sidecar_ref: &str,
     stdin: &Option<Arc<Mutex<ChildStdin>>>,
     app_handle: &AppHandle,
+    runtime_state: Arc<Mutex<SidecarRuntimeState>>,
     message: serde_json::Value,
 ) {
     let method = message
@@ -630,6 +864,23 @@ fn handle_sidecar_jsonrpc(
                 &params.to_string(),
             );
             Ok(serde_json::json!({ "ok": true }))
+        }
+        "state/get" => required_string(&params, "key").map(|key| {
+            let value =
+                state_get(&runtime_state, sidecar_ref, &key).unwrap_or(serde_json::Value::Null);
+            serde_json::json!({ "value": value })
+        }),
+        "state/set" => required_string(&params, "key").map(|key| {
+            let value = params
+                .get("value")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            state_set(&runtime_state, sidecar_ref, key, value);
+            serde_json::json!({ "ok": true })
+        }),
+        "runtime/status" => {
+            let status = get_status_snapshot(&runtime_state, sidecar_ref);
+            Ok(serde_json::json!(status))
         }
         _ => Err(format!(
             "Sidecar JSON-RPC method '{method}' is not supported."
@@ -721,6 +972,30 @@ fn emit_runtime_log(app_handle: &AppHandle, kind: &str, source: &str, stream: &s
         line,
     };
     let _ = app_handle.emit("bakingrl-runtime-log", payload);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_status_starts_empty() {
+        let manager = SidecarRuntimeManager::default();
+        assert_eq!(manager.status("pkg", "helper"), None);
+        let snapshot = manager.status_map();
+        assert!(snapshot.is_empty());
+    }
+
+    #[test]
+    fn runtime_state_set_and_get_are_package_local() {
+        let manager = SidecarRuntimeManager::default();
+        manager.state_set("com.pkg.a", "ping".to_string(), serde_json::json!("ok"));
+        assert_eq!(
+            manager.state_get("com.pkg.a", "ping"),
+            Some(serde_json::json!("ok"))
+        );
+        assert_eq!(manager.state_get("com.pkg.b", "ping"), None);
+    }
 }
 
 #[derive(Clone, serde::Serialize)]

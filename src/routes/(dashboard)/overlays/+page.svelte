@@ -78,23 +78,6 @@
 </div>
 
 <div class="section-stack">
-  <section class="studio-panel">
-    <div class="panel-heading">
-      <div>
-        <h2>{dashboard.t("overlays.obsTitle")}</h2>
-      </div>
-    </div>
-    <div class="card-actions obs-copy-actions">
-      <button class="btn-outline" onclick={() => void dashboard.copyText(dashboard.streamUrl(), dashboard.t("overlays.generalUrl"))} disabled={!dashboard.obsBaseUrl}>
-        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M10 13a5 5 0 0 0 7.1 0l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1"></path>
-          <path d="M14 11a5 5 0 0 0-7.1 0l-2 2A5 5 0 0 0 12 20.1l1.1-1.1"></path>
-        </svg>
-        {dashboard.t("overlays.copyGeneralUrl")}
-      </button>
-    </div>
-  </section>
-
   {#if dashboard.overlayLayouts?.layouts.length}
     <section class="card-grid" aria-label={dashboard.t("overlays.layoutsTitle")}>
       {#each dashboard.overlayLayouts.layouts as layout (layout.id)}
@@ -153,7 +136,6 @@
             <button
               class="icon-button"
               onclick={() => void dashboard.openPreview(dashboard.layoutUrl(layout.id))}
-              disabled={!dashboard.obsBaseUrl}
               title={dashboard.t("common.preview")}
               aria-label={dashboard.t("common.preview")}
             >
@@ -165,7 +147,6 @@
             <button
               class="icon-button"
               onclick={() => void dashboard.copyText(dashboard.layoutUrl(layout.id), dashboard.t("common.copyUrl"))}
-              disabled={!dashboard.obsBaseUrl}
               title={dashboard.t("common.copyUrl")}
               aria-label={dashboard.t("common.copyUrl")}
             >

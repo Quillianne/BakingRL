@@ -5,6 +5,7 @@ export const load: PageLoad = ({ params, url }) => {
     packageId: params.packageId,
     webviewId: params.webviewId,
     entry: url.searchParams.get("entry") ?? "",
-    path: url.searchParams.get("path") ?? ""
+    path: url.searchParams.get("path") ?? "",
+    runtimeApi: url.searchParams.get("runtimeApi")
   };
 };

@@ -35,13 +35,10 @@ import type {
   OverlayLayout,
   OverlayLayoutCatalog,
   OverlayMonitor,
-  ObsGatewayStatus,
   PackageDescriptor,
   PageLayout,
   PagesFile,
   PendingInstall,
-  PermissionSection,
-  PermissionShape,
   PreparedPackageInstall,
   RecentActivityEntry,
   RegistryEntry,
@@ -78,10 +75,6 @@ async function waitForNextPaint() {
   });
 }
 
-function permissionValueList(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
-}
-
 function parseRuntimeApiVersion(value: string | null | undefined) {
   const parts = typeof value === "string" ? value.split(".").map((part) => Number(part)) : [];
   if (parts.length !== 3 || parts.some((part) => !Number.isInteger(part) || part < 0)) {
@@ -110,7 +103,6 @@ export class DashboardState {
   currentTheme = $state<ThemeId>(DEFAULT_THEME);
   confirmRequest = $state<ConfirmRequest | null>(null);
   telemetryStatus = $state<TelemetryConnectionStatus | null>(null);
-  obsGatewayStatus = $state<ObsGatewayStatus | null>(null);
   runtimeInfo = $state<RuntimeInfo | null>(null);
   telemetryHelpOpen = $state(false);
   telemetryHelpDontShow = $state(false);
@@ -126,15 +118,6 @@ export class DashboardState {
   developerFrameJson = $state(telemetryFrameTemplateJson("UpdateState"));
   toasts = $state<ToastMessage[]>([]);
 
-  get obsBaseUrl() {
-    return this.appSettings ? `http://${this.appSettings.obs.host}:${this.appSettings.obs.port}` : "";
-  }
-
-  get obsAccessTokenQuery() {
-    const token = this.appSettings?.obs.access_token;
-    return token ? `?token=${encodeURIComponent(token)}` : "";
-  }
-
   get telemetryConnected() {
     return this.telemetryStatus?.state === "connected";
   }
@@ -144,11 +127,6 @@ export class DashboardState {
     if (this.telemetryStatus.state === "connected") return this.t("common.connected");
     if (this.telemetryStatus.state === "connecting") return this.t("common.connecting");
     return this.t("common.disconnected");
-  }
-
-  get obsGatewayStatusLabel() {
-    if (!this.obsGatewayStatus) return this.t("common.loading");
-    return this.obsGatewayStatus.running ? this.t("common.running") : this.t("common.stopped");
   }
 
   get telemetryAddress() {
@@ -348,7 +326,6 @@ export class DashboardState {
     this.pages = await invoke<PagesFile>("get_pages");
     this.appSettings = await invoke<AppSettings>("get_app_settings");
     this.telemetryStatus = await invoke<TelemetryConnectionStatus>("get_telemetry_status");
-    this.obsGatewayStatus = await invoke<ObsGatewayStatus>("get_obs_gateway_status");
     this.overlayMonitors = await invoke<OverlayMonitor[]>("list_overlay_monitors");
     this.registryEntries = await invoke<RegistryEntry[]>("registry_entries");
   }
@@ -524,7 +501,7 @@ export class DashboardState {
   }
 
   inspectionCompatibilityLabel(inspection: BundleInspection) {
-    const status = this.runtimeApiCompatibility(inspection.manifest.compatibility?.runtimeApi);
+    const status = this.runtimeApiCompatibility(inspection.manifest.bakingrlApi);
     if (status === "compatible") return this.t("packages.compatible");
     if (status === "requires_newer_host") return this.t("packages.requiresNewerHost");
     if (status === "unknown_runtime_api") return this.t("packages.unknownRuntimeApi");
@@ -532,23 +509,21 @@ export class DashboardState {
   }
 
   hasInspectionCompatibilityIssue(inspection: BundleInspection) {
-    return this.runtimeApiCompatibility(inspection.manifest.compatibility?.runtimeApi) !== "compatible";
+    return this.runtimeApiCompatibility(inspection.manifest.bakingrlApi) !== "compatible";
   }
 
   inspectionCompatibilityClass(inspection: BundleInspection) {
-    const status = this.runtimeApiCompatibility(inspection.manifest.compatibility?.runtimeApi);
+    const status = this.runtimeApiCompatibility(inspection.manifest.bakingrlApi);
     if (status === "compatible") return "good";
     if (status === "requires_newer_host") return "warn";
     return "danger";
   }
 
   inspectionCompatibilityMessage(inspection: BundleInspection) {
-    const runtimeApi = inspection.manifest.compatibility?.runtimeApi;
-    const sdk = inspection.manifest.compatibility?.sdk;
-    const hostRange = this.runtimeInfo?.supportedRuntimeApi ?? ">=1.0.0 <2.0.0";
+    const runtimeApi = inspection.manifest.bakingrlApi;
+    const hostRange = this.runtimeInfo?.supportedRuntimeApi ?? "2.0.0";
     if (!runtimeApi) return this.t("packages.missingRuntimeApiMessage");
-    const sdkPart = sdk ? ` · SDK ${sdk}` : "";
-    return this.tx("packages.runtimeApiMessage", { runtimeApi, hostRange }) + sdkPart;
+    return this.tx("packages.runtimeApiMessage", { runtimeApi, hostRange });
   }
 
   removePackage(pkg: PackageDescriptor) {
@@ -848,11 +823,11 @@ export class DashboardState {
   }
 
   layoutUrl(layoutId: string) {
-    return `${this.obsBaseUrl}/overlay/layout/${encodeURIComponent(layoutId)}${this.obsAccessTokenQuery}`;
+    return `/overlay/layout/${encodeURIComponent(layoutId)}`;
   }
 
   streamUrl() {
-    return `${this.obsBaseUrl}/overlay/stream${this.obsAccessTokenQuery}`;
+    return "/overlay/stream";
   }
 
   async copyText(value: string, label: string) {
@@ -1073,16 +1048,10 @@ export class DashboardState {
   inspectionContributionCount(inspection: BundleInspection) {
     const contributes = inspection.manifest.contributes ?? {};
     return (
-      Object.keys(contributes.commands ?? {}).length +
-      Object.keys(contributes.visuals ?? {}).length +
-      Object.keys(contributes.services ?? {}).length +
-      Object.keys(contributes.views ?? {}).length +
-      Object.keys(contributes.assets ?? {}).length +
-      Object.keys(contributes.schemas ?? {}).length +
-      Object.keys(contributes.pages ?? {}).length +
-      Object.keys(contributes.overlays ?? {}).length +
-      Object.keys(contributes.webviews ?? {}).length +
-      Object.keys(contributes.configuration ?? {}).length
+      (contributes.commands?.length ?? 0) +
+      (contributes.visuals?.length ?? 0) +
+      (contributes.services?.length ?? 0) +
+      (contributes.settings ? 1 : 0)
     );
   }
 
@@ -1090,53 +1059,6 @@ export class DashboardState {
     if (inspection.signature_verified) return "verified";
     if (inspection.signature_present) return "invalid";
     return "missing";
-  }
-
-  permissionSections(permissions: PermissionShape | null | undefined): PermissionSection[] {
-    const bus = permissions?.bus ?? {};
-    const registry = permissions?.registry ?? {};
-    const network = permissions?.network ?? {};
-    const storage = permissions?.storage;
-    const storageRead = Array.isArray(storage) ? storage : storage?.read;
-    const storageWrite = Array.isArray(storage) ? storage : storage?.write;
-
-    return [
-      {
-        title: this.t("permissions.telemetryBus"),
-        rows: [
-          { label: this.t("permissions.readEvents"), values: permissionValueList(bus.read), emptyLabel: this.t("permissions.noReadEvents") },
-          { label: this.t("permissions.publishEvents"), values: permissionValueList(bus.publish), emptyLabel: this.t("permissions.noPublishEvents") }
-        ]
-      },
-      {
-        title: this.t("permissions.registry"),
-        rows: [
-          { label: this.t("permissions.readKeys"), values: permissionValueList(registry.read), emptyLabel: this.t("permissions.noReadKeys") },
-          { label: this.t("permissions.writeKeys"), values: permissionValueList(registry.write), emptyLabel: this.t("permissions.noWriteKeys") }
-        ]
-      },
-      {
-        title: this.t("permissions.network"),
-        rows: [
-          { label: this.t("permissions.httpHosts"), values: permissionValueList(network.http), emptyLabel: this.t("permissions.noHttp") },
-          { label: this.t("permissions.websocketHosts"), values: permissionValueList(network.websocket), emptyLabel: this.t("permissions.noWebsocket") }
-        ]
-      },
-      {
-        title: this.t("permissions.storage"),
-        rows: [
-          { label: this.t("permissions.readStorage"), values: permissionValueList(storageRead), emptyLabel: this.t("permissions.noReadStorage") },
-          { label: this.t("permissions.writeStorage"), values: permissionValueList(storageWrite), emptyLabel: this.t("permissions.noWriteStorage") }
-        ]
-      }
-    ];
-  }
-
-  permissionTotal(permissions: PermissionShape | null | undefined) {
-    return this.permissionSections(permissions).reduce(
-      (total, section) => total + section.rows.reduce((rowTotal, row) => rowTotal + row.values.length, 0),
-      0
-    );
   }
 
   loadDeveloperFrameTemplate() {

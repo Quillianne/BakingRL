@@ -9,6 +9,7 @@ interface HostSpec {
   packageId: string;
   packageRoot: string;
   entryUrl: string;
+  runtimeApi: string | null;
   storageRoot: string;
   settings: unknown;
   serviceImports: string[];
@@ -218,6 +219,36 @@ function settingsReader(settings: unknown) {
 
 function createContext() {
   const settings = settingsReader(spec.settings);
+  function subscribeEvents(
+    eventName: string,
+    callback: (event: unknown) => unknown | Promise<unknown>,
+    subscribeMethod: "bus/subscribe" | "telemetryHub/subscribe",
+    unsubscribeMethod: "bus/unsubscribe" | "telemetryHub/unsubscribe"
+  ) {
+    if (!eventName || typeof callback !== "function") {
+      throw new Error("bus.subscribe requires an event name and callback.");
+    }
+    let listeners = busListeners.get(eventName);
+    if (!listeners) {
+      listeners = new Set();
+      busListeners.set(eventName, listeners);
+      void rpc.request(subscribeMethod, { eventName }).catch((error) => {
+        console.error(`Unable to subscribe to event '${eventName}'.`, error);
+      });
+    }
+    listeners.add(callback);
+    return () => {
+      const current = busListeners.get(eventName);
+      current?.delete(callback);
+      if (current && current.size === 0) {
+        busListeners.delete(eventName);
+        void rpc.request(unsubscribeMethod, { eventName }).catch((error) => {
+          console.error(`Unable to unsubscribe from event '${eventName}'.`, error);
+        });
+      }
+    };
+  }
+
   const diagnostics = {
     log: (message: string, details?: unknown) =>
       rpc.request("diagnostics/log", { severity: "info", phase: "runtime", message, details }),
@@ -243,7 +274,6 @@ function createContext() {
     extensionPath: spec.packageRoot,
     storagePath: spec.storageRoot,
     settings,
-    configuration: settings,
     subscriptions,
     logger,
     commands: {
@@ -289,33 +319,30 @@ function createContext() {
     },
     bus: {
       subscribe(eventName: string, callback: (event: unknown) => unknown | Promise<unknown>) {
-        if (!eventName || typeof callback !== "function") {
-          throw new Error("bus.subscribe requires an event name and callback.");
-        }
-        let listeners = busListeners.get(eventName);
-        if (!listeners) {
-          listeners = new Set();
-          busListeners.set(eventName, listeners);
-          void rpc.request("bus/subscribe", { eventName }).catch((error) => {
-            console.error(`Unable to subscribe to bus event '${eventName}'.`, error);
-          });
-        }
-        listeners.add(callback);
-        return () => {
-          const current = busListeners.get(eventName);
-          current?.delete(callback);
-          if (current && current.size === 0) {
-            busListeners.delete(eventName);
-            void rpc.request("bus/unsubscribe", { eventName }).catch((error) => {
-              console.error(`Unable to unsubscribe from bus event '${eventName}'.`, error);
-            });
-          }
-        };
+        return subscribeEvents(
+          eventName,
+          callback,
+          "bus/subscribe",
+          "bus/unsubscribe"
+        );
       },
       emit(eventName: string, payload?: unknown) {
         void rpc.request("bus/emit", { eventName, payload: payload ?? null }).catch((error) => {
           console.error(`Unable to emit bus event '${eventName}'.`, error);
         });
+      }
+    },
+    telemetryHub: {
+      subscribe(eventName: string, callback: (event: unknown) => unknown | Promise<unknown>) {
+        return subscribeEvents(
+          eventName,
+          callback,
+          "telemetryHub/subscribe",
+          "telemetryHub/unsubscribe"
+        );
+      },
+      publish(eventName: string, payload?: unknown) {
+        return rpc.request("telemetryHub/publish", { eventName, payload: payload ?? null });
       }
     },
     registry: {
@@ -343,6 +370,18 @@ function createContext() {
     },
     telemetry: {
       event: (name: string, properties?: unknown) => rpc.request("telemetry/event", { name, properties })
+    },
+    stateHub: {
+      read(key: string) {
+        return rpc.request("stateHub/read", { key });
+      },
+      write(key: string, value: unknown) {
+        return rpc.request("stateHub/write", { key, value });
+      }
+    },
+    runtime: {
+      packageId: spec.packageId,
+      api: spec.runtimeApi
     },
     webviews: {
       declared: spec.webviews,

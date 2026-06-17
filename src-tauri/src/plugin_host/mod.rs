@@ -9,7 +9,7 @@ mod service_registry;
 mod settings_contract;
 pub(crate) mod sidecar_runtime;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -32,17 +32,14 @@ use crate::plugin_package::install::{
     download_bundle_to_file, inspect_bundle_file, install_bundle_from_file,
     parse_install_deep_link, InstallReceipt,
 };
-use crate::plugin_package::manifest::{
-    ConfigurationContributionV3, PluginContributesV3, PluginPackageManifest,
-};
-use crate::plugin_package::manifest::{HOST_RUNTIME_API_RANGE, HOST_RUNTIME_API_VERSION};
+use crate::plugin_package::manifest::PluginPackageManifest;
+use crate::plugin_package::manifest::HOST_RUNTIME_API_VERSION;
 use crate::plugin_package::marketplace::{
     catalog_for_index, developer_allows_key, fetch_verified_marketplace_index,
     find_marketplace_version, read_cached_marketplace_index, verified_developer_for_key,
     write_marketplace_cache, MarketplaceApprovedVersion, MarketplaceCatalog, MarketplaceIndex,
     OFFICIAL_MARKETPLACE_URL,
 };
-use crate::plugin_package::permissions::EffectivePackagePermissions;
 use crate::registry::Registry;
 use descriptors::{apply_graph_diagnostics, compatibility_for_manifest, descriptor_for_manifest};
 pub use descriptors::{
@@ -63,8 +60,11 @@ use package_files::{
     read_binary_package_file, read_json_package_file, safe_installed_package_dir,
     safe_package_relative_path,
 };
-use runtime_specs::{extension_host_specs_for_records, sidecar_specs_for_records};
-use service_registry::ServiceCallRouter;
+use runtime_specs::{
+    extension_host_specs_for_records, sidecar_service_specs_for_records, sidecar_specs_for_records,
+    SidecarServiceRuntimeSpec,
+};
+use service_registry::{ServiceCallClient, ServiceCallRouter};
 use settings_contract::{
     delete_package_secret as delete_keychain_package_secret, merge_package_settings,
     merge_package_settings_with_schema, package_secret_configured, read_package_settings_schema,
@@ -97,21 +97,6 @@ struct PackageRemovalStart {
     started: bool,
 }
 
-fn first_configuration<'a>(
-    contributes: &'a PluginContributesV3,
-) -> Option<&'a ConfigurationContributionV3> {
-    contributes.configuration.values().next()
-}
-
-fn first_configuration_page<'a>(
-    contributes: &'a PluginContributesV3,
-) -> Option<&'a ConfigurationContributionV3> {
-    contributes
-        .configuration
-        .values()
-        .find(|configuration| configuration.path.is_some())
-}
-
 pub struct PluginHost {
     app_handle: AppHandle,
     bus: Arc<EventBus>,
@@ -127,6 +112,7 @@ pub struct PluginHost {
     deleting_packages: Mutex<HashMap<String, PendingPackageDeletion>>,
     diagnostics: PluginDiagnosticsStore,
     service_router: ServiceCallRouter,
+    sidecar_services: Mutex<HashSet<String>>,
     #[allow(dead_code)]
     extension_host_runtimes: ExtensionHostRuntimeManager,
     #[allow(dead_code)]
@@ -165,13 +151,13 @@ impl PluginHost {
             deleting_packages: Mutex::new(HashMap::new()),
             diagnostics: PluginDiagnosticsStore::default(),
             service_router: ServiceCallRouter::default(),
+            sidecar_services: Mutex::new(HashSet::new()),
             extension_host_runtimes: ExtensionHostRuntimeManager::default(),
             sidecar_runtimes: SidecarRuntimeManager::default(),
         })
     }
 
     pub fn initialize(&self) {
-        self.ensure_app_settings();
         self.ensure_overlay_layouts();
         self.ensure_pages();
         self.reload_packages();
@@ -278,7 +264,13 @@ impl PluginHost {
             &self.package_settings_path,
         );
         let sidecar_specs = sidecar_specs_for_records(&records);
-        self.reload_runtimes_with_specs(&settings, extension_host_specs, sidecar_specs);
+        let sidecar_service_specs = sidecar_service_specs_for_records(&records);
+        self.reload_runtimes_with_specs(
+            &settings,
+            extension_host_specs,
+            sidecar_specs,
+            sidecar_service_specs,
+        );
         *self.records.lock().unwrap() = records;
         let packages = self.list_packages();
         self.emit_packages_changed(&packages);
@@ -288,7 +280,7 @@ impl PluginHost {
     fn reload_runtimes_from_current_records(&self) {
         let settings = self.load_app_settings();
         let package_settings = self.load_package_settings();
-        let (extension_host_specs, sidecar_specs) = {
+        let (extension_host_specs, sidecar_specs, sidecar_service_specs) = {
             let records = self.records.lock().unwrap();
             (
                 extension_host_specs_for_records(
@@ -297,9 +289,15 @@ impl PluginHost {
                     &self.package_settings_path,
                 ),
                 sidecar_specs_for_records(&records),
+                sidecar_service_specs_for_records(&records),
             )
         };
-        self.reload_runtimes_with_specs(&settings, extension_host_specs, sidecar_specs);
+        self.reload_runtimes_with_specs(
+            &settings,
+            extension_host_specs,
+            sidecar_specs,
+            sidecar_service_specs,
+        );
     }
 
     fn reload_runtimes_with_specs(
@@ -307,6 +305,7 @@ impl PluginHost {
         settings: &AppSettings,
         extension_host_specs: Vec<ExtensionHostRuntimeSpec>,
         sidecar_specs: Vec<SidecarRuntimeSpec>,
+        sidecar_service_specs: HashMap<String, SidecarServiceRuntimeSpec>,
     ) {
         if settings.security.plugins_safe_mode {
             self.diagnostics.push(PluginDiagnosticInput {
@@ -329,6 +328,7 @@ impl PluginHost {
             let _ = self
                 .sidecar_runtimes
                 .reload_with_app_handle(Vec::new(), self.app_handle.clone());
+            self.reconcile_sidecar_services(&HashMap::new());
             return;
         }
 
@@ -354,6 +354,7 @@ impl PluginHost {
             let _ = self
                 .sidecar_runtimes
                 .reload_with_app_handle(Vec::new(), self.app_handle.clone());
+            self.reconcile_sidecar_services(&HashMap::new());
             return;
         }
         if let Err(err) = self
@@ -372,6 +373,35 @@ impl PluginHost {
             self.diagnostics.clone(),
         ) {
             warn!("Unable to reload extension host runtimes: {}", err);
+        }
+        self.reconcile_sidecar_services(&sidecar_service_specs);
+    }
+
+    fn reconcile_sidecar_services(
+        &self,
+        sidecar_service_specs: &HashMap<String, SidecarServiceRuntimeSpec>,
+    ) {
+        let desired: HashSet<String> = sidecar_service_specs.keys().cloned().collect();
+        let mut registered = self.sidecar_services.lock().unwrap();
+        for service_ref in registered
+            .iter()
+            .filter(|service_ref| !desired.contains(*service_ref))
+        {
+            self.service_router.remove(service_ref);
+        }
+        registered.retain(|service_ref| desired.contains(service_ref));
+
+        for (service_ref, spec) in sidecar_service_specs {
+            self.service_router.insert(
+                service_ref.clone(),
+                ServiceCallClient::new_sidecar(
+                    format!("sidecar:{}", spec.sidecar_name),
+                    spec.package_id.clone(),
+                    spec.sidecar_name.clone(),
+                    self.sidecar_runtimes.controller(),
+                ),
+            );
+            registered.insert(service_ref.clone());
         }
     }
 
@@ -850,10 +880,12 @@ impl PluginHost {
         if !record.descriptor.enabled {
             return Err(format!("Package '{package_id}' is disabled."));
         }
-        let contributes = record.manifest.normalized_contributes_v3();
-        let export = contributes
+        let export = record
+            .manifest
+            .contributes_v4()
             .visuals
-            .get(export_name)
+            .iter()
+            .find(|visual| visual.id == export_name)
             .ok_or_else(|| format!("Visual export '{package_id}/{export_name}' does not exist."))?;
         fs::read_to_string(Path::new(&record.descriptor.path).join(&export.entry))
             .map_err(|e| format!("Unable to read visual export source: {e}"))
@@ -874,12 +906,14 @@ impl PluginHost {
         if !record.descriptor.enabled {
             return Err(format!("Package '{package_id}' is disabled."));
         }
-        let contributes = record.manifest.normalized_contributes_v3();
-        let export = contributes
+        let export = record
+            .manifest
+            .contributes_v4()
             .visuals
-            .get(export_name)
+            .iter()
+            .find(|visual| visual.id == export_name)
             .ok_or_else(|| format!("Visual export '{package_id}/{export_name}' does not exist."))?;
-        let Some(settings_path) = export.settings.as_deref() else {
+        let Some(settings_path) = export.instance_settings.as_deref() else {
             return Ok(None);
         };
         read_json_package_file(Path::new(&record.descriptor.path), settings_path).map(Some)
@@ -914,10 +948,12 @@ impl PluginHost {
         let records = self.records.lock().unwrap();
         self.require_enabled_record(&records, caller_package_id)?;
         let provider = self.require_enabled_record(&records, provider_package_id)?;
-        let contributes = provider.manifest.normalized_contributes_v3();
-        let export = contributes
+        let export = provider
+            .manifest
+            .contributes_v4()
             .services
-            .get(export_name)
+            .iter()
+            .find(|service| service.id == export_name)
             .ok_or_else(|| format!("Service export '{service_ref}' does not exist."))?;
         if !export.methods.iter().any(|allowed| allowed == method) {
             return Err(format!(
@@ -940,20 +976,10 @@ impl PluginHost {
             .await
     }
 
-    pub fn can_package_read_registry(&self, package_id: &str, key: &str) -> Result<(), String> {
+    pub fn can_package_read_registry(&self, package_id: &str, _key: &str) -> Result<(), String> {
         let records = self.records.lock().unwrap();
-        let record = self.require_enabled_record(&records, package_id)?;
-        if record
-            .descriptor
-            .effective_permissions
-            .can_read_registry(key)
-        {
-            Ok(())
-        } else {
-            Err(format!(
-                "Package '{package_id}' cannot read registry key '{key}'."
-            ))
-        }
+        self.require_enabled_record(&records, package_id)?;
+        Ok(())
     }
 
     fn require_enabled_record<'a>(
@@ -991,10 +1017,6 @@ impl PluginHost {
     }
 
     pub fn save_app_settings(&self, settings: AppSettings) -> Result<AppSettings, String> {
-        let mut settings = settings;
-        if settings.obs.access_token.trim().is_empty() {
-            settings.obs.access_token = generate_access_token();
-        }
         let previous_settings = self.load_app_settings();
         let raw = serde_json::to_string_pretty(&settings)
             .map_err(|e| format!("Failed to serialize app settings: {e}"))?;
@@ -1140,21 +1162,16 @@ impl PluginHost {
             })
             .collect::<Vec<_>>();
         let secret_store_available = secret_store_error.is_none();
-        let contributes = record.manifest.normalized_contributes_v3();
-        let title = first_configuration(&contributes)
-            .and_then(|configuration| configuration.title.clone())
-            .or_else(|| {
-                schema
-                    .as_ref()
-                    .and_then(|schema| schema.get("title"))
-                    .and_then(|title| title.as_str())
-                    .map(ToOwned::to_owned)
-            })
+        let title = schema
+            .as_ref()
+            .and_then(|schema| schema.get("title"))
+            .and_then(|title| title.as_str())
+            .map(ToOwned::to_owned)
             .unwrap_or_else(|| format!("{} Settings", record.descriptor.name));
         Ok(PackageConfigurationState {
             package_id,
             title,
-            has_custom_page: first_configuration_page(&contributes).is_some(),
+            has_custom_page: false,
             schema,
             values,
             secrets,
@@ -1221,28 +1238,10 @@ impl PluginHost {
 
     pub fn get_package_configuration_page(&self, package_id: String) -> Result<PageLayout, String> {
         let records = self.records.lock().unwrap();
-        let record = self.require_enabled_record(&records, &package_id)?;
-        let contributes = record.manifest.normalized_contributes_v3();
-        let configuration = first_configuration_page(&contributes).ok_or_else(|| {
-            format!("Package '{package_id}' does not expose a configuration page.")
-        })?;
-        let configuration_path = configuration.path.as_deref().ok_or_else(|| {
-            format!("Package '{package_id}' does not expose a configuration page.")
-        })?;
-        let package_root = Path::new(&record.descriptor.path);
-        let raw = read_json_package_file(package_root, configuration_path)?;
-        let mut page: PageLayout = serde_json::from_value(raw).map_err(|e| {
-            format!("Configuration page for package '{package_id}' is invalid: {e}")
-        })?;
-        page.id = format!("configuration-{package_id}");
-        page.name = configuration
-            .title
-            .clone()
-            .unwrap_or_else(|| format!("{} Configuration", record.descriptor.name));
-        page.width = 1200.0;
-        page.height = 740.0;
-        normalize_page(&mut page, false);
-        Ok(page)
+        let _record = self.require_enabled_record(&records, &package_id)?;
+        Err(format!(
+            "Package '{package_id}' does not expose a custom configuration page in manifest V4."
+        ))
     }
 
     pub fn save_overlay_layout(&self, layout: OverlayLayout) -> Result<OverlayLayoutsFile, String> {
@@ -1351,46 +1350,10 @@ impl PluginHost {
         package_id: String,
         export_name: String,
     ) -> Result<OverlayLayoutsFile, String> {
-        let mut file = self.load_overlay_layouts();
-        let mut layout = {
-            let records = self.records.lock().unwrap();
-            let record = self.require_enabled_record(&records, &package_id)?;
-            let contributes = record.manifest.normalized_contributes_v3();
-            let export = contributes.overlays.get(&export_name).ok_or_else(|| {
-                format!("Layout template '{package_id}/{export_name}' does not exist.")
-            })?;
-            let package_root = Path::new(&record.descriptor.path);
-            let template_path = export.path.as_deref().ok_or_else(|| {
-                format!(
-                    "Layout contribution '{package_id}/{export_name}' is a webview entry, not an importable layout template."
-                )
-            })?;
-            let raw = read_json_package_file(package_root, template_path)?;
-            let mut layout: OverlayLayout = serde_json::from_value(raw).map_err(|e| {
-                format!("Layout template '{package_id}/{export_name}' is invalid: {e}")
-            })?;
-            if layout.name.trim().is_empty() {
-                layout.name = export
-                    .title
-                    .clone()
-                    .unwrap_or_else(|| export_name.replace('-', " "));
-            }
-            layout.template_source = Some(format!("{package_id}/{export_name}"));
-            layout
-        };
-        let layout_id = unique_id("overlay");
-        let now = now_ms();
-        layout.id = layout_id.clone();
-        layout.created_at_ms = now;
-        layout.updated_at_ms = now;
-        normalize_overlay_layout(&mut layout, false);
-        rekey_overlay_layout_contents(&mut layout);
-        file.layouts.push(layout);
-        file.active_layout_id = layout_id;
-        ensure_active_layout_ids(&mut file);
-        self.save_overlay_layouts(&file)?;
-        self.emit_overlay_layouts_changed(&file);
-        Ok(file)
+        let _ = export_name;
+        Err(format!(
+            "Manifest V4 does not support layout templates for import from package '{package_id}'."
+        ))
     }
 
     pub fn get_pages(&self) -> PagesFile {
@@ -1470,43 +1433,10 @@ impl PluginHost {
         package_id: String,
         export_name: String,
     ) -> Result<PagesFile, String> {
-        let mut file = self.load_pages();
-        let mut page = {
-            let records = self.records.lock().unwrap();
-            let record = self.require_enabled_record(&records, &package_id)?;
-            let contributes = record.manifest.normalized_contributes_v3();
-            let export = contributes.pages.get(&export_name).ok_or_else(|| {
-                format!("Page template '{package_id}/{export_name}' does not exist.")
-            })?;
-            let package_root = Path::new(&record.descriptor.path);
-            let template_path = export.path.as_deref().ok_or_else(|| {
-                format!(
-                    "Page contribution '{package_id}/{export_name}' is a webview entry, not an importable page template."
-                )
-            })?;
-            let raw = read_json_package_file(package_root, template_path)?;
-            let mut page: PageLayout = serde_json::from_value(raw).map_err(|e| {
-                format!("Page template '{package_id}/{export_name}' is invalid: {e}")
-            })?;
-            if page.name.trim().is_empty() {
-                page.name = export
-                    .title
-                    .clone()
-                    .unwrap_or_else(|| export_name.replace('-', " "));
-            }
-            page.template_source = Some(format!("{package_id}/{export_name}"));
-            page
-        };
-        let now = now_ms();
-        page.id = unique_id("page");
-        page.favorite = false;
-        page.created_at_ms = now;
-        page.updated_at_ms = now;
-        normalize_page(&mut page, false);
-        file.pages.push(page);
-        self.save_pages(&file)?;
-        self.emit_pages_changed(&file);
-        Ok(file)
+        let _ = export_name;
+        Err(format!(
+            "Manifest V4 does not support page templates for import from package '{package_id}'."
+        ))
     }
 
     pub fn open_page(&self, page_id: String) -> Result<(), String> {
@@ -1548,16 +1478,22 @@ impl PluginHost {
             let record = records
                 .get(&package_id)
                 .ok_or_else(|| format!("Package '{package_id}' is not installed."))?;
-            let contributes = record.manifest.normalized_contributes_v3();
-            if first_configuration(&contributes).is_none() && !record.descriptor.has_public_settings
-            {
+            if !record.descriptor.has_public_settings {
                 return Err(format!(
-                    "Package '{package_id}' does not expose configuration settings."
+                    "Package '{package_id}' does not expose supported settings UI in manifest V4."
                 ));
             }
-            first_configuration(&contributes)
-                .and_then(|configuration| configuration.title.clone())
-                .unwrap_or_else(|| format!("{} Settings", record.descriptor.name))
+            let settings_schema_title =
+                read_package_settings_schema(record)
+                    .ok()
+                    .and_then(|schema| {
+                        schema.and_then(|schema| {
+                            schema
+                                .get("title")
+                                .and_then(|title| title.as_str().map(ToOwned::to_owned))
+                        })
+                    });
+            settings_schema_title.unwrap_or_else(|| format!("{} Settings", record.descriptor.name))
         };
         let page_id = format!("configuration-{package_id}");
         self.open_standalone_page_window(
@@ -1635,13 +1571,11 @@ impl PluginHost {
             .map_err(|e| format!("bakingrl.plugin.json unreadable: {e}"))?;
         let manifest = PluginPackageManifest::parse(&manifest_str)
             .map_err(|e| format!("bakingrl.plugin.json invalid: {e}"))?;
-        let effective_permissions = EffectivePackagePermissions::for_package_manifest(&manifest)?;
         let enabled = state.enabled.get(manifest.id()).copied().unwrap_or(false);
         let descriptor = descriptor_for_manifest(
             &manifest,
             package_dir.to_string_lossy().to_string(),
             enabled,
-            effective_permissions,
         );
         Ok(PackageRecord {
             descriptor,
@@ -1694,14 +1628,6 @@ impl PluginHost {
 
     fn load_app_settings(&self) -> AppSettings {
         read_json_or_default(&self.app_settings_path)
-    }
-
-    fn ensure_app_settings(&self) {
-        let mut settings = self.load_app_settings();
-        if settings.obs.access_token.trim().is_empty() {
-            settings.obs.access_token = generate_access_token();
-            let _ = self.save_app_settings(settings);
-        }
     }
 
     fn load_package_settings(&self) -> PackageSettingsFile {
@@ -1818,13 +1744,6 @@ impl PluginHost {
                 "Marketplace bundle signature key does not match the approved entry.".to_string(),
             );
         }
-        let effective_permissions =
-            EffectivePackagePermissions::for_package_manifest(&inspection.manifest)?;
-        if effective_permissions != approved_version.review.permissions {
-            return Err(
-                "Marketplace bundle permissions do not match the reviewed permissions.".to_string(),
-            );
-        }
         if inspection.manifest.author().unwrap_or_default().is_empty() {
             warn!(
                 "Marketplace package {}@{} from developer {} has no manifest author",
@@ -1933,7 +1852,7 @@ impl PluginHost {
 pub fn runtime_info() -> RuntimeInfo {
     RuntimeInfo {
         runtime_api_version: HOST_RUNTIME_API_VERSION.to_string(),
-        supported_runtime_api: HOST_RUNTIME_API_RANGE.to_string(),
+        supported_runtime_api: HOST_RUNTIME_API_VERSION.to_string(),
     }
 }
 
@@ -1998,14 +1917,6 @@ fn page_window_label(page_id: &str) -> String {
         })
         .collect();
     format!("page-{safe_id}")
-}
-
-fn generate_access_token() -> String {
-    let mut bytes = [0_u8; 32];
-    if getrandom::fill(&mut bytes).is_ok() {
-        return hex::encode(bytes);
-    }
-    format!("fallback-{}", unique_id("obs"))
 }
 
 #[tauri::command]

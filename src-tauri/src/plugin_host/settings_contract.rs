@@ -49,19 +49,7 @@ pub struct PackageSecretDefinition {
 pub(super) fn read_package_settings_schema(
     record: &PackageRecord,
 ) -> Result<Option<Value>, String> {
-    let settings_path = record
-        .manifest
-        .settings()
-        .map(ToOwned::to_owned)
-        .or_else(|| {
-            record
-                .manifest
-                .normalized_contributes_v3()
-                .configuration
-                .values()
-                .next()
-                .map(|configuration| configuration.schema.clone())
-        });
+    let settings_path = record.manifest.settings().map(ToOwned::to_owned);
     let Some(settings_path) = settings_path else {
         return Ok(None);
     };
@@ -216,6 +204,58 @@ pub(super) fn secret_store_status() -> Result<(), String> {
     #[cfg(not(target_os = "macos"))]
     let _ = secret_entry("__bakingrl_probe__", "__probe__")?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugin_host::descriptors::descriptor_for_manifest;
+    use crate::plugin_package::manifest::PluginPackageManifest;
+
+    fn v4_manifest(raw: serde_json::Value) -> PluginPackageManifest {
+        PluginPackageManifest::parse(&raw.to_string()).unwrap()
+    }
+
+    #[test]
+    fn read_package_settings_schema_only_uses_v4_contributes_settings() {
+        let package_root = std::env::temp_dir()
+            .join("brl-settings-contract-schema")
+            .join("v4");
+        let schema_path = package_root.join("schemas").join("plugin-settings.json");
+        let _ = std::fs::remove_dir_all(&package_root);
+        std::fs::create_dir_all(schema_path.parent().unwrap()).unwrap();
+        let raw_schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "message": {
+                    "type": "string"
+                }
+            }
+        });
+        std::fs::write(&schema_path, raw_schema.to_string()).unwrap();
+
+        let manifest = v4_manifest(serde_json::json!({
+            "schemaVersion": "bakingrl.plugin/4",
+            "id": "com.example.settings",
+            "name": "Settings",
+            "version": "1.0.0",
+            "bakingrlApi": "2.0.0",
+            "contributes": {
+                "settings": {
+                    "schema": "schemas/plugin-settings.json"
+                }
+            }
+        }));
+        let path = package_root.to_string_lossy().to_string();
+        let record = super::super::PackageRecord {
+            descriptor: descriptor_for_manifest(&manifest, path, true),
+            manifest,
+        };
+        let loaded = read_package_settings_schema(&record).unwrap();
+
+        assert_eq!(loaded, Some(raw_schema));
+        let _ = std::fs::remove_dir_all(&package_root);
+    }
 }
 
 #[cfg(target_os = "macos")]

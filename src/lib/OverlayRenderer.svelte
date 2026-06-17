@@ -48,14 +48,9 @@
     id: string;
     name: string;
     enabled: boolean;
-    effective_permissions?: {
-      bus?: {
-        read?: string[];
-      };
-      registry?: {
-        read?: string[];
-      };
-    };
+    compatibility?: {
+      bakingrlApi: string | null;
+    } | null;
     contributions: {
       visuals: VisualContributionDescriptor[];
       configuration?: {
@@ -121,14 +116,6 @@
     pages: LayoutModel[];
   };
 
-  type AppSettings = {
-    obs: {
-      host: string;
-      port: number;
-      access_token: string;
-    };
-  };
-
   type Diagnostics = {
     log(message: string, data?: unknown): void;
     warn(message: string, data?: unknown): void;
@@ -148,6 +135,14 @@
     setActive(active: boolean): void;
     bus: {
       subscribe(eventName: string, callback: (event: unknown) => void): () => void;
+    };
+    telemetryHub: {
+      subscribe(eventName: string, callback: (event: unknown) => void): () => void;
+      publish(eventName: string, payload?: unknown): void;
+    };
+    runtime: {
+      packageId: string;
+      api: string | null;
     };
     registry: {
       get(key: string): Promise<unknown>;
@@ -640,6 +635,7 @@
           src: packageHtmlUrl(mountedPackage.id, webviewEntry),
           packageId: mountedPackage.id,
           exportName,
+          runtimeApi: mountedPackage.compatibility?.bakingrlApi ?? null,
           item: {
             id: item.id,
             name: item.name,
@@ -772,16 +768,9 @@
         bus: {
           subscribe(eventName, callback) {
             const requestedEventName = String(eventName ?? "");
-            const allowedReads = mountedPackage.effective_permissions?.bus?.read;
-            if (!matchesPattern(allowedReads, requestedEventName)) {
-              throw new Error(`Package '${mountedPackage.id}' cannot subscribe to '${requestedEventName}'.`);
-            }
             const cleanup = subscribe((event: any) => {
               const actualEventName = eventNameFor(event);
-              if (
-                matchesPattern(allowedReads, actualEventName) &&
-                (requestedEventName === "*" || actualEventName === requestedEventName)
-              ) {
+              if (matchesPattern([requestedEventName], actualEventName)) {
                 callback(event);
               }
             });
@@ -791,6 +780,32 @@
               busCleanups.delete(cleanup);
             };
           }
+        },
+        telemetryHub: {
+          subscribe(eventName, callback) {
+            const requestedEventName = String(eventName ?? "");
+            const cleanup = subscribe((event: any) => {
+              const actualEventName = eventNameFor(event);
+              if (matchesPattern([requestedEventName], actualEventName)) {
+                callback(event);
+              }
+            });
+            busCleanups.add(cleanup);
+            return () => {
+              cleanup();
+              busCleanups.delete(cleanup);
+            };
+          },
+          publish(eventName, payload) {
+            publishTelemetry({
+              Event: String(eventName ?? ""),
+              Data: payload ?? null
+            });
+          }
+        },
+        runtime: {
+          packageId: mountedPackage.id,
+          api: mountedPackage.compatibility?.bakingrlApi ?? null
         },
         registry: {
           get(key) {
@@ -927,10 +942,6 @@
   }
 
   async function refreshState() {
-    if (adapter.isTauri) {
-      const settings = await adapter.invoke<AppSettings>("get_app_settings");
-      adapter.configureGateway(settings.obs.host, settings.obs.port, settings.obs.access_token);
-    }
     packages = await adapter.invoke<PackageDescriptor[]>("list_packages");
     let nextLayout: LayoutModel | null = layoutOverride;
     if (source === "page") {

@@ -57,41 +57,30 @@ export type PackageCompatibilityStatus =
 
 export type PackageCompatibilityDescriptor = {
   status: PackageCompatibilityStatus;
-  runtimeApi: string | null;
+  bakingrlApi: string | null;
   sdk: string | null;
   hostRuntimeApi: string;
   supportedRuntimeApi: string;
   message: string | null;
 };
 
-export type PermissionShape = {
-  bus?: {
-    read?: string[];
-    publish?: string[];
-  };
-  registry?: {
-    read?: string[];
-    write?: string[];
-  };
-  network?: {
-    http?: string[];
-    websocket?: string[];
-  };
-  storage?:
-    | string[]
-    | {
-        read?: string[];
-        write?: string[];
-      };
+export type PluginRuntimeNodeDescriptor = {
+  entry: string;
 };
 
-export type PermissionSection = {
-  title: string;
-  rows: {
-    label: string;
-    values: string[];
-    emptyLabel: string;
-  }[];
+export type PluginRuntimeSidecarDescriptor = {
+  id: string;
+  bin: string;
+  args: string[];
+  env: Record<string, string>;
+  platforms: string[];
+  protocol: string;
+  activation: string;
+};
+
+export type PluginRuntimeDescriptor = {
+  node: PluginRuntimeNodeDescriptor | null;
+  sidecars: PluginRuntimeSidecarDescriptor[];
 };
 
 export type PackageDescriptor = {
@@ -100,13 +89,8 @@ export type PackageDescriptor = {
   name: string;
   version: string;
   author: string | null;
-  kind: string | null;
-  activation: Record<string, unknown> | null;
-  runtime: Record<string, unknown> | null;
+  runtime: PluginRuntimeDescriptor | null;
   contributes: Record<string, unknown> | null;
-  capabilities: Record<string, unknown> | null;
-  diagnostics: Record<string, unknown> | null;
-  safeMode: Record<string, unknown> | null;
   enabled: boolean;
   status: "installed" | "deleting";
   path: string;
@@ -122,7 +106,6 @@ export type PackageDescriptor = {
     webviews: WebviewContributionDescriptor[];
     configuration: ConfigurationContributionDescriptor | null;
   };
-  effective_permissions: PermissionShape;
   compatibility: PackageCompatibilityDescriptor;
   settings: string | null;
   has_public_settings: boolean;
@@ -175,38 +158,23 @@ export type PackageConfigurationState = {
 };
 
 export type ManifestContributes = {
-  commands?: Record<string, unknown>;
-  visuals?: Record<string, unknown>;
-  services?: Record<string, unknown>;
-  views?: Record<string, unknown>;
-  assets?: Record<string, unknown>;
-  schemas?: Record<string, unknown>;
-  pages?: Record<string, unknown>;
-  overlays?: Record<string, unknown>;
-  webviews?: Record<string, unknown>;
-  layouts?: Record<string, unknown>;
-  configuration?: Record<string, unknown>;
+  commands?: unknown[];
+  visuals?: unknown[];
+  services?: unknown[];
+  settings?: Record<string, unknown>;
 };
 
 export type BundleInspection = {
   manifest: {
-    schema: string;
+    schemaVersion: string;
     id: string;
     name: string;
     version: string;
     author: string | null;
-    kind?: string | null;
-    activation?: Record<string, unknown> | null;
+    bakingrlApi: string;
     runtime?: Record<string, unknown> | null;
     contributes?: ManifestContributes | null;
-    capabilities?: Record<string, unknown> | null;
-    diagnostics?: Record<string, unknown> | null;
-    safeMode?: Record<string, unknown> | null;
-    compatibility?: {
-      runtimeApi?: string | null;
-      sdk?: string | null;
-    } | null;
-    permissions?: PermissionShape;
+    externalSurfaces?: Record<string, unknown> | null;
   };
   hashes_present: boolean;
   signature_present: boolean;
@@ -269,7 +237,6 @@ export type MarketplaceApprovedVersion = {
   review: {
     status: string;
     reviewedAt: string;
-    permissions: PermissionShape;
   };
 };
 
@@ -426,11 +393,6 @@ export type AppSettings = {
     require_trusted_remote_packages: boolean;
     trusted_package_public_keys: string[];
   };
-  obs: {
-    host: string;
-    port: number;
-    access_token: string;
-  };
   overlay: {
     hide_when_game_unfocused: boolean;
     update_state_throttle_fps: number;
@@ -451,12 +413,6 @@ export type TelemetryConnectionStatus = {
   host: string;
   port: number;
   updated_at_ms: number;
-};
-
-export type ObsGatewayStatus = {
-  running: boolean;
-  address: string;
-  message: string | null;
 };
 
 export type PluginDiagnosticEvent = {

@@ -28,6 +28,7 @@ export type PluginWebviewMountOptions = {
   item: PluginWebviewItem;
   settings: Record<string, unknown>;
   mode: "runtime" | "editor";
+  runtimeApi?: string | null;
   assetUrl(ref: string): string;
   subscribeTelemetry(callback: (event: unknown) => void): () => void;
   emitEditorEvent?(eventName: string, payload?: unknown): void;
@@ -73,6 +74,14 @@ export function mountPluginWebview(options: PluginWebviewMountOptions): PluginWe
     packageId: options.packageId,
     exportName: options.exportName,
     mode: options.mode,
+    runtime: {
+      packageId: options.packageId,
+      api: options.runtimeApi ?? null
+    },
+    apis: {
+      telemetryHub: { subscribe: true, publish: true },
+      stateHub: { read: true, write: true }
+    },
     item: currentItem,
     settings: currentSettings,
     dimensions: {

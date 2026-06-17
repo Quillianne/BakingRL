@@ -316,21 +316,26 @@ mod tests {
 
     fn valid_manifest() -> String {
         serde_json::json!({
-            "schema": "bakingrl.plugin/3",
+            "schemaVersion": "bakingrl.plugin/4",
             "id": "com.example.bundle",
             "name": "Bundle",
             "version": "1.0.0",
+            "bakingrlApi": "2.0.0",
+            "runtime": {
+                "node": {
+                    "entry": "dist/extension-host.js"
+                },
+                "sidecars": []
+            },
             "contributes": {
-                "visuals": {
-                    "scoreboard": {
+                "visuals": [
+                    {
+                        "id": "scoreboard",
                         "entry": "dist/visuals/scoreboard.js",
                         "defaultSize": [600, 90]
                     }
-                }
+                ]
             },
-            "compatibility": {
-                "runtimeApi": "1.0.0"
-            }
         })
         .to_string()
     }
@@ -391,6 +396,33 @@ mod tests {
         let inspection = inspect_bundle(&bundle_path).unwrap();
         assert_eq!(inspection.manifest.id(), "com.example.bundle");
         assert_eq!(inspection.file_count, 2);
+    }
+
+    #[test]
+    fn rejects_legacy_manifest_in_bundle() {
+        let dir = tempdir().unwrap();
+        let bundle_path = dir.path().join("legacy.brlp");
+        let manifest = serde_json::json!({
+            "schema": "bakingrl.plugin/legacy",
+            "id": "com.example.bundle-legacy",
+            "name": "Bundle legacy",
+            "version": "1.0.0",
+            "contributes": {}
+        })
+        .to_string();
+        write_bundle(
+            &bundle_path,
+            &[
+                (MANIFEST_FILE, &manifest),
+                (
+                    "dist/visuals/scoreboard.js",
+                    "export default { mount() {} };",
+                ),
+            ],
+        );
+
+        let error = inspect_bundle(&bundle_path).unwrap_err();
+        assert!(error.contains("manifest field 'schema'"));
     }
 
     #[test]

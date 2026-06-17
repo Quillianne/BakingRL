@@ -22,13 +22,6 @@
         ? "connecting"
         : "disconnected"
   );
-  const obsGatewayStateClass = $derived(
-    state.obsGatewayStatus === null
-      ? "connecting"
-      : state.obsGatewayStatus.running
-        ? "connected"
-        : "disconnected"
-  );
 
   function restoreEditorScroll() {
     const restoreState = consumeRouteScrollRestore();
@@ -122,16 +115,6 @@
           </span>
         </span>
       </button>
-
-      <div class="vital-card">
-        <span class="vital-top">
-          <span class="vital-label">{state.t("shell.obsGateway")}</span>
-          <span class="status-pill {obsGatewayStateClass}" title={state.obsGatewayStatus?.message ?? state.obsGatewayStatus?.address ?? ""}>
-            <span class="status-dot"></span>
-            {state.obsGatewayStatusLabel}
-          </span>
-        </span>
-      </div>
 
       <a class="settings-link" class:active={$page.url.pathname.startsWith("/settings")} href="/settings">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">

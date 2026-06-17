@@ -3,10 +3,8 @@ use std::path::Path;
 
 use crate::plugin_package::bundle::BundleInspection;
 use crate::plugin_package::manifest::{
-    parse_runtime_api_version, PluginActivationV3, PluginDiagnosticsV3, PluginPackageManifest,
-    PluginRuntimeV3, PluginSafeModeV3, HOST_RUNTIME_API_RANGE, HOST_RUNTIME_API_VERSION,
+    parse_runtime_api_version, PluginPackageManifest, PluginRuntimeV4, HOST_RUNTIME_API_VERSION,
 };
-use crate::plugin_package::permissions::EffectivePackagePermissions;
 
 use super::package_files::read_json_package_file;
 use super::settings_contract::secret_key_set;
@@ -20,19 +18,12 @@ pub struct PackageDescriptor {
     pub name: String,
     pub version: String,
     pub author: Option<String>,
-    pub kind: Option<String>,
-    pub activation: Option<PluginActivationV3>,
-    pub runtime: Option<PluginRuntimeV3>,
+    pub runtime: Option<PluginRuntimeV4>,
     pub contributes: Option<serde_json::Value>,
-    pub capabilities: Option<serde_json::Value>,
-    pub diagnostics: Option<PluginDiagnosticsV3>,
-    #[serde(rename = "safeMode")]
-    pub safe_mode: Option<PluginSafeModeV3>,
     pub enabled: bool,
     pub status: PackageStatus,
     pub path: String,
     pub contributions: PackageContributionsDescriptor,
-    pub effective_permissions: EffectivePackagePermissions,
     pub compatibility: PackageCompatibilityDescriptor,
     pub settings: Option<String>,
     pub has_public_settings: bool,
@@ -130,7 +121,7 @@ pub enum PackageCompatibilityStatus {
 #[serde(rename_all = "camelCase")]
 pub struct PackageCompatibilityDescriptor {
     pub status: PackageCompatibilityStatus,
-    pub runtime_api: Option<String>,
+    pub bakingrl_api: Option<String>,
     pub sdk: Option<String>,
     pub host_runtime_api: String,
     pub supported_runtime_api: String,
@@ -154,158 +145,63 @@ pub(super) fn descriptor_for_manifest(
     manifest: &PluginPackageManifest,
     path: String,
     enabled: bool,
-    effective_permissions: EffectivePackagePermissions,
 ) -> PackageDescriptor {
     let compatibility = compatibility_for_manifest(manifest);
     let enabled = enabled && compatibility.is_compatible();
     let (has_public_settings, has_secrets) = package_settings_capabilities(manifest, &path);
-    let contributes = manifest.normalized_contributes_v3();
+    let contributes = manifest.contributes_v4();
     PackageDescriptor {
         manifest_schema: manifest.manifest_schema().to_string(),
         id: manifest.id().to_string(),
         name: manifest.name().to_string(),
         version: manifest.version().to_string(),
         author: manifest.author().map(ToOwned::to_owned),
-        kind: manifest.kind().map(ToOwned::to_owned),
-        activation: manifest.activation().cloned(),
-        runtime: manifest.runtime().cloned(),
+        runtime: manifest.runtime_v4().cloned(),
         contributes: manifest.contributes_value(),
-        capabilities: manifest.capabilities().cloned(),
-        diagnostics: manifest.diagnostics().cloned(),
-        safe_mode: manifest.safe_mode().cloned(),
         enabled,
         status: PackageStatus::Installed,
         path,
         contributions: PackageContributionsDescriptor {
             commands: contributes
                 .commands
-                .keys()
-                .map(|name| NamedContributionDescriptor { name: name.clone() })
+                .iter()
+                .map(|command| NamedContributionDescriptor {
+                    name: command.id.clone(),
+                })
                 .collect(),
             visuals: contributes
                 .visuals
                 .iter()
-                .map(|(name, export)| {
+                .map(|export| {
                     let [default_width, default_height] =
                         export.default_size.unwrap_or([320.0, 120.0]);
                     VisualContributionDescriptor {
-                        name: name.clone(),
+                        name: export.id.clone(),
                         entry: export.entry.clone(),
                         default_width,
                         default_height,
-                        settings: export.settings.clone(),
+                        settings: export.instance_settings.clone(),
                     }
                 })
                 .collect(),
             services: contributes
                 .services
                 .iter()
-                .map(|(name, export)| ServiceContributionDescriptor {
-                    name: name.clone(),
+                .map(|export| ServiceContributionDescriptor {
+                    name: export.id.clone(),
                     methods: export.methods.clone(),
                 })
                 .collect(),
-            views: contributes
-                .views
-                .iter()
-                .map(|(name, export)| WebviewContributionDescriptor {
-                    name: name.clone(),
-                    entry: export.entry.clone(),
-                    path: export.path.clone(),
-                    title: export.title.clone(),
-                    description: export.description.clone(),
-                    icon: export.icon.clone(),
-                    configuration: export.configuration.clone(),
-                    route: export.route.clone(),
-                })
-                .collect(),
-            assets: contributes
-                .assets
-                .keys()
-                .map(|name| NamedContributionDescriptor { name: name.clone() })
-                .collect(),
-            schemas: contributes
-                .schemas
-                .keys()
-                .map(|name| NamedContributionDescriptor { name: name.clone() })
-                .collect(),
-            pages: contributes
-                .pages
-                .iter()
-                .map(|(name, export)| PageContributionDescriptor {
-                    name: name.clone(),
-                    path: export
-                        .path
-                        .clone()
-                        .or_else(|| export.entry.clone())
-                        .unwrap_or_default(),
-                    title: export.title.clone(),
-                    description: export.description.clone(),
-                })
-                .collect(),
-            overlays: contributes
-                .overlays
-                .iter()
-                .map(|(name, export)| OverlayContributionDescriptor {
-                    name: name.clone(),
-                    path: export
-                        .path
-                        .clone()
-                        .or_else(|| export.entry.clone())
-                        .unwrap_or_default(),
-                    title: export.title.clone(),
-                    description: export.description.clone(),
-                })
-                .collect(),
-            webviews: contributes
-                .webviews
-                .iter()
-                .map(|(name, export)| WebviewContributionDescriptor {
-                    name: name.clone(),
-                    entry: export.entry.clone(),
-                    path: export.path.clone(),
-                    title: export.title.clone(),
-                    description: export.description.clone(),
-                    icon: export.icon.clone(),
-                    configuration: export.configuration.clone(),
-                    route: export.route.clone(),
-                })
-                .collect(),
-            configuration: contributes
-                .configuration
-                .values()
-                .find(|configuration| configuration.path.is_some())
-                .map(|configuration| ConfigurationContributionDescriptor {
-                    title: configuration.title.clone(),
-                    description: configuration.description.clone(),
-                    path: configuration.path.clone().unwrap_or_default(),
-                    visuals: configuration
-                        .visuals
-                        .iter()
-                        .map(|(name, export)| {
-                            let [default_width, default_height] =
-                                export.default_size.unwrap_or([1200.0, 740.0]);
-                            VisualContributionDescriptor {
-                                name: name.clone(),
-                                entry: export.entry.clone(),
-                                default_width,
-                                default_height,
-                                settings: export.settings.clone(),
-                            }
-                        })
-                        .collect(),
-                }),
+            views: Vec::new(),
+            assets: Vec::new(),
+            schemas: Vec::new(),
+            pages: Vec::new(),
+            overlays: Vec::new(),
+            webviews: Vec::new(),
+            configuration: None,
         },
-        effective_permissions,
         compatibility,
-        settings: manifest.settings().map(ToOwned::to_owned).or_else(|| {
-            manifest
-                .normalized_contributes_v3()
-                .configuration
-                .values()
-                .next()
-                .map(|configuration| configuration.schema.clone())
-        }),
+        settings: manifest.settings().map(ToOwned::to_owned),
         has_public_settings,
         has_secrets,
         error: None,
@@ -313,14 +209,7 @@ pub(super) fn descriptor_for_manifest(
 }
 
 fn package_settings_capabilities(manifest: &PluginPackageManifest, path: &str) -> (bool, bool) {
-    let settings_path = manifest.settings().map(ToOwned::to_owned).or_else(|| {
-        manifest
-            .normalized_contributes_v3()
-            .configuration
-            .values()
-            .next()
-            .map(|configuration| configuration.schema.clone())
-    });
+    let settings_path = manifest.settings().map(ToOwned::to_owned);
     let Some(settings_path) = settings_path else {
         return (false, false);
     };
@@ -347,19 +236,14 @@ pub(super) fn compatibility_for_manifest(
 ) -> PackageCompatibilityDescriptor {
     let host_runtime_api = parse_runtime_api_version(HOST_RUNTIME_API_VERSION)
         .expect("HOST_RUNTIME_API_VERSION must be a semver version");
-    let runtime_api = manifest
-        .compatibility()
-        .and_then(|compatibility| compatibility.runtime_api.clone());
-    let sdk = manifest
-        .compatibility()
-        .and_then(|compatibility| compatibility.sdk.clone());
-    let (status, message) = match runtime_api
-        .as_deref()
-        .and_then(parse_runtime_api_version)
-    {
+    let bakingrl_api = manifest.bakingrl_api();
+    let (status, message) = match parse_runtime_api_version(bakingrl_api) {
         None => (
             PackageCompatibilityStatus::UnknownRuntimeApi,
-            Some("Package does not declare compatibility.runtimeApi; rebuild it with the current SDK.".to_string()),
+            Some(
+                "Package has an invalid bakingrlApi; rebuild it with the current SDK."
+                    .to_string(),
+            ),
         ),
         Some((major, _, _)) if major == host_runtime_api.0 => {
             (PackageCompatibilityStatus::Compatible, None)
@@ -367,25 +251,22 @@ pub(super) fn compatibility_for_manifest(
         Some((major, _, _)) if major < host_runtime_api.0 => (
             PackageCompatibilityStatus::Incompatible,
             Some(format!(
-                "Package targets runtime API {}; update the package to {}.",
-                runtime_api.as_deref().unwrap_or("unknown"),
-                HOST_RUNTIME_API_VERSION
+                "Package targets runtime API {bakingrl_api}; update the package to {HOST_RUNTIME_API_VERSION}."
             )),
         ),
         Some(_) => (
             PackageCompatibilityStatus::RequiresNewerHost,
             Some(format!(
-                "Package targets runtime API {}; update BakingRL to a host that supports it.",
-                runtime_api.as_deref().unwrap_or("unknown")
+                "Package targets runtime API {bakingrl_api}; update BakingRL to a host that supports it."
             )),
         ),
     };
     PackageCompatibilityDescriptor {
         status,
-        runtime_api,
-        sdk,
+        bakingrl_api: Some(bakingrl_api.to_string()),
+        sdk: None,
         host_runtime_api: HOST_RUNTIME_API_VERSION.to_string(),
-        supported_runtime_api: HOST_RUNTIME_API_RANGE.to_string(),
+        supported_runtime_api: HOST_RUNTIME_API_VERSION.to_string(),
         message,
     }
 }
@@ -398,55 +279,60 @@ pub(super) fn apply_graph_diagnostics(records: &mut HashMap<String, PackageRecor
 mod tests {
     use super::*;
 
-    fn v3_manifest(raw: serde_json::Value) -> PluginPackageManifest {
+    fn v4_manifest(raw: serde_json::Value) -> PluginPackageManifest {
         PluginPackageManifest::parse(&raw.to_string()).unwrap()
     }
 
     #[test]
-    fn descriptor_derives_catalog_from_v3_contributes() {
-        let manifest = v3_manifest(serde_json::json!({
-            "schema": "bakingrl.plugin/3",
+    fn descriptor_derives_catalog_from_v4_contributes() {
+        let manifest = v4_manifest(serde_json::json!({
+            "schemaVersion": "bakingrl.plugin/4",
             "id": "com.example.catalog",
             "name": "Catalog",
             "version": "1.0.0",
+            "bakingrlApi": "2.0.0",
+            "runtime": {
+                "node": {
+                    "entry": "dist/runtime.js"
+                },
+                "sidecars": [
+                    {
+                        "id": "stats",
+                        "bin": "dist/stats.js",
+                        "protocol": "jsonrpc-stdio"
+                    }
+                ]
+            },
             "contributes": {
-                "visuals": {
-                    "scoreboard": {
+                "commands": [
+                    {
+                        "id": "openSettings",
+                        "title": "Open settings"
+                    }
+                ],
+                "visuals": [
+                    {
+                        "id": "scoreboard",
                         "entry": "dist/visuals/scoreboard.js",
                         "defaultSize": [760, 128],
-                        "settings": "schemas/scoreboard-settings.json"
+                        "instanceSettings": "schemas/scoreboard-settings.json"
                     }
-                },
-                "services": {
-                    "matchStats": {
-                        "entry": "dist/services/match-stats.js",
+                ],
+                "services": [
+                    {
+                        "id": "matchStats",
+                        "runtime": "node",
                         "methods": ["snapshot"]
                     }
-                },
-                "pages": {
-                    "dashboard": {
-                        "path": "pages/dashboard.json",
-                        "title": "Dashboard"
+                ],
+                "settings": {
+                    "schema": "schemas/plugin-settings.json"
                     }
-                },
-                "overlays": {
-                    "stream": {
-                        "path": "overlays/stream.json",
-                        "title": "Stream"
-                    }
-                }
-            },
-            "compatibility": {
-                "runtimeApi": "1.0.0"
             }
         }));
 
-        let descriptor = descriptor_for_manifest(
-            &manifest,
-            "/tmp/com.example.catalog".to_string(),
-            true,
-            EffectivePackagePermissions::default(),
-        );
+        let descriptor =
+            descriptor_for_manifest(&manifest, "/tmp/com.example.catalog".to_string(), true);
 
         assert!(descriptor.enabled);
         assert_eq!(
@@ -454,8 +340,23 @@ mod tests {
             PackageCompatibilityStatus::Compatible
         );
         assert_eq!(
-            descriptor.compatibility.runtime_api.as_deref(),
-            Some("1.0.0")
+            descriptor.compatibility.bakingrl_api.as_deref(),
+            Some("2.0.0")
+        );
+        assert_eq!(
+            descriptor
+                .runtime
+                .as_ref()
+                .and_then(|runtime| runtime.node.as_ref())
+                .map(|node| node.entry.as_str()),
+            Some("dist/runtime.js")
+        );
+        assert_eq!(
+            descriptor
+                .runtime
+                .as_ref()
+                .map(|runtime| runtime.sidecars.len()),
+            Some(1)
         );
         assert_eq!(descriptor.contributions.visuals[0].name, "scoreboard");
         assert_eq!(
@@ -463,23 +364,69 @@ mod tests {
             "dist/visuals/scoreboard.js"
         );
         assert_eq!(descriptor.contributions.visuals[0].default_width, 760.0);
+        assert_eq!(descriptor.contributions.commands[0].name, "openSettings");
         assert_eq!(descriptor.contributions.services[0].name, "matchStats");
         assert_eq!(
             descriptor.contributions.services[0].methods,
             vec!["snapshot"]
         );
+        assert!(descriptor.contributions.pages.is_empty());
+        assert!(descriptor.contributions.overlays.is_empty());
         assert_eq!(
-            descriptor.contributions.pages[0].path,
-            "pages/dashboard.json"
+            descriptor.settings.as_deref(),
+            Some("schemas/plugin-settings.json")
         );
-        assert_eq!(
-            descriptor.contributions.overlays[0].path,
-            "overlays/stream.json"
-        );
+        assert!(descriptor.contributions.views.is_empty());
         assert!(descriptor
             .contributes
             .as_ref()
             .and_then(|value| value.get("visuals"))
             .is_some());
+    }
+
+    #[test]
+    fn package_settings_capabilities_reads_v4_settings_schema() {
+        let package_root = std::env::temp_dir()
+            .join("brl-descriptors-settings-capabilities")
+            .join("v4");
+        let schema_path = package_root.join("schemas").join("plugin-settings.json");
+        let _ = std::fs::remove_dir_all(&package_root);
+        std::fs::create_dir_all(schema_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &schema_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "publicField": {
+                        "type": "string"
+                    },
+                    "apiToken": {
+                        "type": "string",
+                        "x-bakingrl-secret": true
+                    }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let manifest = v4_manifest(serde_json::json!({
+            "schemaVersion": "bakingrl.plugin/4",
+            "id": "com.example.catalog",
+            "name": "Catalog",
+            "version": "1.0.0",
+            "bakingrlApi": "2.0.0",
+            "contributes": {
+                "settings": {
+                    "schema": "schemas/plugin-settings.json"
+                }
+            }
+        }));
+        let (has_public_settings, has_secrets) =
+            package_settings_capabilities(&manifest, &package_root.to_string_lossy());
+
+        assert!(has_public_settings);
+        assert!(has_secrets);
+        let _ = std::fs::remove_dir_all(&package_root);
     }
 }

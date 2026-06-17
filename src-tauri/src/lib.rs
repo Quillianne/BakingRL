@@ -1,7 +1,6 @@
 pub mod bus;
 pub mod ingestor;
 pub mod models;
-pub mod obs_gateway;
 pub mod plugin_host;
 pub mod plugin_package;
 pub mod registry;
@@ -9,7 +8,7 @@ pub mod window_watcher;
 
 use crate::bus::{BusEvent, EventBus};
 use crate::ingestor::{start_tcp_ingestor, TelemetryStatusState};
-use crate::models::{GameEvent, ObsGatewayStatus, TelemetryConnectionStatus};
+use crate::models::{GameEvent, TelemetryConnectionStatus};
 use crate::plugin_host::{
     call_service_export, clear_plugin_diagnostics, create_overlay_layout, create_page,
     delete_overlay_layout, delete_package_secret, delete_page, discard_prepared_package,
@@ -28,10 +27,8 @@ use crate::plugin_host::{
 use crate::registry::{registry_entries, registry_get, Registry};
 use crate::window_watcher::start_window_visibility_watcher;
 use std::env;
-use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use tauri::{
     Emitter, Manager, Monitor, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder,
@@ -366,33 +363,6 @@ fn get_telemetry_status(
 }
 
 #[tauri::command]
-fn get_obs_gateway_status(plugin_host: tauri::State<'_, Arc<PluginHost>>) -> ObsGatewayStatus {
-    let obs_settings = plugin_host.get_app_settings().obs;
-    let address = format!("{}:{}", obs_settings.host, obs_settings.port);
-    let connect_host = match obs_settings.host.as_str() {
-        "0.0.0.0" | "::" => "127.0.0.1",
-        host => host,
-    };
-    let connect_address = format!("{}:{}", connect_host, obs_settings.port);
-    let running = connect_address
-        .to_socket_addrs()
-        .ok()
-        .into_iter()
-        .flatten()
-        .any(|addr| TcpStream::connect_timeout(&addr, Duration::from_millis(120)).is_ok());
-
-    ObsGatewayStatus {
-        running,
-        address,
-        message: if running {
-            None
-        } else {
-            Some("OBS gateway is not accepting connections.".to_string())
-        },
-    }
-}
-
-#[tauri::command]
 fn list_overlay_monitors(app: tauri::AppHandle) -> Result<Vec<OverlayMonitorDescriptor>, String> {
     let reference_window = app
         .get_webview_window(INGAME_OVERLAY_LABEL)
@@ -556,22 +526,6 @@ pub fn run() {
             plugin_host.apply_overlay_window_settings(&plugin_host.get_app_settings());
             _app.manage(plugin_host.clone());
 
-            let obs_settings = plugin_host.get_app_settings().obs;
-            let obs_addr = format!("{}:{}", obs_settings.host, obs_settings.port);
-            match std::net::TcpListener::bind(&obs_addr) {
-                Ok(listener) => {
-                    let (_shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-                    crate::obs_gateway::start_obs_gateway(
-                        bus.clone(),
-                        plugin_host.clone(),
-                        registry.clone(),
-                        listener,
-                        shutdown_rx,
-                    );
-                }
-                Err(err) => warn!("Unable to start OBS gateway on {}: {}", obs_addr, err),
-            }
-
             if plugin_host
                 .get_app_settings()
                 .behavior
@@ -680,7 +634,6 @@ pub fn run() {
             open_overlay_layout_editor,
             close_overlay_editor,
             get_telemetry_status,
-            get_obs_gateway_status,
             list_overlay_monitors,
             emit_developer_telemetry,
             take_pending_package_file_opens,

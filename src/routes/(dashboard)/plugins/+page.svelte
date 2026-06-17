@@ -16,15 +16,11 @@
     rows: PackageContributionRow[];
   };
 
-  type PackageDetailTab = "contributions" | "permissions";
-
   let detailPackageId = $state<string | null>(null);
-  let activeDetailTab = $state<PackageDetailTab>("contributions");
   const detailPackage = $derived(dashboard.packages.find((pkg) => pkg.id === detailPackageId) ?? null);
 
   function openPackageDetails(pkg: PackageDescriptor) {
     detailPackageId = pkg.id;
-    activeDetailTab = "contributions";
   }
 
   function closePackageDetails() {
@@ -119,7 +115,7 @@
           <article
             class="studio-card package-card"
             class:disabled={!dashboard.isPackageEnabled(pkg)}
-            title={`${dashboard.permissionTotal(pkg.effective_permissions)} ${dashboard.t("common.permissions")} · ${dashboard.contributionCount(pkg)} ${dashboard.t("packages.elements")}`}
+            title={`${dashboard.contributionCount(pkg)} ${dashboard.t("packages.elements")}`}
           >
             <div class="package-head">
               <div class="package-meta">
@@ -309,92 +305,53 @@
           <span>{dashboard.t("common.state")}</span>
         </div>
         <div class="package-detail-stat">
-          <strong>{dashboard.permissionTotal(detailPackage.effective_permissions)}</strong>
-          <span>{dashboard.t("common.permissions")}</span>
-        </div>
-        <div class="package-detail-stat">
           <strong>{dashboard.contributionCount(detailPackage)}</strong>
           <span>{dashboard.t("packages.elements")}</span>
         </div>
         <div class="package-detail-stat">
-          <strong>{detailPackage.compatibility.runtimeApi ?? "n/a"}</strong>
-          <span>{dashboard.t("packages.runtimeApi")}</span>
+          <strong>
+            {detailPackage.contributions.configuration || detailPackage.has_public_settings || detailPackage.has_secrets
+              ? dashboard.t("common.enabled")
+              : dashboard.t("common.disabled")}
+          </strong>
+          <span>{dashboard.t("packages.configuration")}</span>
+        </div>
+        <div class="package-detail-stat">
+          <strong>{detailPackage.compatibility.bakingrlApi ?? "n/a"}</strong>
+          <span>{dashboard.t("packages.compatibility")}</span>
         </div>
       </div>
 
-      <div class="package-detail-tabs" role="tablist" aria-label={dashboard.t("packages.details")}>
-        <button class="btn-outline" class:active={activeDetailTab === "contributions"} onclick={() => (activeDetailTab = "contributions")}>
-          {dashboard.t("common.contributions")}
-        </button>
-        <button class="btn-outline" class:active={activeDetailTab === "permissions"} onclick={() => (activeDetailTab = "permissions")}>
-          {dashboard.t("common.permissions")}
-        </button>
-      </div>
-
-      {#if activeDetailTab === "contributions"}
-        <section class="package-detail-section">
-          <div class="package-detail-section-head">
-            <h3>{dashboard.t("packages.contributionsTitle")}</h3>
-            <span class="section-count">{dashboard.contributionCount(detailPackage)}</span>
-          </div>
-          {#if dashboard.contributionCount(detailPackage) > 0}
-            <div class="contribution-section-grid">
-              {#each packageContributionSections(detailPackage) as section}
-                <section class="contribution-section-card">
-                  <div class="contribution-section-head">
-                    <h4>{section.title}</h4>
-                    <span>{section.count}</span>
-                  </div>
-                  <ul class="contribution-items">
-                    {#each section.rows as row}
-                      <li class="contribution-item">
-                        <span class="contribution-name">{row.name}</span>
-                        {#if row.meta}
-                          <span class="contribution-meta">{row.meta}</span>
-                        {/if}
-                      </li>
-                    {/each}
-                  </ul>
-                </section>
-              {/each}
-            </div>
-          {:else}
-            <p class="permission-none">{dashboard.t("packages.noContributions")}</p>
-          {/if}
-        </section>
-      {:else if activeDetailTab === "permissions"}
-        <section class="package-detail-section">
-          <div class="package-detail-section-head">
-            <h3>{dashboard.t("packages.effectivePermissions")}</h3>
-            <span class="section-count">{dashboard.permissionTotal(detailPackage.effective_permissions)}</span>
-          </div>
-          {#if dashboard.permissionTotal(detailPackage.effective_permissions) > 0}
-            <div class="permission-grid expanded">
-              {#each dashboard.permissionSections(detailPackage.effective_permissions) as section}
-                <section class="permission-card">
+      <section class="package-detail-section">
+        <div class="package-detail-section-head">
+          <h3>{dashboard.t("packages.contributionsTitle")}</h3>
+          <span class="section-count">{dashboard.contributionCount(detailPackage)}</span>
+        </div>
+        {#if dashboard.contributionCount(detailPackage) > 0}
+          <div class="contribution-section-grid">
+            {#each packageContributionSections(detailPackage) as section}
+              <section class="contribution-section-card">
+                <div class="contribution-section-head">
                   <h4>{section.title}</h4>
+                  <span>{section.count}</span>
+                </div>
+                <ul class="contribution-items">
                   {#each section.rows as row}
-                    <div class="permission-row">
-                      <span class="permission-label">{row.label}</span>
-                      {#if row.values.length}
-                        <div class="permission-chips">
-                          {#each row.values as value}
-                            <span class="permission-chip">{value}</span>
-                          {/each}
-                        </div>
-                      {:else}
-                        <span class="permission-empty">{row.emptyLabel}</span>
+                    <li class="contribution-item">
+                      <span class="contribution-name">{row.name}</span>
+                      {#if row.meta}
+                        <span class="contribution-meta">{row.meta}</span>
                       {/if}
-                    </div>
+                    </li>
                   {/each}
-                </section>
-              {/each}
-            </div>
-          {:else}
-            <p class="permission-none">{dashboard.t("packages.noExtraPermissions")}</p>
-          {/if}
-        </section>
-      {/if}
+                </ul>
+              </section>
+            {/each}
+          </div>
+        {:else}
+          <p class="empty-note">{dashboard.t("packages.noContributions")}</p>
+        {/if}
+      </section>
 
       </div>
 

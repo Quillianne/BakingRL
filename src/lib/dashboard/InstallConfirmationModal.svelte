@@ -108,38 +108,6 @@
         {/if}
       </div>
 
-      <div class="permissions-view">
-        <div class="permission-summary">
-          <span class="permission-count">{state.permissionTotal(state.pendingInstall.inspection.manifest.permissions)}</span>
-          <span>{state.t("packages.permissionsRequired")}</span>
-        </div>
-        {#if state.permissionTotal(state.pendingInstall.inspection.manifest.permissions) > 0}
-          <div class="permission-grid">
-            {#each state.permissionSections(state.pendingInstall.inspection.manifest.permissions) as section}
-              <section class="permission-card">
-                <h4>{section.title}</h4>
-                {#each section.rows as row}
-                  <div class="permission-row">
-                    <span class="permission-label">{row.label}</span>
-                    {#if row.values.length}
-                      <div class="permission-chips">
-                        {#each row.values as value}
-                          <span class="permission-chip">{value}</span>
-                        {/each}
-                      </div>
-                    {:else}
-                      <span class="permission-empty">{row.emptyLabel}</span>
-                    {/if}
-                  </div>
-                {/each}
-              </section>
-            {/each}
-          </div>
-        {:else}
-          <p class="permission-none">{state.t("packages.noInstallPermissions")}</p>
-        {/if}
-      </div>
-
       <details class="technical-details">
         <summary>{state.t("packages.securityDetails")}</summary>
         <h4>{state.t("packages.bundleSha")}</h4>
