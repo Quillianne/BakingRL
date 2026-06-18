@@ -1011,9 +1011,6 @@ fn handle_sidecar_jsonrpc(
             let status = get_status_snapshot(&runtime_state, sidecar_ref);
             Ok(serde_json::json!(status))
         }
-        "overlays/list" => sidecar_overlays_list(app_handle),
-        "overlays/setStreamLayout" => sidecar_overlays_set_stream_layout(app_handle, params),
-        "pages/list" => sidecar_pages_list(app_handle),
         "packages/list" => sidecar_packages_list(app_handle),
         "packages/settings" | "packages/getSettings" => {
             sidecar_package_settings(app_handle, params)
@@ -1029,9 +1026,6 @@ fn handle_sidecar_jsonrpc(
         }
         "resources/list" => sidecar_resources_list(sidecar_ref, app_handle, params),
         "resources/read" => sidecar_resources_read(sidecar_ref, app_handle, params),
-        "visuals/readSource" | "packages/readVisualExportSource" => {
-            sidecar_read_visual_source(app_handle, params)
-        }
         "registry/get" => sidecar_registry_get(sidecar_ref, app_handle, params),
         "registry/entries" => sidecar_registry_entries(sidecar_ref, app_handle),
         "services/call" => sidecar_service_call(sidecar_ref, app_handle, params),
@@ -1056,26 +1050,8 @@ fn registry_state(app_handle: &AppHandle) -> Result<tauri::State<'_, Arc<Registr
         .ok_or_else(|| "Registry state is not available.".to_string())
 }
 
-fn sidecar_overlays_list(app_handle: &AppHandle) -> Result<serde_json::Value, String> {
-    serde_json::to_value(plugin_host(app_handle)?.get_overlay_layouts())
-        .map_err(|err| err.to_string())
-}
-
-fn sidecar_overlays_set_stream_layout(
-    app_handle: &AppHandle,
-    params: serde_json::Value,
-) -> Result<serde_json::Value, String> {
-    let layout_id = required_string(&params, "layoutId")?;
-    serde_json::to_value(plugin_host(app_handle)?.set_stream_overlay_layout(layout_id)?)
-        .map_err(|err| err.to_string())
-}
-
 fn sidecar_packages_list(app_handle: &AppHandle) -> Result<serde_json::Value, String> {
     serde_json::to_value(plugin_host(app_handle)?.list_packages()).map_err(|err| err.to_string())
-}
-
-fn sidecar_pages_list(app_handle: &AppHandle) -> Result<serde_json::Value, String> {
-    serde_json::to_value(plugin_host(app_handle)?.get_pages()).map_err(|err| err.to_string())
 }
 
 fn sidecar_plugins_list(
@@ -1164,16 +1140,6 @@ fn sidecar_package_read_text(
     let relative_path = required_relative_path(&params)?;
     let contents = plugin_host(app_handle)?.read_package_file_text(&package_id, &relative_path)?;
     Ok(serde_json::json!({ "contents": contents }))
-}
-
-fn sidecar_read_visual_source(
-    app_handle: &AppHandle,
-    params: serde_json::Value,
-) -> Result<serde_json::Value, String> {
-    let package_id = required_string(&params, "packageId")?;
-    let export_name = required_string(&params, "exportName")?;
-    let source = plugin_host(app_handle)?.read_visual_export_source(&package_id, &export_name)?;
-    Ok(serde_json::json!({ "source": source }))
 }
 
 fn sidecar_registry_get(

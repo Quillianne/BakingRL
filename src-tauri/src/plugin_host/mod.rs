@@ -2,7 +2,6 @@ mod descriptors;
 mod diagnostics;
 pub(crate) mod extension_host_runtime;
 mod json_store;
-mod layout_documents;
 mod package_files;
 mod runtime_specs;
 mod service_registry;
@@ -21,10 +20,7 @@ use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder
 use tracing::{info, warn};
 
 use crate::bus::EventBus;
-use crate::models::{
-    AppSettings, OverlayLayout, OverlayLayoutsFile, PackageSettingsFile, PackageStateFile,
-    PageBackground, PageItem, PageLayer, PageLayout, PageSettings, PagesFile,
-};
+use crate::models::{AppSettings, PackageSettingsFile, PackageStateFile};
 use crate::plugin_package::bundle::BundleInspection;
 use crate::plugin_package::install::{
     download_bundle_to_file, inspect_bundle_file, install_bundle_from_file,
@@ -54,15 +50,9 @@ pub use diagnostics::{
 };
 use extension_host_runtime::{ExtensionHostRuntimeManager, ExtensionHostRuntimeSpec};
 use json_store::{read_json_or_default, write_json};
-use layout_documents::{
-    default_overlay_layouts, ensure_active_layout_ids, new_overlay_layout, new_page_layout,
-    normalize_overlay_layout, normalize_overlay_layouts, normalize_page, normalize_pages,
-    rekey_overlay_layout_contents,
-};
 use package_files::{
     find_first_bundle, format_command_error, is_remote_package_source, parse_export_ref,
-    read_binary_package_file, read_json_package_file, safe_installed_package_dir,
-    safe_package_relative_path,
+    read_binary_package_file, safe_installed_package_dir, safe_package_relative_path,
 };
 use runtime_specs::{
     extension_host_specs_for_records, sidecar_service_specs_for_records, sidecar_specs_for_records,
@@ -108,8 +98,6 @@ pub struct PluginHost {
     registry: Arc<Registry>,
     packages_dir: PathBuf,
     state_path: PathBuf,
-    overlay_layouts_path: PathBuf,
-    pages_path: PathBuf,
     app_settings_path: PathBuf,
     package_settings_path: PathBuf,
     marketplace_cache_path: PathBuf,
@@ -147,8 +135,6 @@ impl PluginHost {
             registry,
             packages_dir,
             state_path: app_data.join("package_state.json"),
-            overlay_layouts_path: app_data.join("overlay_layouts.json"),
-            pages_path: app_data.join("pages.json"),
             app_settings_path: app_data.join("app_settings.json"),
             package_settings_path: app_data.join("package_settings.json"),
             marketplace_cache_path: app_data.join("marketplace_cache.json"),
@@ -163,8 +149,6 @@ impl PluginHost {
     }
 
     pub fn initialize(&self) {
-        self.ensure_overlay_layouts();
-        self.ensure_pages();
         self.reload_packages();
     }
 
@@ -865,60 +849,6 @@ impl PluginHost {
         self.emit_package_operation_error(package_id, error);
     }
 
-    pub fn read_visual_export_source(
-        &self,
-        package_id: &str,
-        export_name: &str,
-    ) -> Result<String, String> {
-        let records = self.records.lock().unwrap();
-        let record = records
-            .get(package_id)
-            .ok_or_else(|| format!("Package '{package_id}' is not installed."))?;
-        if self.is_package_deleting(package_id) {
-            return Err(format!("Package '{package_id}' is being removed."));
-        }
-        if !record.descriptor.enabled {
-            return Err(format!("Package '{package_id}' is disabled."));
-        }
-        let export = record
-            .manifest
-            .contributes_v4()
-            .visuals
-            .iter()
-            .find(|visual| visual.id == export_name)
-            .ok_or_else(|| format!("Visual export '{package_id}/{export_name}' does not exist."))?;
-        fs::read_to_string(Path::new(&record.descriptor.path).join(&export.entry))
-            .map_err(|e| format!("Unable to read visual export source: {e}"))
-    }
-
-    pub fn get_visual_settings_schema(
-        &self,
-        package_id: &str,
-        export_name: &str,
-    ) -> Result<Option<serde_json::Value>, String> {
-        let records = self.records.lock().unwrap();
-        let record = records
-            .get(package_id)
-            .ok_or_else(|| format!("Package '{package_id}' is not installed."))?;
-        if self.is_package_deleting(package_id) {
-            return Err(format!("Package '{package_id}' is being removed."));
-        }
-        if !record.descriptor.enabled {
-            return Err(format!("Package '{package_id}' is disabled."));
-        }
-        let export = record
-            .manifest
-            .contributes_v4()
-            .visuals
-            .iter()
-            .find(|visual| visual.id == export_name)
-            .ok_or_else(|| format!("Visual export '{package_id}/{export_name}' does not exist."))?;
-        let Some(settings_path) = export.instance_settings.as_deref() else {
-            return Ok(None);
-        };
-        read_json_package_file(Path::new(&record.descriptor.path), settings_path).map(Some)
-    }
-
     pub fn read_package_file(
         &self,
         package_id: &str,
@@ -1358,300 +1288,6 @@ impl PluginHost {
         }
     }
 
-    pub fn get_overlay_layouts(&self) -> OverlayLayoutsFile {
-        self.load_overlay_layouts()
-    }
-
-    pub fn get_package_configuration_page(&self, package_id: String) -> Result<PageLayout, String> {
-        let records = self.records.lock().unwrap();
-        let record = self.require_enabled_record(&records, &package_id)?;
-        let configuration = record
-            .descriptor
-            .contributions
-            .configuration
-            .as_ref()
-            .ok_or_else(|| {
-                format!(
-                    "Package '{package_id}' does not expose a custom configuration page in manifest V4."
-                )
-            })?;
-        let visual = configuration
-            .visuals
-            .first()
-            .ok_or_else(|| format!("Package '{package_id}' configuration page has no visual."))?;
-        let now = now_ms();
-        Ok(PageLayout {
-            id: format!("configuration-{package_id}"),
-            name: configuration
-                .title
-                .clone()
-                .unwrap_or_else(|| format!("{} Settings", record.descriptor.name)),
-            favorite: false,
-            width: visual.default_width.max(320.0),
-            height: visual.default_height.max(240.0),
-            background: PageBackground::default(),
-            settings: PageSettings {
-                open_target: "window".to_string(),
-            },
-            layers: vec![PageLayer {
-                id: "configuration".to_string(),
-                name: "Configuration".to_string(),
-                kind: "normal".to_string(),
-                visible: true,
-                locked: true,
-                order: 0,
-                items: vec![PageItem {
-                    id: format!("{package_id}-configuration-{visual}", visual = visual.name),
-                    kind: "visual".to_string(),
-                    package_id: Some(package_id.clone()),
-                    export_name: Some(visual.name.clone()),
-                    name: record.descriptor.name.clone(),
-                    x: 0.0,
-                    y: 0.0,
-                    width: visual.default_width.max(320.0),
-                    height: visual.default_height.max(240.0),
-                    z_index: 0,
-                    visible: true,
-                    locked: true,
-                    opacity: 1.0,
-                    settings: serde_json::json!({}),
-                }],
-            }],
-            created_at_ms: now,
-            updated_at_ms: now,
-            template_source: Some(format!("package:{package_id}:configuration")),
-            thumbnail: None,
-        })
-    }
-
-    pub fn save_overlay_layout(&self, layout: OverlayLayout) -> Result<OverlayLayoutsFile, String> {
-        let mut file = self.load_overlay_layouts();
-        let mut layout = layout;
-        normalize_overlay_layout(&mut layout, true);
-        match file.layouts.iter_mut().find(|entry| entry.id == layout.id) {
-            Some(existing) => *existing = layout,
-            None => file.layouts.push(layout),
-        }
-        normalize_overlay_layouts(&mut file);
-        ensure_active_layout_ids(&mut file);
-        self.save_overlay_layouts(&file)?;
-        self.emit_overlay_layouts_changed(&file);
-        Ok(file)
-    }
-
-    pub fn create_overlay_layout(
-        &self,
-        name: String,
-        width: Option<f64>,
-        height: Option<f64>,
-    ) -> Result<OverlayLayoutsFile, String> {
-        let mut file = self.load_overlay_layouts();
-        let id = unique_id("overlay");
-        let now = now_ms();
-        file.layouts
-            .push(new_overlay_layout(id.clone(), name, width, height, now));
-        ensure_active_layout_ids(&mut file);
-        self.save_overlay_layouts(&file)?;
-        self.emit_overlay_layouts_changed(&file);
-        Ok(file)
-    }
-
-    pub fn duplicate_overlay_layout(
-        &self,
-        layout_id: String,
-    ) -> Result<OverlayLayoutsFile, String> {
-        let mut file = self.load_overlay_layouts();
-        let source = file
-            .layouts
-            .iter()
-            .find(|layout| layout.id == layout_id)
-            .cloned()
-            .ok_or_else(|| format!("Layout '{layout_id}' does not exist."))?;
-        let new_id = unique_id("overlay");
-        let mut duplicated = source;
-        duplicated.id = new_id.clone();
-        duplicated.name = format!("{} Copy", duplicated.name);
-        duplicated.template_source = None;
-        let now = now_ms();
-        duplicated.created_at_ms = now;
-        duplicated.updated_at_ms = now;
-        rekey_overlay_layout_contents(&mut duplicated);
-        duplicated.items.clear();
-        file.layouts.push(duplicated);
-        file.active_layout_id = new_id;
-        ensure_active_layout_ids(&mut file);
-        self.save_overlay_layouts(&file)?;
-        self.emit_overlay_layouts_changed(&file);
-        Ok(file)
-    }
-
-    pub fn set_active_overlay_layout(
-        &self,
-        layout_id: String,
-    ) -> Result<OverlayLayoutsFile, String> {
-        let mut file = self.load_overlay_layouts();
-        if !file.layouts.iter().any(|layout| layout.id == layout_id) {
-            return Err(format!("Layout '{layout_id}' does not exist."));
-        }
-        file.active_layout_id = layout_id;
-        self.save_overlay_layouts(&file)?;
-        self.emit_overlay_layouts_changed(&file);
-        Ok(file)
-    }
-
-    pub fn set_stream_overlay_layout(
-        &self,
-        layout_id: String,
-    ) -> Result<OverlayLayoutsFile, String> {
-        let mut file = self.load_overlay_layouts();
-        if !file.layouts.iter().any(|layout| layout.id == layout_id) {
-            return Err(format!("Layout '{layout_id}' does not exist."));
-        }
-        file.stream_layout_id = layout_id;
-        self.save_overlay_layouts(&file)?;
-        self.emit_overlay_layouts_changed(&file);
-        Ok(file)
-    }
-
-    pub fn delete_overlay_layout(&self, layout_id: String) -> Result<OverlayLayoutsFile, String> {
-        let mut file = self.load_overlay_layouts();
-        if file.layouts.len() <= 1 {
-            return Err("At least one layout is required.".to_string());
-        }
-        file.layouts.retain(|layout| layout.id != layout_id);
-        ensure_active_layout_ids(&mut file);
-        self.save_overlay_layouts(&file)?;
-        self.emit_overlay_layouts_changed(&file);
-        Ok(file)
-    }
-
-    pub fn import_package_layout(
-        &self,
-        package_id: String,
-        export_name: String,
-    ) -> Result<OverlayLayoutsFile, String> {
-        let _ = export_name;
-        Err(format!(
-            "Manifest V4 does not support layout templates for import from package '{package_id}'."
-        ))
-    }
-
-    pub fn get_pages(&self) -> PagesFile {
-        self.load_pages()
-    }
-
-    pub fn save_page(&self, page: PageLayout) -> Result<PagesFile, String> {
-        let mut file = self.load_pages();
-        let mut page = page;
-        normalize_page(&mut page, true);
-        match file.pages.iter_mut().find(|entry| entry.id == page.id) {
-            Some(existing) => *existing = page,
-            None => file.pages.push(page),
-        }
-        normalize_pages(&mut file);
-        self.save_pages(&file)?;
-        self.emit_pages_changed(&file);
-        Ok(file)
-    }
-
-    pub fn create_page(
-        &self,
-        name: String,
-        open_target: Option<String>,
-        width: Option<f64>,
-        height: Option<f64>,
-    ) -> Result<PagesFile, String> {
-        let mut file = self.load_pages();
-        let now = now_ms();
-        let mut page = new_page_layout(unique_id("page"), name, open_target, width, height, now);
-        normalize_page(&mut page, false);
-        file.pages.push(page);
-        self.save_pages(&file)?;
-        self.emit_pages_changed(&file);
-        Ok(file)
-    }
-
-    pub fn duplicate_page(&self, page_id: String) -> Result<PagesFile, String> {
-        let mut file = self.load_pages();
-        let source = file
-            .pages
-            .iter()
-            .find(|page| page.id == page_id)
-            .cloned()
-            .ok_or_else(|| format!("Page '{page_id}' does not exist."))?;
-        let now = now_ms();
-        let mut duplicated = source;
-        duplicated.id = unique_id("page");
-        duplicated.name = format!("{} Copy", duplicated.name);
-        duplicated.favorite = false;
-        duplicated.created_at_ms = now;
-        duplicated.updated_at_ms = now;
-        duplicated.template_source = None;
-        for layer in &mut duplicated.layers {
-            layer.id = unique_id("layer");
-            for item in &mut layer.items {
-                item.id = unique_id("item");
-            }
-        }
-        normalize_page(&mut duplicated, false);
-        file.pages.push(duplicated);
-        self.save_pages(&file)?;
-        self.emit_pages_changed(&file);
-        Ok(file)
-    }
-
-    pub fn delete_page(&self, page_id: String) -> Result<PagesFile, String> {
-        let mut file = self.load_pages();
-        file.pages.retain(|page| page.id != page_id);
-        self.save_pages(&file)?;
-        self.emit_pages_changed(&file);
-        Ok(file)
-    }
-
-    pub fn import_package_page(
-        &self,
-        package_id: String,
-        export_name: String,
-    ) -> Result<PagesFile, String> {
-        let _ = export_name;
-        Err(format!(
-            "Manifest V4 does not support page templates for import from package '{package_id}'."
-        ))
-    }
-
-    pub fn open_page(&self, page_id: String) -> Result<(), String> {
-        let pages = self.load_pages();
-        let page = pages
-            .pages
-            .iter()
-            .find(|page| page.id == page_id)
-            .ok_or_else(|| format!("Page '{page_id}' does not exist."))?;
-        let path = format!("/page/{page_id}");
-        let js_path = serde_json::to_string(&path).map_err(|error| error.to_string())?;
-
-        if page.settings.open_target == "window" {
-            let label = page_window_label(&page_id);
-            return self.open_standalone_page_window(
-                label,
-                path,
-                format!("BakingRL - {}", page.name),
-                page.width,
-                page.height,
-            );
-        }
-
-        let main_window = self
-            .app_handle
-            .get_webview_window("main")
-            .ok_or_else(|| "Main window is not available.".to_string())?;
-        main_window
-            .eval(format!("window.location.href = {js_path};"))
-            .map_err(|error| error.to_string())?;
-        let _ = main_window.show();
-        let _ = main_window.set_focus();
-        Ok(())
-    }
-
     pub fn open_package_webview(
         &self,
         package_id: String,
@@ -1867,16 +1503,6 @@ impl PluginHost {
         write_json(&self.package_settings_path, file)
     }
 
-    fn ensure_overlay_layouts(&self) {
-        if !self.overlay_layouts_path.exists() {
-            let _ = self.save_overlay_layouts(&default_overlay_layouts());
-        } else {
-            let mut file = self.load_overlay_layouts();
-            normalize_overlay_layouts(&mut file);
-            let _ = self.save_overlay_layouts(&file);
-        }
-    }
-
     fn validate_install_trust(&self, bundle_path: &Path, source: &str) -> Result<(), String> {
         if let Some((package_id, version)) = parse_marketplace_source(source) {
             let inspection = inspect_bundle_file(bundle_path)?;
@@ -1985,42 +1611,6 @@ impl PluginHost {
         Ok(())
     }
 
-    fn load_overlay_layouts(&self) -> OverlayLayoutsFile {
-        let mut file = fs::read_to_string(&self.overlay_layouts_path)
-            .ok()
-            .and_then(|raw| serde_json::from_str(&raw).ok())
-            .unwrap_or_else(default_overlay_layouts);
-        normalize_overlay_layouts(&mut file);
-        file
-    }
-
-    fn save_overlay_layouts(&self, file: &OverlayLayoutsFile) -> Result<(), String> {
-        write_json(&self.overlay_layouts_path, file)
-    }
-
-    fn ensure_pages(&self) {
-        if !self.pages_path.exists() {
-            let _ = self.save_pages(&PagesFile::default());
-        } else {
-            let mut file = self.load_pages();
-            normalize_pages(&mut file);
-            let _ = self.save_pages(&file);
-        }
-    }
-
-    fn load_pages(&self) -> PagesFile {
-        let mut file = fs::read_to_string(&self.pages_path)
-            .ok()
-            .and_then(|raw| serde_json::from_str(&raw).ok())
-            .unwrap_or_default();
-        normalize_pages(&mut file);
-        file
-    }
-
-    fn save_pages(&self, file: &PagesFile) -> Result<(), String> {
-        write_json(&self.pages_path, file)
-    }
-
     fn emit_packages_changed(&self, packages: &[PackageDescriptor]) {
         let _ = self.app_handle.emit("bakingrl-packages-changed", packages);
     }
@@ -2085,16 +1675,6 @@ impl PluginHost {
         let _ = self
             .app_handle
             .emit("bakingrl-package-settings-changed", package_id);
-    }
-
-    fn emit_overlay_layouts_changed(&self, file: &OverlayLayoutsFile) {
-        let _ = self
-            .app_handle
-            .emit("bakingrl-overlay-layouts-changed", file);
-    }
-
-    fn emit_pages_changed(&self, file: &PagesFile) {
-        let _ = self.app_handle.emit("bakingrl-pages-changed", file);
     }
 }
 
@@ -2885,15 +2465,6 @@ pub fn remove_package(
 }
 
 #[tauri::command]
-pub fn read_visual_export_source(
-    host: State<'_, Arc<PluginHost>>,
-    package_id: String,
-    export_name: String,
-) -> Result<String, String> {
-    host.read_visual_export_source(&package_id, &export_name)
-}
-
-#[tauri::command]
 pub fn read_package_file_text(
     host: State<'_, Arc<PluginHost>>,
     package_id: String,
@@ -2947,15 +2518,6 @@ pub fn get_package_settings(
 }
 
 #[tauri::command]
-pub fn get_visual_settings_schema(
-    host: State<'_, Arc<PluginHost>>,
-    package_id: String,
-    export_name: String,
-) -> Result<Option<serde_json::Value>, String> {
-    host.get_visual_settings_schema(&package_id, &export_name)
-}
-
-#[tauri::command]
 pub fn save_package_settings(
     host: State<'_, Arc<PluginHost>>,
     package_id: String,
@@ -2989,126 +2551,6 @@ pub fn delete_package_secret(
     key: String,
 ) -> Result<PackageConfigurationState, String> {
     host.delete_package_secret(package_id, key)
-}
-
-#[tauri::command]
-pub fn get_overlay_layouts(host: State<'_, Arc<PluginHost>>) -> OverlayLayoutsFile {
-    host.get_overlay_layouts()
-}
-
-#[tauri::command]
-pub fn get_package_configuration_page(
-    host: State<'_, Arc<PluginHost>>,
-    package_id: String,
-) -> Result<PageLayout, String> {
-    host.get_package_configuration_page(package_id)
-}
-
-#[tauri::command]
-pub fn save_overlay_layout(
-    host: State<'_, Arc<PluginHost>>,
-    layout: OverlayLayout,
-) -> Result<OverlayLayoutsFile, String> {
-    host.save_overlay_layout(layout)
-}
-
-#[tauri::command]
-pub fn create_overlay_layout(
-    host: State<'_, Arc<PluginHost>>,
-    name: String,
-    width: Option<f64>,
-    height: Option<f64>,
-) -> Result<OverlayLayoutsFile, String> {
-    host.create_overlay_layout(name, width, height)
-}
-
-#[tauri::command]
-pub fn duplicate_overlay_layout(
-    host: State<'_, Arc<PluginHost>>,
-    layout_id: String,
-) -> Result<OverlayLayoutsFile, String> {
-    host.duplicate_overlay_layout(layout_id)
-}
-
-#[tauri::command]
-pub fn set_active_overlay_layout(
-    host: State<'_, Arc<PluginHost>>,
-    layout_id: String,
-) -> Result<OverlayLayoutsFile, String> {
-    host.set_active_overlay_layout(layout_id)
-}
-
-#[tauri::command]
-pub fn set_stream_overlay_layout(
-    host: State<'_, Arc<PluginHost>>,
-    layout_id: String,
-) -> Result<OverlayLayoutsFile, String> {
-    host.set_stream_overlay_layout(layout_id)
-}
-
-#[tauri::command]
-pub fn delete_overlay_layout(
-    host: State<'_, Arc<PluginHost>>,
-    layout_id: String,
-) -> Result<OverlayLayoutsFile, String> {
-    host.delete_overlay_layout(layout_id)
-}
-
-#[tauri::command]
-pub fn import_package_layout(
-    host: State<'_, Arc<PluginHost>>,
-    package_id: String,
-    export_name: String,
-) -> Result<OverlayLayoutsFile, String> {
-    host.import_package_layout(package_id, export_name)
-}
-
-#[tauri::command]
-pub fn get_pages(host: State<'_, Arc<PluginHost>>) -> PagesFile {
-    host.get_pages()
-}
-
-#[tauri::command]
-pub fn save_page(host: State<'_, Arc<PluginHost>>, page: PageLayout) -> Result<PagesFile, String> {
-    host.save_page(page)
-}
-
-#[tauri::command]
-pub fn create_page(
-    host: State<'_, Arc<PluginHost>>,
-    name: String,
-    open_target: Option<String>,
-    width: Option<f64>,
-    height: Option<f64>,
-) -> Result<PagesFile, String> {
-    host.create_page(name, open_target, width, height)
-}
-
-#[tauri::command]
-pub fn duplicate_page(
-    host: State<'_, Arc<PluginHost>>,
-    page_id: String,
-) -> Result<PagesFile, String> {
-    host.duplicate_page(page_id)
-}
-
-#[tauri::command]
-pub fn delete_page(host: State<'_, Arc<PluginHost>>, page_id: String) -> Result<PagesFile, String> {
-    host.delete_page(page_id)
-}
-
-#[tauri::command]
-pub fn import_package_page(
-    host: State<'_, Arc<PluginHost>>,
-    package_id: String,
-    export_name: String,
-) -> Result<PagesFile, String> {
-    host.import_package_page(package_id, export_name)
-}
-
-#[tauri::command]
-pub fn open_page(host: State<'_, Arc<PluginHost>>, page_id: String) -> Result<(), String> {
-    host.open_page(page_id)
 }
 
 #[tauri::command]

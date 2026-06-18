@@ -438,10 +438,6 @@ function createContext() {
       declared: spec.webviews,
       open: (id: string, options?: unknown) => rpc.request("webviews/open", { id, options }),
       close: (id: string) => rpc.request("webviews/close", { id })
-    },
-    overlays: {
-      list: () => rpc.request("overlays/list", {}),
-      refresh: () => rpc.request("overlays/refresh", {})
     }
   };
 }

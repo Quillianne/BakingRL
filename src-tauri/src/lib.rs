@@ -9,20 +9,15 @@ use crate::bus::{BusEvent, EventBus};
 use crate::ingestor::{start_tcp_ingestor, TelemetryStatusState};
 use crate::models::{GameEvent, TelemetryConnectionStatus};
 use crate::plugin_host::{
-    call_service_export, clear_plugin_diagnostics, create_overlay_layout, create_page,
-    delete_overlay_layout, delete_package_secret, delete_page, discard_prepared_package,
-    duplicate_overlay_layout, duplicate_page, get_app_settings, get_marketplace_catalog,
-    get_overlay_layouts, get_package_configuration_page, get_package_configuration_state,
-    get_package_settings, get_pages, get_runtime_info, get_visual_settings_schema,
-    import_package_layout, import_package_page, inspect_package_bundle, install_package_from_file,
+    call_service_export, clear_plugin_diagnostics, delete_package_secret, discard_prepared_package,
+    get_app_settings, get_marketplace_catalog, get_package_configuration_state,
+    get_package_settings, get_runtime_info, inspect_package_bundle, install_package_from_file,
     install_package_from_url, install_prepared_package, list_packages, list_plugin_diagnostics,
-    open_package_configuration, open_package_secrets, open_package_webview, open_page,
-    packages_dir, plugin_registry_get, prepare_marketplace_package, prepare_package_from_deep_link,
+    open_package_configuration, open_package_secrets, open_package_webview, packages_dir,
+    plugin_registry_get, prepare_marketplace_package, prepare_package_from_deep_link,
     prepare_package_from_git, prepare_package_from_url, read_package_file_text,
-    read_visual_export_source, refresh_marketplace, reload_packages, remove_package,
-    save_app_settings, save_overlay_layout, save_package_settings, save_page,
-    set_active_overlay_layout, set_package_enabled, set_package_secret, set_stream_overlay_layout,
-    PluginHost,
+    refresh_marketplace, reload_packages, remove_package, save_app_settings, save_package_settings,
+    set_package_enabled, set_package_secret, PluginHost,
 };
 use crate::registry::{registry_entries, registry_get, Registry};
 use std::env;
@@ -317,10 +312,7 @@ pub fn run() {
             plugin_host.initialize();
             _app.manage(plugin_host.clone());
 
-            if plugin_host
-                .get_app_settings()
-                .behavior
-                .start_minimized
+            if plugin_host.get_app_settings().behavior.start_minimized
                 && !launched_from_package_file
             {
                 if let Some(main_window) = _app.get_webview_window("main") {
@@ -389,7 +381,6 @@ pub fn run() {
             get_app_settings,
             save_app_settings,
             get_package_settings,
-            get_visual_settings_schema,
             save_package_settings,
             get_package_configuration_state,
             set_package_secret,
@@ -397,26 +388,9 @@ pub fn run() {
             set_package_enabled,
             remove_package,
             reload_packages,
-            read_visual_export_source,
             read_package_file_text,
             call_service_export,
             plugin_registry_get,
-            get_overlay_layouts,
-            get_package_configuration_page,
-            save_overlay_layout,
-            create_overlay_layout,
-            duplicate_overlay_layout,
-            set_active_overlay_layout,
-            set_stream_overlay_layout,
-            delete_overlay_layout,
-            import_package_layout,
-            get_pages,
-            save_page,
-            create_page,
-            duplicate_page,
-            delete_page,
-            import_package_page,
-            open_page,
             open_package_webview,
             open_package_configuration,
             open_package_secrets,
@@ -431,11 +405,7 @@ pub fn run() {
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 if window.label() == "main" {
                     let plugin_host = window.state::<Arc<PluginHost>>();
-                    if plugin_host
-                        .get_app_settings()
-                        .behavior
-                        .close_will_hide
-                    {
+                    if plugin_host.get_app_settings().behavior.close_will_hide {
                         api.prevent_close();
                         let _ = window.hide();
                     } else {

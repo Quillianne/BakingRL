@@ -1128,9 +1128,6 @@ fn handle_host_request(
         "stateHub/snapshot" | "stateHub/getSnapshot" => state_hub_snapshot(context),
         "webviews/open" => webview_open(runtime_key, context, params),
         "webviews/close" => webview_close(runtime_key, context, params),
-        "overlays/list" => overlays_list(context),
-        "overlays/setStreamLayout" => overlays_set_stream_layout(context, params),
-        "overlays/refresh" => Ok(serde_json::json!({ "ok": true })),
         _ => Err(format!(
             "Extension host JSON-RPC method '{method}' is not supported."
         )),
@@ -1379,27 +1376,6 @@ fn registry_set(
 fn registry_entries(context: &ExtensionHostContext) -> Result<serde_json::Value, String> {
     let entries = context.registry.entries().into_iter().collect::<Vec<_>>();
     serde_json::to_value(entries).map_err(|err| err.to_string())
-}
-
-fn overlays_list(context: &ExtensionHostContext) -> Result<serde_json::Value, String> {
-    let host = context
-        .app_handle
-        .try_state::<Arc<PluginHost>>()
-        .ok_or_else(|| "Plugin host state is not available.".to_string())?;
-    serde_json::to_value(host.get_overlay_layouts()).map_err(|err| err.to_string())
-}
-
-fn overlays_set_stream_layout(
-    context: &ExtensionHostContext,
-    params: serde_json::Value,
-) -> Result<serde_json::Value, String> {
-    let layout_id = required_string(&params, "layoutId")?;
-    let host = context
-        .app_handle
-        .try_state::<Arc<PluginHost>>()
-        .ok_or_else(|| "Plugin host state is not available.".to_string())?;
-    let layouts = host.set_stream_overlay_layout(layout_id)?;
-    serde_json::to_value(layouts).map_err(|err| err.to_string())
 }
 
 fn storage_read_text(
