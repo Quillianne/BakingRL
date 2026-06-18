@@ -1018,37 +1018,7 @@ impl PluginHost {
     ) -> Result<serde_json::Value, String> {
         let records = self.records.lock().unwrap();
         self.require_enabled_record(&records, caller_package_id)?;
-        let contributions = records
-            .values()
-            .filter(|record| record.descriptor.enabled && record.descriptor.error.is_none())
-            .flat_map(|record| {
-                record
-                    .descriptor
-                    .contributions
-                    .contributions
-                    .iter()
-                    .filter(|contribution| {
-                        target.is_none_or(|target| contribution.target == target)
-                    })
-                    .map(|contribution| {
-                        serde_json::json!({
-                            "packageId": record.manifest.id(),
-                            "id": contribution.name,
-                            "reference": format!("{}/{}", record.manifest.id(), contribution.name),
-                            "target": contribution.target,
-                            "kind": contribution.kind,
-                            "title": contribution.title,
-                            "description": contribution.description,
-                            "dataSchema": contribution.data_schema,
-                            "visual": contribution.visual,
-                            "service": contribution.service,
-                            "resources": contribution.resources,
-                            "metadata": contribution.metadata,
-                        })
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
+        let contributions = listed_extension_contributions(&records, target);
         Ok(serde_json::Value::Array(contributions))
     }
 
@@ -2270,6 +2240,60 @@ fn listed_package_resources(
         .collect()
 }
 
+fn listed_extension_contributions(
+    records: &HashMap<String, PackageRecord>,
+    target: Option<&str>,
+) -> Vec<serde_json::Value> {
+    records
+        .values()
+        .filter(|record| record.descriptor.enabled && record.descriptor.error.is_none())
+        .flat_map(|record| {
+            record
+                .descriptor
+                .contributions
+                .contributions
+                .iter()
+                .filter(|contribution| target.is_none_or(|target| contribution.target == target))
+                .filter(|contribution| extension_target_is_active(records, &contribution.target))
+                .map(|contribution| {
+                    serde_json::json!({
+                        "packageId": record.manifest.id(),
+                        "id": contribution.name,
+                        "reference": format!("{}/{}", record.manifest.id(), contribution.name),
+                        "target": contribution.target,
+                        "kind": contribution.kind,
+                        "title": contribution.title,
+                        "description": contribution.description,
+                        "dataSchema": contribution.data_schema,
+                        "visual": contribution.visual,
+                        "service": contribution.service,
+                        "resources": contribution.resources,
+                        "metadata": contribution.metadata,
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+fn extension_target_is_active(records: &HashMap<String, PackageRecord>, target: &str) -> bool {
+    let Some((package_id, extension_point_id)) = target.split_once('/') else {
+        return false;
+    };
+    let Some(record) = records.get(package_id) else {
+        return false;
+    };
+    record.descriptor.enabled
+        && record.descriptor.error.is_none()
+        && record.descriptor.compatibility.is_compatible()
+        && record
+            .descriptor
+            .contributions
+            .extension_points
+            .iter()
+            .any(|point| point.name == extension_point_id)
+}
+
 fn validate_min_bakingrl_version(min_version: Option<&str>) -> Result<(), String> {
     let Some(min_version) = min_version.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(());
@@ -2335,6 +2359,96 @@ mod tests {
 
         assert!(caller_depends_on("bakingrl.provider", &caller));
         assert!(!caller_depends_on("bakingrl.other", &caller));
+    }
+
+    #[test]
+    fn extension_contributions_require_active_target_extension_point() {
+        let provider = package_record(serde_json::json!({
+            "schemaVersion": "bakingrl.plugin/4",
+            "id": "bakingrl.provider",
+            "name": "Provider",
+            "version": "1.0.0",
+            "bakingrlApi": "2.1.0",
+            "contributes": {
+                "extensionPoints": [
+                    {
+                        "id": "overlay.visual",
+                        "version": "1.0.0"
+                    }
+                ]
+            }
+        }));
+        let consumer = package_record(serde_json::json!({
+            "schemaVersion": "bakingrl.plugin/4",
+            "id": "bakingrl.consumer",
+            "name": "Consumer",
+            "version": "1.0.0",
+            "bakingrlApi": "2.1.0",
+            "dependencies": [
+                {
+                    "packageId": "bakingrl.provider"
+                }
+            ],
+            "contributes": {
+                "contributions": [
+                    {
+                        "id": "scoreboardBinding",
+                        "target": "bakingrl.provider/overlay.visual",
+                        "kind": "visual",
+                        "metadata": {
+                            "placement": "bottom-right"
+                        }
+                    }
+                ]
+            }
+        }));
+        let records = HashMap::from([
+            ("bakingrl.provider".to_string(), provider),
+            ("bakingrl.consumer".to_string(), consumer),
+        ]);
+
+        assert_eq!(
+            contribution_ids(listed_extension_contributions(
+                &records,
+                Some("bakingrl.provider/overlay.visual"),
+            )),
+            vec!["scoreboardBinding"]
+        );
+        assert!(
+            listed_extension_contributions(&records, Some("bakingrl.provider/missing.visual"),)
+                .is_empty()
+        );
+
+        let mut disabled_target = records;
+        disabled_target
+            .get_mut("bakingrl.provider")
+            .unwrap()
+            .descriptor
+            .enabled = false;
+        assert!(listed_extension_contributions(
+            &disabled_target,
+            Some("bakingrl.provider/overlay.visual"),
+        )
+        .is_empty());
+
+        let mut missing_point = disabled_target;
+        missing_point
+            .get_mut("bakingrl.provider")
+            .unwrap()
+            .descriptor
+            .enabled = true;
+        missing_point
+            .get_mut("bakingrl.provider")
+            .unwrap()
+            .descriptor
+            .contributions
+            .extension_points
+            .clear();
+        assert!(listed_extension_contributions(
+            &missing_point,
+            Some("bakingrl.provider/overlay.visual"),
+        )
+        .is_empty());
     }
 
     #[test]
@@ -2485,6 +2599,20 @@ mod tests {
             .into_iter()
             .filter_map(|resource| {
                 resource
+                    .get("id")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned)
+            })
+            .collect::<Vec<_>>();
+        ids.sort();
+        ids
+    }
+
+    fn contribution_ids(contributions: Vec<serde_json::Value>) -> Vec<String> {
+        let mut ids = contributions
+            .into_iter()
+            .filter_map(|contribution| {
+                contribution
                     .get("id")
                     .and_then(serde_json::Value::as_str)
                     .map(ToOwned::to_owned)
