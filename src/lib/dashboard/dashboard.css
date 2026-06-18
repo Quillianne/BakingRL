@@ -1555,12 +1555,25 @@ pre {
 
 .contribution-item {
   display: grid;
-  gap: 3px;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  gap: 8px;
   min-width: 0;
+  align-items: center;
   padding: 8px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--bg-panel-hover) 46%, transparent);
+}
+
+.contribution-item-main {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.contribution-action {
+  width: 28px;
+  height: 28px;
 }
 
 .contribution-name {

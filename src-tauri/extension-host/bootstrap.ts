@@ -336,8 +336,12 @@ function createContext() {
         })
     },
     resources: {
-      list: (filter?: { packageId?: string }) =>
-        rpc.request("resources/list", { packageId: filter?.packageId ?? null }),
+      list: (filter?: { packageId?: string; type?: string; visibility?: string }) =>
+        rpc.request("resources/list", {
+          packageId: filter?.packageId ?? null,
+          type: filter?.type ?? null,
+          visibility: filter?.visibility ?? null
+        }),
       async read(ref: string, path?: string) {
         const payload = await rpc.request("resources/read", { ref, path: path ?? null });
         return resourceBytes(payload);

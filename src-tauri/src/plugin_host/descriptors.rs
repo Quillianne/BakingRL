@@ -155,11 +155,14 @@ pub struct WebviewContributionDescriptor {
     pub name: String,
     pub entry: Option<String>,
     pub path: Option<String>,
+    pub kind: Option<String>,
     pub title: Option<String>,
     pub description: Option<String>,
     pub icon: Option<String>,
     pub configuration: Option<String>,
     pub route: Option<String>,
+    pub default_width: f64,
+    pub default_height: f64,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -294,15 +297,22 @@ pub(super) fn descriptor_for_manifest(
             webviews: contributes
                 .webviews
                 .iter()
-                .map(|webview| WebviewContributionDescriptor {
-                    name: webview.id.clone(),
-                    entry: Some(webview.entry.clone()),
-                    path: None,
-                    title: webview.title.clone(),
-                    description: None,
-                    icon: None,
-                    configuration: None,
-                    route: None,
+                .map(|webview| {
+                    let [default_width, default_height] =
+                        webview.default_size.unwrap_or([960.0, 640.0]);
+                    WebviewContributionDescriptor {
+                        name: webview.id.clone(),
+                        entry: Some(webview.entry.clone()),
+                        path: None,
+                        kind: webview.kind.clone(),
+                        title: webview.title.clone(),
+                        description: None,
+                        icon: None,
+                        configuration: None,
+                        route: None,
+                        default_width,
+                        default_height,
+                    }
                 })
                 .collect(),
             configuration,

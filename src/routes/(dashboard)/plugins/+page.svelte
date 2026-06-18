@@ -8,6 +8,7 @@
   type PackageContributionRow = {
     name: string;
     meta?: string;
+    webviewId?: string;
   };
 
   type PackageContributionSection = {
@@ -41,6 +42,29 @@
     } catch (error) {
       dashboard.notifyError(error);
     }
+  }
+
+  function primaryWebview(pkg: PackageDescriptor) {
+    return (
+      pkg.contributions.webviews.find((webview) => webview.kind === "settings" && webview.name === "settings") ??
+      pkg.contributions.webviews.find((webview) => webview.kind === "settings") ??
+      pkg.contributions.webviews[0] ??
+      null
+    );
+  }
+
+  async function openPackageWebview(pkg: PackageDescriptor, webviewId: string) {
+    try {
+      await invoke("open_package_webview", { packageId: pkg.id, webviewId });
+    } catch (error) {
+      dashboard.notifyError(error);
+    }
+  }
+
+  async function openPrimaryPackageWebview(pkg: PackageDescriptor) {
+    const webview = primaryWebview(pkg);
+    if (!webview) return;
+    await openPackageWebview(pkg, webview.name);
   }
 
   function packageContributionSections(pkg: PackageDescriptor): PackageContributionSection[] {
@@ -92,7 +116,10 @@
         count: pkg.contributions.webviews.length,
         rows: pkg.contributions.webviews.map((webview) => ({
           name: webview.title ?? webview.name,
-          meta: webview.entry ?? webview.path ?? webview.route ?? undefined
+          meta: webview.kind
+            ? `${webview.kind} · ${webview.entry ?? webview.path ?? webview.route ?? ""}`
+            : webview.entry ?? webview.path ?? webview.route ?? undefined,
+          webviewId: webview.name
         }))
       },
       {
@@ -160,6 +187,21 @@
                     {dashboard.packageDisplayStateLabel(pkg)}
                   </span>
                   <div class="package-card-tools">
+                    {#if pkg.contributions.webviews.length}
+                      <button
+                        class="icon-button"
+                        onclick={() => void openPrimaryPackageWebview(pkg)}
+                        disabled={!dashboard.isPackageEnabled(pkg) || !dashboard.isPackageCompatible(pkg)}
+                        title={dashboard.t("packages.openWebview")}
+                        aria-label={dashboard.t("packages.openWebview")}
+                      >
+                        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                          <rect x="3" y="4" width="18" height="14" rx="2"></rect>
+                          <path d="M8 20h8"></path>
+                          <path d="M12 18v2"></path>
+                        </svg>
+                      </button>
+                    {/if}
                     {#if pkg.contributions.configuration || (pkg.settings && pkg.has_public_settings)}
                       <button
                         class="icon-button"
@@ -372,9 +414,26 @@
                 <ul class="contribution-items">
                   {#each section.rows as row}
                     <li class="contribution-item">
-                      <span class="contribution-name">{row.name}</span>
-                      {#if row.meta}
-                        <span class="contribution-meta">{row.meta}</span>
+                      <div class="contribution-item-main">
+                        <span class="contribution-name">{row.name}</span>
+                        {#if row.meta}
+                          <span class="contribution-meta">{row.meta}</span>
+                        {/if}
+                      </div>
+                      {#if row.webviewId}
+                        <button
+                          type="button"
+                          class="icon-button contribution-action"
+                          onclick={() => void openPackageWebview(detailPackage, row.webviewId ?? "")}
+                          disabled={!dashboard.isPackageEnabled(detailPackage) || !dashboard.isPackageCompatible(detailPackage)}
+                          title={dashboard.t("packages.openWebview")}
+                          aria-label={dashboard.t("packages.openWebview")}
+                        >
+                          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M7 17 17 7"></path>
+                            <path d="M8 7h9v9"></path>
+                          </svg>
+                        </button>
                       {/if}
                     </li>
                   {/each}

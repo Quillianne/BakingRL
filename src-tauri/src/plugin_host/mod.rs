@@ -1722,7 +1722,56 @@ impl PluginHost {
         Ok(())
     }
 
+    pub fn open_package_webview(
+        &self,
+        package_id: String,
+        webview_id: String,
+    ) -> Result<(), String> {
+        let (label, path, title, width, height) = {
+            let records = self.records.lock().unwrap();
+            let record = self.require_enabled_record(&records, &package_id)?;
+            let webview = record
+                .manifest
+                .contributes_v4()
+                .webviews
+                .iter()
+                .find(|webview| webview.id == webview_id)
+                .ok_or_else(|| {
+                    format!("Package '{package_id}' does not declare webview '{webview_id}'.")
+                })?;
+            let [width, height] = webview.default_size.unwrap_or([960.0, 640.0]);
+            (
+                package_webview_window_label(&package_id, &webview.id),
+                package_webview_route(
+                    &package_id,
+                    &webview.id,
+                    &webview.entry,
+                    record.manifest.bakingrl_api(),
+                ),
+                webview
+                    .title
+                    .clone()
+                    .unwrap_or_else(|| format!("{} - {}", record.descriptor.name, webview.id)),
+                width,
+                height,
+            )
+        };
+
+        self.open_standalone_page_window(label, path, title, width, height)
+    }
+
     pub fn open_package_configuration(&self, package_id: String) -> Result<(), String> {
+        let settings_webview = {
+            let records = self.records.lock().unwrap();
+            match self.require_enabled_record(&records, &package_id) {
+                Ok(record) => preferred_settings_webview_id(record),
+                Err(_) => None,
+            }
+        };
+        if let Some(webview_id) = settings_webview {
+            return self.open_package_webview(package_id, webview_id);
+        }
+
         let title = {
             let records = self.records.lock().unwrap();
             let record = records
@@ -2377,6 +2426,60 @@ mod tests {
         assert!(invalid_visibility.contains("visibility must be 'public' or 'private'"));
     }
 
+    #[test]
+    fn preferred_settings_webview_uses_settings_id_first() {
+        let record = package_record(serde_json::json!({
+            "schemaVersion": "bakingrl.plugin/4",
+            "id": "bakingrl.webviews",
+            "name": "Webviews",
+            "version": "1.0.0",
+            "bakingrlApi": "2.1.0",
+            "runtime": {
+                "node": {
+                    "entry": "dist/extension/index.js"
+                }
+            },
+            "contributes": {
+                "webviews": [
+                    {
+                        "id": "preferences",
+                        "entry": "dist/webviews/preferences.js",
+                        "kind": "settings"
+                    },
+                    {
+                        "id": "settings",
+                        "entry": "dist/webviews/settings.js",
+                        "kind": "settings"
+                    },
+                    {
+                        "id": "studio",
+                        "entry": "dist/webviews/studio.js",
+                        "kind": "tool"
+                    }
+                ]
+            }
+        }));
+
+        assert_eq!(
+            preferred_settings_webview_id(&record),
+            Some("settings".to_string())
+        );
+    }
+
+    #[test]
+    fn package_webview_route_targets_declared_entry() {
+        let route = package_webview_route(
+            "com.example.plugin",
+            "settings",
+            "dist/webviews/settings.js",
+            "2.1.0",
+        );
+
+        assert!(route.starts_with("/plugin-webview/com.example.plugin/settings?"));
+        assert!(route.contains("entry=dist%2Fwebviews%2Fsettings.js"));
+        assert!(route.contains("runtimeApi=2.1.0"));
+    }
+
     fn resource_ids(resources: Vec<serde_json::Value>) -> Vec<String> {
         let mut ids = resources
             .into_iter()
@@ -2503,6 +2606,65 @@ fn page_window_label(page_id: &str) -> String {
         })
         .collect();
     format!("page-{safe_id}")
+}
+
+fn preferred_settings_webview_id(record: &PackageRecord) -> Option<String> {
+    record
+        .manifest
+        .contributes_v4()
+        .webviews
+        .iter()
+        .find(|webview| is_settings_webview(webview) && webview.id == "settings")
+        .or_else(|| {
+            record
+                .manifest
+                .contributes_v4()
+                .webviews
+                .iter()
+                .find(|webview| is_settings_webview(webview))
+        })
+        .map(|webview| webview.id.clone())
+}
+
+fn is_settings_webview(
+    webview: &crate::plugin_package::manifest::PluginWebviewContributionV4,
+) -> bool {
+    webview.kind.as_deref() == Some("settings")
+}
+
+fn package_webview_route(
+    package_id: &str,
+    webview_id: &str,
+    entry: &str,
+    runtime_api: &str,
+) -> String {
+    let mut query = url::form_urlencoded::Serializer::new(String::new());
+    query.append_pair("entry", entry);
+    query.append_pair("runtimeApi", runtime_api);
+    format!(
+        "/plugin-webview/{}/{}?{}",
+        encode_route_segment(package_id),
+        encode_route_segment(webview_id),
+        query.finish()
+    )
+}
+
+fn package_webview_window_label(package_id: &str, webview_id: &str) -> String {
+    let safe: String = format!("{package_id}-{webview_id}")
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    format!("plugin-webview-{safe}")
+}
+
+fn encode_route_segment(value: &str) -> String {
+    url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
 }
 
 #[tauri::command]
@@ -2878,6 +3040,15 @@ pub fn import_package_page(
 #[tauri::command]
 pub fn open_page(host: State<'_, Arc<PluginHost>>, page_id: String) -> Result<(), String> {
     host.open_page(page_id)
+}
+
+#[tauri::command]
+pub fn open_package_webview(
+    host: State<'_, Arc<PluginHost>>,
+    package_id: String,
+    webview_id: String,
+) -> Result<(), String> {
+    host.open_package_webview(package_id, webview_id)
 }
 
 #[tauri::command]

@@ -17,12 +17,13 @@ use crate::plugin_host::{
     get_package_settings, get_pages, get_runtime_info, get_visual_settings_schema,
     import_package_layout, import_package_page, inspect_package_bundle, install_package_from_file,
     install_package_from_url, install_prepared_package, list_packages, list_plugin_diagnostics,
-    open_package_configuration, open_package_secrets, open_page, packages_dir, plugin_registry_get,
-    prepare_marketplace_package, prepare_package_from_deep_link, prepare_package_from_git,
-    prepare_package_from_url, read_package_file_text, read_visual_export_source,
-    refresh_marketplace, reload_packages, remove_package, save_app_settings, save_overlay_layout,
-    save_package_settings, save_page, set_active_overlay_layout, set_package_enabled,
-    set_package_secret, set_stream_overlay_layout, PluginHost,
+    open_package_configuration, open_package_secrets, open_package_webview, open_page,
+    packages_dir, plugin_registry_get, prepare_marketplace_package, prepare_package_from_deep_link,
+    prepare_package_from_git, prepare_package_from_url, read_package_file_text,
+    read_visual_export_source, refresh_marketplace, reload_packages, remove_package,
+    save_app_settings, save_overlay_layout, save_package_settings, save_page,
+    set_active_overlay_layout, set_package_enabled, set_package_secret, set_stream_overlay_layout,
+    PluginHost,
 };
 use crate::registry::{registry_entries, registry_get, Registry};
 use crate::window_watcher::start_window_visibility_watcher;
@@ -628,6 +629,7 @@ pub fn run() {
             delete_page,
             import_package_page,
             open_page,
+            open_package_webview,
             open_package_configuration,
             open_package_secrets,
             registry_get,

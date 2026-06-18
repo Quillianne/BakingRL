@@ -68,11 +68,14 @@ export type WebviewContributionDescriptor = {
   name: string;
   entry: string | null;
   path: string | null;
+  kind: string | null;
   title: string | null;
   description: string | null;
   icon: string | null;
   configuration: string | null;
   route: string | null;
+  default_width: number;
+  default_height: number;
 };
 
 export type ConfigurationContributionDescriptor = {
