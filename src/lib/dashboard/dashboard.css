@@ -482,6 +482,78 @@
   flex: none;
 }
 
+.home-runtime-grid .metric-cell {
+  text-decoration: none;
+}
+
+.home-runtime-grid .metric-cell small {
+  display: block;
+  overflow: hidden;
+  max-width: 100%;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-runtime-card .runtime-version-card {
+  max-width: none;
+}
+
+.home-admin-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.home-admin-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-panel-hover) 70%, transparent);
+}
+
+.home-admin-list li > span:first-child {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.home-admin-list strong,
+.home-admin-list small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-admin-list strong {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.home-admin-list small {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.home-admin-list.issue-list li {
+  border-color: color-mix(in srgb, var(--danger) 34%, var(--border-color));
+}
+
+.empty-state.compact {
+  padding: 16px;
+  text-align: left;
+}
+
 .thumb-preview {
   position: relative;
   width: 100%;

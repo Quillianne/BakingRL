@@ -1,39 +1,18 @@
 <script lang="ts">
-  import { onMount } from "svelte";
   import { getDashboardContext } from "$lib/dashboard/context";
-  import LayoutThumbnail from "$lib/dashboard/LayoutThumbnail.svelte";
-  import type { MarketplaceCatalogPackage } from "$lib/dashboard/types";
 
   const state = getDashboardContext();
 
-  const mainLayouts = $derived([
-    { kind: "ingame", label: state.t("home.ingameLayout"), layout: state.homeInGameLayout },
-    { kind: "stream", label: state.t("home.streamLayout"), layout: state.homeStreamLayout }
-  ] as const);
-  const recommendedMarketplacePackages = $derived(
-    sectionPackages(state.marketplace?.sections.recommended ?? []).filter(
-      (pkg) => !state.packages.some((installed) => installed.id === pkg.id)
+  const packagesWithIssues = $derived(
+    state.packages.filter(
+      (pkg) =>
+        pkg.error ||
+        state.hasPackageCompatibilityIssue(pkg) ||
+        pkg.dependencies.some((dependency) => dependency.status !== "satisfied" && dependency.status !== "optional_missing")
     )
   );
-
-  onMount(() => {
-    if (!state.marketplace && !state.marketplaceLoading) {
-      void state.loadMarketplace();
-    }
-  });
-
-  function sectionPackages(ids: string[]) {
-    const byId = new Map((state.marketplace?.packages ?? []).map((pkg) => [pkg.id, pkg]));
-    return ids.map((id) => byId.get(id)).filter((pkg): pkg is MarketplaceCatalogPackage => Boolean(pkg));
-  }
-
-  function titleFor(pkg: MarketplaceCatalogPackage) {
-    return pkg.listing?.displayName ?? pkg.id;
-  }
-
-  function approvedVersion(pkg: MarketplaceCatalogPackage) {
-    return pkg.approvedVersions.find((version) => !version.revoked && version.review.status === "approved") ?? null;
-  }
+  const latestDiagnostics = $derived(state.developerErrors.slice(0, 4));
+  const runningPackages = $derived(state.packages.filter((pkg) => state.isPackageEnabled(pkg)));
 </script>
 
 <div class="page-title">
@@ -44,117 +23,117 @@
 </div>
 
 <div class="section-stack">
-  <section>
-    <div class="section-heading">
-      <div>
-        <h2>{state.t("home.mainLayouts")}</h2>
-      </div>
-    </div>
-
-    <div class="card-grid home-card-grid">
-      {#each mainLayouts as entry}
-        <article
-          class="thumb-card home-thumb-card home-click-card {entry.kind === 'stream' ? 'role-stream' : 'role-route'}"
-          title={entry.layout ? `${entry.label} · ${entry.layout.width}x${entry.layout.height}` : entry.label}
-        >
-          <div class="preview-click-zone home-preview-zone">
-            <div
-              class="thumb-preview"
-              aria-hidden="true"
-              style={entry.layout ? `--layout-width: ${entry.layout.width};` : ""}
-              data-action-label={entry.layout ? state.t("common.edit") : ""}
-            >
-              {#if entry.layout}
-                <LayoutThumbnail thumbnail={entry.layout.thumbnail} layout={entry.layout} kind="overlay" themeKey={state.currentTheme} />
-              {/if}
-            </div>
-            {#if entry.layout}
-              <button
-                type="button"
-                class="preview-hit-target"
-                aria-label={`${state.t("common.edit")} ${entry.layout?.name ?? ""}`}
-                onclick={() => entry.layout && void state.openLayoutEditor(entry.layout.id)}
-              ></button>
-            {/if}
-          </div>
-          <div class="thumb-copy">
-            <div class="thumb-title-row">
-              <span class="thumb-title">{entry.layout?.name ?? state.t("home.noLayout")}</span>
-            </div>
-          </div>
-        </article>
-      {/each}
-    </div>
+  <section class="metric-grid home-runtime-grid" aria-label={state.t("home.runtimeStatus")}>
+    <button class="metric-cell" type="button" onclick={() => state.openTelemetryHelp()}>
+      <strong>{state.telemetryStatusLabel}</strong>
+      <span>{state.t("home.telemetryState")}</span>
+      <small>{state.telemetryAddress}</small>
+    </button>
+    <a class="metric-cell" href="/plugins">
+      <strong>{state.enabledPackageCount}/{state.packages.length}</strong>
+      <span>{state.t("home.activePackagesLabel")}</span>
+      <small>{state.t("home.packageRuntime")}</small>
+    </a>
+    <a class="metric-cell" href="/developer">
+      <strong>{state.developerErrors.length}</strong>
+      <span>{state.t("home.diagnostics")}</span>
+      <small>{state.t("home.diagnosticsMeta")}</small>
+    </a>
   </section>
 
-  <section>
-    <div class="section-heading">
+  <section class="card-grid">
+    <article class="studio-card home-runtime-card">
       <div>
-        <h2>{state.t("home.favoritePages")}</h2>
+        <h3>{state.t("home.runtimeStatus")}</h3>
+        <p>{state.t("home.runtimeStatusDesc")}</p>
       </div>
-    </div>
+      <div class="runtime-version-card">
+        <span class="runtime-api-copy">
+          <small>{state.t("developer.runtimeApiVersion")}</small>
+          <strong>{state.runtimeInfo?.runtimeApiVersion ?? "n/a"}</strong>
+        </span>
+        <span class="runtime-api-badge">{state.runtimeInfo?.supportedRuntimeApi ?? "n/a"}</span>
+      </div>
+      <div class="card-actions">
+        <a class="btn-secondary" href="/settings">{state.t("home.settings")}</a>
+        <button class="btn-outline" type="button" onclick={() => void state.reloadPackages()} disabled={state.busy || state.packagesReloading}>
+          {state.t("common.reload")}
+        </button>
+      </div>
+    </article>
 
-    {#if state.favoritePages.length}
-      <div class="card-grid home-card-grid">
-        {#each state.favoritePages as page (page.id)}
-          <article
-            class="thumb-card home-thumb-card home-click-card"
-            title={`${page.width}x${page.height}`}
-          >
-            <div class="preview-click-zone home-preview-zone">
-              <div class="thumb-preview" aria-hidden="true" style={`--layout-width: ${page.width};`} data-action-label={state.t("common.open")}>
-                <LayoutThumbnail thumbnail={page.thumbnail} layout={page} kind="page" themeKey={state.currentTheme} />
-              </div>
-              <button
-                type="button"
-                class="preview-hit-target"
-                aria-label={`${state.t("common.open")} ${page.name}`}
-                onclick={() => void state.openPage(page.id)}
-              ></button>
-            </div>
-            <div class="thumb-copy">
-              <span class="thumb-title">{page.name}</span>
-            </div>
-          </article>
-        {/each}
+    <article class="studio-card">
+      <div>
+        <h3>{state.t("home.packages")}</h3>
+        <p>{state.t("home.packagesDesc")}</p>
       </div>
-    {:else}
-      <div class="empty-state">
-        <p>{state.t("home.noFavoritePages")}</p>
-      </div>
-    {/if}
-  </section>
-
-  {#if recommendedMarketplacePackages.length}
-    <section>
-      <div class="section-heading">
-        <div>
-          <h2>{state.t("home.recommendedPackages")}</h2>
-        </div>
-      </div>
-
-      <div class="card-grid home-marketplace-grid">
-        {#each recommendedMarketplacePackages as pkg (pkg.id)}
-          <article class="studio-card marketplace-card home-marketplace-card">
-            <span class="marketplace-card-head">
-              {#if pkg.listing?.iconUrl}
-                <img class="marketplace-icon" src={pkg.listing.iconUrl} alt="" loading="lazy" />
-              {:else}
-                <span class="marketplace-icon fallback">{titleFor(pkg).slice(0, 1)}</span>
-              {/if}
+      {#if runningPackages.length}
+        <ul class="home-admin-list">
+          {#each runningPackages.slice(0, 5) as pkg (pkg.id)}
+            <li>
               <span>
-                <strong>{titleFor(pkg)}</strong>
-                <span>{state.t("marketplace.latestApproved")} {approvedVersion(pkg)?.version ?? "-"}</span>
+                <strong>{pkg.name}</strong>
+                <small>{pkg.id}</small>
               </span>
-            </span>
-            <div class="card-actions home-marketplace-actions">
-              <button class="btn-primary" onclick={() => void state.installMarketplacePackage(pkg)} disabled={state.busy || !approvedVersion(pkg)}>
-                {state.t("marketplace.installReviewed")}
-              </button>
-            </div>
-          </article>
-        {/each}
+              <span class="status-pill connected">{state.t("common.enabled")}</span>
+            </li>
+          {/each}
+        </ul>
+      {:else}
+        <div class="empty-state compact">
+          <p>{state.t("packages.noneInstalled")}</p>
+        </div>
+      {/if}
+      <div class="card-actions">
+        <a class="btn-primary" href="/plugins">{state.t("home.managePackages")}</a>
       </div>
+    </article>
+
+    <article class="studio-card">
+      <div>
+        <h3>{state.t("home.diagnostics")}</h3>
+        <p>{state.t("home.diagnosticsDesc")}</p>
+      </div>
+      {#if latestDiagnostics.length}
+        <ul class="home-admin-list">
+          {#each latestDiagnostics as entry (entry.id)}
+            <li>
+              <span>
+                <strong>{entry.source}</strong>
+                <small>{entry.message}</small>
+              </span>
+              <small>{entry.receivedAt}</small>
+            </li>
+          {/each}
+        </ul>
+      {:else}
+        <div class="empty-state compact">
+          <p>{state.t("home.noDiagnostics")}</p>
+        </div>
+      {/if}
+      <div class="card-actions">
+        <a class="btn-secondary" href="/developer">{state.t("nav.developer")}</a>
+      </div>
+    </article>
+  </section>
+
+  {#if packagesWithIssues.length}
+    <section class="studio-panel">
+      <div class="panel-heading">
+        <h2>{state.t("home.packageIssues")}</h2>
+        <p>{state.t("home.packageIssuesDesc")}</p>
+      </div>
+      <ul class="home-admin-list issue-list">
+        {#each packagesWithIssues as pkg (pkg.id)}
+          <li>
+            <span>
+              <strong>{pkg.name}</strong>
+              <small>{pkg.error ?? pkg.compatibility.message ?? pkg.dependencies.find((dependency) => dependency.message)?.message ?? pkg.id}</small>
+            </span>
+            <span class="status-pill disconnected">{state.packageDisplayStateLabel(pkg)}</span>
+          </li>
+        {/each}
+      </ul>
     </section>
   {/if}
 </div>
