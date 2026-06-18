@@ -131,22 +131,6 @@
         title: dashboard.t("packages.schemas"),
         count: pkg.contributions.schemas.length,
         rows: pkg.contributions.schemas.map((schema) => ({ name: schema.name }))
-      },
-      {
-        title: dashboard.t("packages.pageTemplates"),
-        count: pkg.contributions.pages.length,
-        rows: pkg.contributions.pages.map((page) => ({
-          name: page.title ?? page.name,
-          meta: page.path
-        }))
-      },
-      {
-        title: dashboard.t("packages.layoutTemplates"),
-        count: pkg.contributions.overlays.length,
-        rows: pkg.contributions.overlays.map((layoutTemplate) => ({
-          name: layoutTemplate.title ?? layoutTemplate.name,
-          meta: layoutTemplate.path
-        }))
       }
     ];
     return sections.filter((section) => section.count > 0);

@@ -50,20 +50,6 @@ export type ResourceContributionDescriptor = {
   reference: string;
 };
 
-export type PageContributionDescriptor = {
-  name: string;
-  path: string;
-  title: string | null;
-  description: string | null;
-};
-
-export type OverlayContributionDescriptor = {
-  name: string;
-  path: string;
-  title: string | null;
-  description: string | null;
-};
-
 export type WebviewContributionDescriptor = {
   name: string;
   entry: string | null;
@@ -163,8 +149,6 @@ export type PackageDescriptor = {
     views: WebviewContributionDescriptor[];
     assets: NamedContributionDescriptor[];
     schemas: NamedContributionDescriptor[];
-    pages: PageContributionDescriptor[];
-    overlays: OverlayContributionDescriptor[];
     webviews: WebviewContributionDescriptor[];
     configuration: ConfigurationContributionDescriptor | null;
   };
@@ -289,12 +273,10 @@ export type AppSettings = {
     require_trusted_remote_packages: boolean;
     trusted_package_public_keys: string[];
   };
-  overlay: {
-    update_state_throttle_fps: number;
-  };
   telemetry: {
     rocket_league_host: string;
     rocket_league_port: number;
+    update_state_throttle_fps: number;
   };
 };
 

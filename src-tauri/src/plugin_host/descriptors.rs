@@ -51,8 +51,6 @@ pub struct PackageContributionsDescriptor {
     pub views: Vec<WebviewContributionDescriptor>,
     pub assets: Vec<NamedContributionDescriptor>,
     pub schemas: Vec<NamedContributionDescriptor>,
-    pub pages: Vec<PageContributionDescriptor>,
-    pub overlays: Vec<OverlayContributionDescriptor>,
     pub webviews: Vec<WebviewContributionDescriptor>,
     pub configuration: Option<ConfigurationContributionDescriptor>,
 }
@@ -132,22 +130,6 @@ pub struct PackageDependencyDescriptor {
     pub optional: bool,
     pub status: PackageDependencyStatus,
     pub message: Option<String>,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct PageContributionDescriptor {
-    pub name: String,
-    pub path: String,
-    pub title: Option<String>,
-    pub description: Option<String>,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct OverlayContributionDescriptor {
-    pub name: String,
-    pub path: String,
-    pub title: Option<String>,
-    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -292,8 +274,6 @@ pub(super) fn descriptor_for_manifest(
             views: Vec::new(),
             assets: Vec::new(),
             schemas: Vec::new(),
-            pages: Vec::new(),
-            overlays: Vec::new(),
             webviews: contributes
                 .webviews
                 .iter()
@@ -1029,8 +1009,6 @@ mod tests {
             descriptor.contributions.webviews[0].entry.as_deref(),
             Some("dist/webviews/inspector.js")
         );
-        assert!(descriptor.contributions.pages.is_empty());
-        assert!(descriptor.contributions.overlays.is_empty());
         assert_eq!(
             descriptor.settings.as_deref(),
             Some("schemas/plugin-settings.json")

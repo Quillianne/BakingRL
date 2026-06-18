@@ -144,7 +144,7 @@ impl UpdateStateRateLimiter {
 
         let fps = plugin_host
             .get_app_settings()
-            .overlay
+            .telemetry
             .update_state_throttle_fps
             .max(1);
         let interval = Duration::from_millis((1000 / u64::from(fps)).max(1));

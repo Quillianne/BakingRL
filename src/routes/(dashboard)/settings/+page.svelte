@@ -175,7 +175,7 @@
               </div>
               <div class="input-group">
                 <label for="updateStateThrottle">{dashboard.t("settings.updateStateThrottle")}</label>
-                <input id="updateStateThrottle" type="number" min="1" max="120" bind:value={draftSettings.overlay.update_state_throttle_fps} />
+                <input id="updateStateThrottle" type="number" min="1" max="120" bind:value={draftSettings.telemetry.update_state_throttle_fps} />
               </div>
             </div>
           </div>

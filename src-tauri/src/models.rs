@@ -331,31 +331,15 @@ impl Default for SecuritySettings {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct OverlaySettings {
-    #[serde(
-        default = "default_update_state_throttle_fps",
-        alias = "update_rate_fps"
-    )]
-    pub update_state_throttle_fps: u16,
-}
-
 fn default_update_state_throttle_fps() -> u16 {
     30
 }
 
-impl Default for OverlaySettings {
-    fn default() -> Self {
-        Self {
-            update_state_throttle_fps: default_update_state_throttle_fps(),
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Clone)]
 pub struct TelemetrySettings {
     pub rocket_league_host: String,
     pub rocket_league_port: u16,
+    pub update_state_throttle_fps: u16,
 }
 
 impl Default for TelemetrySettings {
@@ -363,6 +347,7 @@ impl Default for TelemetrySettings {
         Self {
             rocket_league_host: "127.0.0.1".to_string(),
             rocket_league_port: 49123,
+            update_state_throttle_fps: default_update_state_throttle_fps(),
         }
     }
 }
@@ -388,16 +373,81 @@ impl TelemetryConnectionStatus {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Default)]
+struct TelemetrySettingsInput {
+    #[serde(default)]
+    rocket_league_host: Option<String>,
+    #[serde(default)]
+    rocket_league_port: Option<u16>,
+    #[serde(default, alias = "update_rate_fps")]
+    update_state_throttle_fps: Option<u16>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct LegacyOverlaySettings {
+    #[serde(default, alias = "update_rate_fps")]
+    update_state_throttle_fps: Option<u16>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct AppSettingsInput {
+    #[serde(default)]
+    behavior: AppBehaviorSettings,
+    #[serde(default)]
+    security: SecuritySettings,
+    #[serde(default)]
+    telemetry: TelemetrySettingsInput,
+    #[serde(default)]
+    overlay: Option<LegacyOverlaySettings>,
+}
+
+#[derive(Debug, Serialize, Clone)]
 pub struct AppSettings {
-    #[serde(default)]
     pub behavior: AppBehaviorSettings,
-    #[serde(default)]
     pub security: SecuritySettings,
-    #[serde(default)]
-    pub overlay: OverlaySettings,
-    #[serde(default)]
     pub telemetry: TelemetrySettings,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            behavior: AppBehaviorSettings::default(),
+            security: SecuritySettings::default(),
+            telemetry: TelemetrySettings::default(),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for AppSettings {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let input = AppSettingsInput::deserialize(deserializer)?;
+        let telemetry_defaults = TelemetrySettings::default();
+        let legacy_throttle = input
+            .overlay
+            .and_then(|overlay| overlay.update_state_throttle_fps);
+        Ok(Self {
+            behavior: input.behavior,
+            security: input.security,
+            telemetry: TelemetrySettings {
+                rocket_league_host: input
+                    .telemetry
+                    .rocket_league_host
+                    .unwrap_or(telemetry_defaults.rocket_league_host),
+                rocket_league_port: input
+                    .telemetry
+                    .rocket_league_port
+                    .unwrap_or(telemetry_defaults.rocket_league_port),
+                update_state_throttle_fps: input
+                    .telemetry
+                    .update_state_throttle_fps
+                    .or(legacy_throttle)
+                    .unwrap_or(telemetry_defaults.update_state_throttle_fps),
+            },
+        })
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
