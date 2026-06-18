@@ -5,6 +5,7 @@
   import { adapter } from "$lib/adapter/index";
   import { importPluginModule } from "$lib/pluginModuleLoader";
   import { mountPluginWebview, type PluginWebviewHandle } from "$lib/pluginWebview";
+  import type { PackageConfigurationState } from "$lib/dashboard/types";
   import type { GameEventFrame } from "$lib/rlTelemetry";
 
   const { data } = $props();
@@ -16,6 +17,12 @@
   type TelemetrySubscription = {
     eventName: string;
     callback: TelemetryCallback;
+  };
+
+  type ModuleSettings = Record<string, unknown> & {
+    get(): Promise<Record<string, unknown>>;
+    save(values: Record<string, unknown>): Promise<Record<string, unknown>>;
+    subscribe(callback: (settings: Record<string, unknown>) => void | Promise<void>): () => void;
   };
 
   function publishTelemetry(callbacks: Set<TelemetryCallback>, event: unknown) {
@@ -37,6 +44,59 @@
     });
   }
 
+  async function updatePackageSettings(values: Record<string, unknown>) {
+    return await savePackageSettings({
+      ...(await packageSettings()),
+      ...values
+    });
+  }
+
+  async function resetPackageSettings() {
+    return await savePackageSettings({});
+  }
+
+  async function packageConfigurationState() {
+    return await invoke<PackageConfigurationState>("get_package_configuration_state", {
+      packageId: data.packageId
+    });
+  }
+
+  async function packageSecretConfigured(key: string) {
+    const state = await packageConfigurationState();
+    return state.secrets.some((secret) => secret.key === key && secret.configured);
+  }
+
+  async function setPackageSecret(key: string, value: string) {
+    return await invoke<PackageConfigurationState>("set_package_secret", {
+      packageId: data.packageId,
+      key,
+      value
+    });
+  }
+
+  async function deletePackageSecret(key: string) {
+    return await invoke<PackageConfigurationState>("delete_package_secret", {
+      packageId: data.packageId,
+      key
+    });
+  }
+
+  async function callPackageService(serviceRef: string, method: string, input?: unknown) {
+    return await invoke("call_service_export", {
+      callerPackageId: data.packageId,
+      serviceRef,
+      method,
+      input: input ?? null
+    });
+  }
+
+  async function readPackageRegistry(key: string) {
+    return await invoke("plugin_registry_get", {
+      packageId: data.packageId,
+      key
+    });
+  }
+
   function subscribePackageSettings(callback: (settings: Record<string, unknown>) => void | Promise<void>) {
     let active = true;
     let unlisten: (() => void) | null = null;
@@ -52,6 +112,15 @@
     return () => {
       active = false;
       unlisten?.();
+    };
+  }
+
+  function createModuleSettings(settings: Record<string, unknown>): ModuleSettings {
+    return {
+      ...settings,
+      get: packageSettings,
+      save: savePackageSettings,
+      subscribe: subscribePackageSettings
     };
   }
 
@@ -99,6 +168,41 @@
     }
 
     const telemetryHub = createTelemetryHub();
+    const configuration = {
+      packageId: data.packageId,
+      settings: {
+        get: packageSettings,
+        update: updatePackageSettings,
+        save: savePackageSettings,
+        reset: resetPackageSettings,
+        subscribe: subscribePackageSettings
+      },
+      secrets: {
+        configured: packageSecretConfigured,
+        set: setPackageSecret,
+        clear: deletePackageSecret
+      }
+    };
+    const diagnostics = {
+      log(message: string, details?: unknown) {
+        console.log(`[${data.packageId}/${data.webviewId}] ${message}`, details ?? "");
+      },
+      info(message: string, details?: unknown) {
+        console.info(`[${data.packageId}/${data.webviewId}] ${message}`, details ?? "");
+      },
+      warn(message: string, details?: unknown) {
+        console.warn(`[${data.packageId}/${data.webviewId}] ${message}`, details ?? "");
+      },
+      error(message: string, details?: unknown) {
+        console.error(`[${data.packageId}/${data.webviewId}] ${message}`, details ?? "");
+      },
+      report(diagnostic: unknown) {
+        console.warn(`[${data.packageId}/${data.webviewId}] diagnostic`, diagnostic);
+      },
+      clear() {
+        // Module webviews currently expose console-backed diagnostics only.
+      }
+    };
 
     async function mount() {
       if (!root) return;
@@ -112,16 +216,67 @@
         const module = await importPluginModule(data.packageId, data.entry, Date.now());
         const exported = module.default ?? module;
         if (typeof exported?.mount === "function") {
+          const moduleSettings = createModuleSettings(settings);
+          const item = {
+            id: data.webviewId,
+            package_id: data.packageId,
+            export_name: data.webviewId,
+            name: data.webviewId,
+            x: 0,
+            y: 0,
+            width: dimensions.width,
+            height: dimensions.height,
+            z_index: 0,
+            visible: true,
+            locked: false,
+            opacity: 1,
+            settings
+          };
           const cleanup = await exported.mount({
             root,
             packageId: data.packageId,
             webviewId: data.webviewId,
-            settings: {
-              get: packageSettings,
-              save: savePackageSettings,
-              subscribe: subscribePackageSettings
+            exportName: data.webviewId,
+            package: {
+              id: data.packageId,
+              name: data.packageId,
+              enabled: true
             },
+            item,
+            settings: moduleSettings,
+            configuration,
             telemetryHub,
+            bus: telemetryHub,
+            registry: {
+              get: readPackageRegistry
+            },
+            state: {
+              get: readPackageRegistry,
+              async set() {
+                throw new Error("Module webview state writes are not supported by the host.");
+              }
+            },
+            services: {
+              call: callPackageService
+            },
+            assets: {
+              url(ref: string) {
+                return adapter.packageFileUrl(data.packageId, ref);
+              }
+            },
+            diagnostics,
+            telemetry: {
+              event: publishTelemetryFrame
+            },
+            secrets: {
+              async get() {
+                return undefined;
+              },
+              configured: packageSecretConfigured
+            },
+            setActive() {
+              // Standalone module webviews stay visible while their window is open.
+            },
             dimensions,
             mode: "runtime"
           });
