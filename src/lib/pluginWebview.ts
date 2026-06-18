@@ -27,13 +27,12 @@ export type PluginWebviewMountOptions = {
   exportName: string;
   item: PluginWebviewItem;
   settings: Record<string, unknown>;
-  mode: "runtime" | "editor";
+  mode: "runtime";
   runtimeApi?: string | null;
   assetUrl(ref: string): string;
   subscribeTelemetry(callback: (event: unknown) => void): () => void;
   getTelemetrySnapshot?(): unknown | Promise<unknown>;
   publishTelemetry?(eventName: string, payload?: unknown): unknown | Promise<unknown>;
-  emitEditorEvent?(eventName: string, payload?: unknown): void;
   setActive?(active: boolean): void;
   configuration?: {
     packageId: string;
@@ -231,12 +230,6 @@ export function mountPluginWebview(options: PluginWebviewMountOptions): PluginWe
         .clear(key)
         .then((state) => post("bakingrl:configuration-secret-clear:result", { state: recordPayloadValue(state) }, message.id))
         .catch((error) => post("bakingrl:configuration-secret-clear:result", { error: String(error) }, message.id));
-      return;
-    }
-
-    if (message.type === "bakingrl:editor-event" && options.emitEditorEvent) {
-      const eventName = typeof message.payload?.eventName === "string" ? message.payload.eventName : "";
-      options.emitEditorEvent(eventName, message.payload?.payload);
       return;
     }
 

@@ -4,7 +4,7 @@ export type RouteReturnState = {
 };
 
 const PENDING_ROUTE_RETURN_KEY = "bakingrl.pendingRouteReturn";
-const ROUTE_SCROLL_RESTORE_KEY = "bakingrl.editorReturn";
+const ROUTE_SCROLL_RESTORE_KEY = "bakingrl.routeReturn";
 
 export function captureRouteReturnState(): RouteReturnState {
   if (typeof window === "undefined") return { returnTo: "/", scrollY: 0 };

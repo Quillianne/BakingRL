@@ -10,7 +10,7 @@ interface AdapterOptions {
 }
 
 /**
- * The BakingRL Adapter abstracts the data source for visual package contributions.
+ * The BakingRL Adapter abstracts package resource URLs and host calls.
  * It detects whether it runs inside a Tauri runtime or in a browser embedding.
  */
 export class BakingRLAdapter {
