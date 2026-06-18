@@ -383,6 +383,8 @@ export class DashboardState {
     this.pages = await invoke<PagesFile>("get_pages");
     this.appSettings = await invoke<AppSettings>("get_app_settings");
     this.telemetryStatus = await invoke<TelemetryConnectionStatus>("get_telemetry_status");
+    const telemetrySnapshot = await invoke<GameEventFrame | null>("get_telemetry_snapshot");
+    if (telemetrySnapshot) this.recordTelemetryFrame(telemetrySnapshot);
     this.overlayMonitors = await invoke<OverlayMonitor[]>("list_overlay_monitors");
     this.registryEntries = await invoke<RegistryEntry[]>("registry_entries");
   }

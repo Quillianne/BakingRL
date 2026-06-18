@@ -1316,6 +1316,9 @@ fn telemetry_hub_publish(
 }
 
 fn telemetry_hub_snapshot(context: &ExtensionHostContext) -> Result<serde_json::Value, String> {
+    if let Some(event) = context.bus.latest_game_event() {
+        return Ok(serde_json::to_value(&*event).unwrap_or(serde_json::Value::Null));
+    }
     Ok(context
         .latest_telemetry
         .lock()

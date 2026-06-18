@@ -364,6 +364,11 @@ fn get_telemetry_status(
 }
 
 #[tauri::command]
+fn get_telemetry_snapshot(bus: tauri::State<'_, Arc<EventBus>>) -> Option<GameEvent> {
+    bus.latest_game_event().as_deref().cloned()
+}
+
+#[tauri::command]
 fn list_overlay_monitors(app: tauri::AppHandle) -> Result<Vec<OverlayMonitorDescriptor>, String> {
     let reference_window = app
         .get_webview_window(INGAME_OVERLAY_LABEL)
@@ -637,6 +642,7 @@ pub fn run() {
             open_overlay_layout_editor,
             close_overlay_editor,
             get_telemetry_status,
+            get_telemetry_snapshot,
             list_overlay_monitors,
             emit_developer_telemetry,
             take_pending_package_file_opens,
