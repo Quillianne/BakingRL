@@ -18,7 +18,10 @@ use tokio::sync::mpsc as tokio_mpsc;
 use tracing::{error, info, warn};
 
 use super::diagnostics::{PluginDiagnosticInput, PluginDiagnosticSeverity, PluginDiagnosticsStore};
-use super::service_registry::{ServiceCallClient, ServiceCallRequest, ServiceCallRouter};
+use super::service_registry::{
+    CommandCallClient, CommandCallRequest, CommandCallRouter, ServiceCallClient,
+    ServiceCallRequest, ServiceCallRouter,
+};
 use super::settings_contract::{read_package_secret, read_package_secret_configured};
 use super::sidecar_runtime::{SidecarRuntimeController, SidecarRuntimeSpec};
 use super::PluginHost;
@@ -145,6 +148,7 @@ impl ExtensionHostRuntimeManager {
         app_handle: AppHandle,
         bus: Arc<EventBus>,
         registry: Arc<Registry>,
+        command_router: CommandCallRouter,
         service_router: ServiceCallRouter,
         sidecars: SidecarRuntimeController,
         diagnostics: PluginDiagnosticsStore,
@@ -184,6 +188,7 @@ impl ExtensionHostRuntimeManager {
                 app_handle.clone(),
                 bus.clone(),
                 registry.clone(),
+                command_router.clone(),
                 service_router.clone(),
                 sidecars.clone(),
                 diagnostics.clone(),
@@ -226,6 +231,7 @@ impl ExtensionHostRuntimeManager {
         app_handle: AppHandle,
         bus: Arc<EventBus>,
         registry: Arc<Registry>,
+        command_router: CommandCallRouter,
         service_router: ServiceCallRouter,
         sidecars: SidecarRuntimeController,
         diagnostics: PluginDiagnosticsStore,
@@ -247,6 +253,7 @@ impl ExtensionHostRuntimeManager {
             app_handle,
             bus,
             registry,
+            command_router,
             service_router,
             sidecars,
             diagnostics,
@@ -291,6 +298,9 @@ struct ExtensionHostContext {
     bus_subscriptions: Arc<Mutex<HashSet<String>>>,
     latest_telemetry: Arc<Mutex<Option<serde_json::Value>>>,
     registry: Arc<Registry>,
+    command_router: CommandCallRouter,
+    command_call_tx: tokio_mpsc::Sender<CommandCallRequest>,
+    registered_commands: Arc<Mutex<HashSet<String>>>,
     service_router: ServiceCallRouter,
     service_call_tx: tokio_mpsc::Sender<ServiceCallRequest>,
     registered_services: Arc<Mutex<HashSet<String>>>,
@@ -442,6 +452,7 @@ fn spawn_extension_host_runtime(
     app_handle: AppHandle,
     bus: Arc<EventBus>,
     registry: Arc<Registry>,
+    command_router: CommandCallRouter,
     service_router: ServiceCallRouter,
     sidecars: SidecarRuntimeController,
     diagnostics: PluginDiagnosticsStore,
@@ -473,6 +484,13 @@ fn spawn_extension_host_runtime(
         .collect::<HashMap<_, _>>();
     let webviews = spec.webviews.clone();
     let rpc = ExtensionHostRpc::default();
+    let (command_call_tx, command_call_rx) = tokio_mpsc::channel(128);
+    spawn_extension_command_dispatcher(
+        runtime_key.clone(),
+        rpc.clone(),
+        command_call_rx,
+        app_handle.clone(),
+    );
     let (service_call_tx, service_call_rx) = tokio_mpsc::channel(128);
     spawn_extension_service_dispatcher(
         runtime_key.clone(),
@@ -520,6 +538,9 @@ fn spawn_extension_host_runtime(
         bus_subscriptions: Arc::new(Mutex::new(HashSet::new())),
         latest_telemetry: Arc::new(Mutex::new(None)),
         registry,
+        command_router,
+        command_call_tx,
+        registered_commands: Arc::new(Mutex::new(HashSet::new())),
         service_router,
         service_call_tx,
         registered_services: Arc::new(Mutex::new(HashSet::new())),
@@ -589,6 +610,31 @@ fn spawn_extension_service_dispatcher(
                     "serviceRef": request.service_ref,
                     "method": request.method,
                     "input": request.input,
+                }),
+            );
+            if let Err(message) = &result {
+                emit_runtime_error(&app_handle, "extensionHost", &runtime_key, message);
+            }
+            let _ = request.response.send(result);
+        }
+    });
+}
+
+fn spawn_extension_command_dispatcher(
+    runtime_key: String,
+    rpc: ExtensionHostRpc,
+    mut command_call_rx: tokio_mpsc::Receiver<CommandCallRequest>,
+    app_handle: AppHandle,
+) {
+    let builder =
+        thread::Builder::new().name(format!("bakingrl-extension-host-commands-{runtime_key}"));
+    let _ = builder.spawn(move || {
+        while let Some(request) = command_call_rx.blocking_recv() {
+            let result = rpc.request(
+                "commands/executeRegistered",
+                serde_json::json!({
+                    "command": request.command_ref,
+                    "args": request.args,
                 }),
             );
             if let Err(message) = &result {
@@ -952,6 +998,12 @@ fn supervise_child_once(
     let _ = bus_shutdown_tx.send(());
     let _ = bus_forwarder.join();
     context.bus_subscriptions.lock().unwrap().clear();
+    for command_ref in context.registered_commands.lock().unwrap().drain() {
+        context.command_router.remove(&command_ref);
+    }
+    for service_ref in context.registered_services.lock().unwrap().drain() {
+        context.service_router.remove(&service_ref);
+    }
     context.rpc.set_stdin(None);
     context
         .rpc
@@ -1089,12 +1141,9 @@ fn handle_host_request(
     params: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     match method {
-        "commands/registerCommand" | "commands/unregisterCommand" => {
-            Ok(serde_json::json!({ "ok": true }))
-        }
-        "commands/executeCommand" => Err(
-            "Host command execution is not connected to the dashboard command bus yet.".to_string(),
-        ),
+        "commands/registerCommand" => register_command(context, params),
+        "commands/unregisterCommand" => unregister_command(context, params),
+        "commands/executeCommand" => call_command(context, params),
         "services/registerService" => register_service(context, params),
         "services/unregisterService" => unregister_service(context, params),
         "services/call" => call_service(context, params),
@@ -1132,6 +1181,93 @@ fn handle_host_request(
             "Extension host JSON-RPC method '{method}' is not supported."
         )),
     }
+}
+
+fn package_scoped_ref(package_id: &str, value: String, kind: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(format!("{kind} cannot be empty."));
+    }
+    if let Some((target_package_id, export_name)) = trimmed.split_once('/') {
+        if target_package_id != package_id {
+            return Err(format!(
+                "Extension host '{package_id}' cannot register {kind} '{trimmed}'."
+            ));
+        }
+        if export_name.trim().is_empty() {
+            return Err(format!("{kind} '{trimmed}' must include an export name."));
+        }
+        return Ok(trimmed.to_string());
+    }
+    Ok(format!("{package_id}/{trimmed}"))
+}
+
+fn command_ref_for_context(
+    context: &ExtensionHostContext,
+    params: &serde_json::Value,
+) -> Result<String, String> {
+    package_scoped_ref(
+        &context.package_id,
+        required_string(params, "command")?,
+        "command",
+    )
+}
+
+fn register_command(
+    context: &ExtensionHostContext,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let command_ref = command_ref_for_context(context, &params)?;
+    plugin_host(context)?.validate_command_call(&context.package_id, &command_ref)?;
+    context.command_router.insert(
+        command_ref.clone(),
+        CommandCallClient::new_extension_host(
+            format!("extensionHost:{}", context.package_id),
+            context.command_call_tx.clone(),
+        ),
+    );
+    context
+        .registered_commands
+        .lock()
+        .unwrap()
+        .insert(command_ref.clone());
+    Ok(serde_json::json!({ "ok": true, "command": command_ref }))
+}
+
+fn unregister_command(
+    context: &ExtensionHostContext,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let command_ref = command_ref_for_context(context, &params)?;
+    context.command_router.remove(&command_ref);
+    context
+        .registered_commands
+        .lock()
+        .unwrap()
+        .remove(&command_ref);
+    Ok(serde_json::json!({ "ok": true, "command": command_ref }))
+}
+
+fn call_command(
+    context: &ExtensionHostContext,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let command = required_string(&params, "command")?;
+    let command_ref = if command.contains('/') {
+        command
+    } else {
+        format!("{}/{}", context.package_id, command)
+    };
+    let args = params
+        .get("args")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    tauri::async_runtime::block_on(plugin_host(context)?.call_command_export(
+        &context.package_id,
+        &command_ref,
+        args,
+    ))
 }
 
 fn register_service(
@@ -2018,5 +2154,33 @@ mod tests {
         let snapshot = telemetry_snapshot_value(&bus, &latest_telemetry);
         assert_eq!(snapshot["Event"], "BallHit");
         assert_eq!(snapshot["Data"]["Speed"], 321);
+    }
+
+    #[test]
+    fn package_scoped_ref_expands_local_command_names() {
+        assert_eq!(
+            package_scoped_ref("bakingrl.pkg", "openSettings".to_string(), "command").unwrap(),
+            "bakingrl.pkg/openSettings"
+        );
+        assert_eq!(
+            package_scoped_ref(
+                "bakingrl.pkg",
+                "bakingrl.pkg/openSettings".to_string(),
+                "command"
+            )
+            .unwrap(),
+            "bakingrl.pkg/openSettings"
+        );
+    }
+
+    #[test]
+    fn package_scoped_ref_rejects_foreign_refs() {
+        let error = package_scoped_ref(
+            "bakingrl.pkg",
+            "bakingrl.other/openSettings".to_string(),
+            "command",
+        )
+        .unwrap_err();
+        assert!(error.contains("cannot register command"));
     }
 }

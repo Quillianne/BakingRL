@@ -165,6 +165,12 @@ rpc.on("services/callRegistered", async (params: any) => {
   return await invokeLocalService(serviceRef, method, params?.input ?? null);
 });
 
+rpc.on("commands/executeRegistered", async (params: any) => {
+  const command = String(params?.command ?? "");
+  const args = Array.isArray(params?.args) ? params.args : [];
+  return await invokeLocalCommand(command, args);
+});
+
 rpc.on("bus/event", async (params: any) => {
   const event = params?.event;
   const eventName = String(event?.Event ?? event?.event ?? params?.eventName ?? "");
@@ -187,6 +193,11 @@ function localServiceRef(name: string) {
   return name.includes("/") ? name : `${spec.packageId}/${name}`;
 }
 
+function localCommandName(command: string) {
+  const prefix = `${spec.packageId}/`;
+  return command.startsWith(prefix) ? command.slice(prefix.length) : command;
+}
+
 function matchesEventPattern(pattern: string, value: string) {
   return pattern === "*" || pattern === value || (pattern.endsWith(".*") && value.startsWith(pattern.slice(0, -1)));
 }
@@ -198,6 +209,14 @@ async function invokeLocalService(serviceRef: string, method: string, input: unk
     throw new Error(`Service '${serviceRef}' does not expose method '${method}'.`);
   }
   return await fn(input ?? null);
+}
+
+async function invokeLocalCommand(command: string, args: unknown[]) {
+  const fn = localCommands.get(command) ?? localCommands.get(localCommandName(command));
+  if (typeof fn !== "function") {
+    throw new Error(`Command '${command}' is not registered.`);
+  }
+  return await fn(...args);
 }
 
 function disposable(dispose: () => unknown | Promise<unknown>): Disposable {

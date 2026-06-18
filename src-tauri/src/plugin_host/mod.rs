@@ -48,7 +48,7 @@ use runtime_specs::{
     extension_host_specs_for_records, sidecar_service_specs_for_records, sidecar_specs_for_records,
     SidecarServiceRuntimeSpec,
 };
-use service_registry::{ServiceCallClient, ServiceCallRouter};
+use service_registry::{CommandCallRouter, ServiceCallClient, ServiceCallRouter};
 use settings_contract::{
     delete_package_secret as delete_keychain_package_secret, merge_package_settings,
     merge_package_settings_with_schema, package_secret_configured, read_package_settings_schema,
@@ -93,6 +93,7 @@ pub struct PluginHost {
     records: Mutex<HashMap<String, PackageRecord>>,
     deleting_packages: Mutex<HashMap<String, PendingPackageDeletion>>,
     diagnostics: PluginDiagnosticsStore,
+    command_router: CommandCallRouter,
     service_router: ServiceCallRouter,
     sidecar_services: Mutex<HashSet<String>>,
     #[allow(dead_code)]
@@ -129,6 +130,7 @@ impl PluginHost {
             records: Mutex::new(HashMap::new()),
             deleting_packages: Mutex::new(HashMap::new()),
             diagnostics: PluginDiagnosticsStore::default(),
+            command_router: CommandCallRouter::default(),
             service_router: ServiceCallRouter::default(),
             sidecar_services: Mutex::new(HashSet::new()),
             extension_host_runtimes: ExtensionHostRuntimeManager::default(),
@@ -300,6 +302,7 @@ impl PluginHost {
                 self.app_handle.clone(),
                 self.bus.clone(),
                 self.registry.clone(),
+                self.command_router.clone(),
                 self.service_router.clone(),
                 self.sidecar_runtimes.controller(),
                 self.diagnostics.clone(),
@@ -326,6 +329,7 @@ impl PluginHost {
                 self.app_handle.clone(),
                 self.bus.clone(),
                 self.registry.clone(),
+                self.command_router.clone(),
                 self.service_router.clone(),
                 self.sidecar_runtimes.controller(),
                 self.diagnostics.clone(),
@@ -347,6 +351,7 @@ impl PluginHost {
             self.app_handle.clone(),
             self.bus.clone(),
             self.registry.clone(),
+            self.command_router.clone(),
             self.service_router.clone(),
             self.sidecar_runtimes.controller(),
             self.diagnostics.clone(),
@@ -395,6 +400,7 @@ impl PluginHost {
                 self.app_handle.clone(),
                 self.bus.clone(),
                 self.registry.clone(),
+                self.command_router.clone(),
                 self.service_router.clone(),
                 self.sidecar_runtimes.controller(),
                 self.diagnostics.clone(),
@@ -413,6 +419,7 @@ impl PluginHost {
                 self.app_handle.clone(),
                 self.bus.clone(),
                 self.registry.clone(),
+                self.command_router.clone(),
                 self.service_router.clone(),
                 self.sidecar_runtimes.controller(),
                 self.diagnostics.clone(),
@@ -971,6 +978,36 @@ impl PluginHost {
         Ok(())
     }
 
+    pub fn validate_command_call(
+        &self,
+        caller_package_id: &str,
+        command_ref: &str,
+    ) -> Result<(), String> {
+        let (provider_package_id, export_name) = parse_export_ref(command_ref)?;
+        let records = self.records.lock().unwrap();
+        let caller = self.require_enabled_record(&records, caller_package_id)?;
+        let provider = self.require_enabled_record(&records, provider_package_id)?;
+        let result = validate_command_export(
+            caller,
+            provider,
+            caller_package_id,
+            provider_package_id,
+            command_ref,
+            export_name,
+        );
+        if let Err(message) = &result {
+            if message.contains("without declaring a dependency") {
+                self.push_host_diagnostic(
+                    Some(caller_package_id),
+                    "commands",
+                    PluginDiagnosticSeverity::Warning,
+                    message.clone(),
+                );
+            }
+        }
+        result
+    }
+
     pub async fn call_service_export(
         &self,
         caller_package_id: &str,
@@ -982,6 +1019,16 @@ impl PluginHost {
         self.service_router
             .call(service_ref, method.to_string(), input)
             .await
+    }
+
+    pub async fn call_command_export(
+        &self,
+        caller_package_id: &str,
+        command_ref: &str,
+        args: Vec<serde_json::Value>,
+    ) -> Result<serde_json::Value, String> {
+        self.validate_command_call(caller_package_id, command_ref)?;
+        self.command_router.call(command_ref, args).await
     }
 
     pub fn can_package_read_registry(&self, package_id: &str, _key: &str) -> Result<(), String> {
@@ -1497,6 +1544,31 @@ pub fn runtime_info() -> RuntimeInfo {
     }
 }
 
+fn validate_command_export(
+    caller: &PackageRecord,
+    provider: &PackageRecord,
+    caller_package_id: &str,
+    provider_package_id: &str,
+    command_ref: &str,
+    export_name: &str,
+) -> Result<(), String> {
+    if provider_package_id != caller_package_id && !caller_depends_on(provider_package_id, caller) {
+        return Err(format!(
+            "Package '{caller_package_id}' cannot execute command '{command_ref}' without declaring a dependency on '{provider_package_id}'."
+        ));
+    }
+    if !provider
+        .manifest
+        .contributes_v4()
+        .commands
+        .iter()
+        .any(|command| command.id == export_name)
+    {
+        return Err(format!("Command export '{command_ref}' does not exist."));
+    }
+    Ok(())
+}
+
 fn caller_depends_on(provider_package_id: &str, caller: &PackageRecord) -> bool {
     caller
         .manifest
@@ -1722,6 +1794,78 @@ mod tests {
 
         assert!(caller_depends_on("bakingrl.provider", &caller));
         assert!(!caller_depends_on("bakingrl.other", &caller));
+    }
+
+    #[test]
+    fn command_exports_require_declared_dependency_and_command() {
+        let provider = package_record(serde_json::json!({
+            "schemaVersion": "bakingrl.plugin/4",
+            "id": "bakingrl.provider",
+            "name": "Provider",
+            "version": "1.0.0",
+            "bakingrlApi": "2.2.0",
+            "contributes": {
+                "commands": [
+                    {
+                        "id": "openSettings",
+                        "title": "Open Settings"
+                    }
+                ]
+            }
+        }));
+        let caller = package_record(serde_json::json!({
+            "schemaVersion": "bakingrl.plugin/4",
+            "id": "bakingrl.consumer",
+            "name": "Consumer",
+            "version": "1.0.0",
+            "bakingrlApi": "2.2.0",
+            "dependencies": [
+                {
+                    "packageId": "bakingrl.provider"
+                }
+            ],
+            "contributes": {}
+        }));
+        let unrelated = package_record(serde_json::json!({
+            "schemaVersion": "bakingrl.plugin/4",
+            "id": "bakingrl.other",
+            "name": "Other",
+            "version": "1.0.0",
+            "bakingrlApi": "2.2.0",
+            "contributes": {}
+        }));
+
+        assert!(validate_command_export(
+            &caller,
+            &provider,
+            "bakingrl.consumer",
+            "bakingrl.provider",
+            "bakingrl.provider/openSettings",
+            "openSettings",
+        )
+        .is_ok());
+        assert!(validate_command_export(
+            &unrelated,
+            &provider,
+            "bakingrl.other",
+            "bakingrl.provider",
+            "bakingrl.provider/openSettings",
+            "openSettings",
+        )
+        .unwrap_err()
+        .contains("without declaring a dependency"));
+        assert_eq!(
+            validate_command_export(
+                &caller,
+                &provider,
+                "bakingrl.consumer",
+                "bakingrl.provider",
+                "bakingrl.provider/missing",
+                "missing",
+            )
+            .unwrap_err(),
+            "Command export 'bakingrl.provider/missing' does not exist."
+        );
     }
 
     #[test]
