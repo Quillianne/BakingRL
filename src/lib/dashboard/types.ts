@@ -89,6 +89,16 @@ export type PluginRuntimeSidecarDescriptor = {
   } | null;
 };
 
+export type SidecarRuntimeStatus = {
+  running: boolean;
+  lastExitCode?: number | null;
+  restartCount: number;
+  crashCount: number;
+  healthy?: boolean | null;
+  lastHealthError?: string | null;
+  lastHealthCheckMs?: number | null;
+};
+
 export type PluginRuntimeDescriptor = {
   node: PluginRuntimeNodeDescriptor | null;
   sidecars: PluginRuntimeSidecarDescriptor[];
@@ -118,6 +128,7 @@ export type PackageDescriptor = {
   version: string;
   author: string | null;
   runtime: PluginRuntimeDescriptor | null;
+  sidecarStatuses: Record<string, SidecarRuntimeStatus>;
   contributes: Record<string, unknown> | null;
   dependencies: PackageDependencyDescriptor[];
   enabled: boolean;
@@ -306,6 +317,20 @@ export type RuntimeErrorEvent = {
   source?: string;
   message?: string;
   timestamp_ms?: number;
+};
+
+export type RuntimeLogEvent = {
+  kind?: string;
+  source?: string;
+  stream?: string;
+  line?: string;
+};
+
+export type SidecarRuntimeStatusEvent = {
+  packageId: string;
+  sidecarId: string;
+  sidecarRef: string;
+  status: SidecarRuntimeStatus;
 };
 
 export type DeveloperErrorEntry = {

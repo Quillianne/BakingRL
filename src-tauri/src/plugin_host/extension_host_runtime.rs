@@ -1586,7 +1586,11 @@ fn sidecar_stop(
     params: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let name = sidecar_name(&params)?;
-    let stopped = context.sidecars.stop(&context.package_id, &name);
+    let stopped = context.sidecars.stop_with_app_handle(
+        &context.package_id,
+        &name,
+        context.app_handle.clone(),
+    );
     Ok(serde_json::json!({ "stopped": stopped }))
 }
 

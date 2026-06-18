@@ -274,6 +274,16 @@ impl SidecarRuntimeManager {
         self.controller.stop(package_id, sidecar_name)
     }
 
+    pub fn stop_with_app_handle(
+        &self,
+        package_id: &str,
+        sidecar_name: &str,
+        app_handle: AppHandle,
+    ) -> bool {
+        self.controller
+            .stop_with_app_handle(package_id, sidecar_name, app_handle)
+    }
+
     pub fn call(
         &self,
         package_id: &str,
@@ -319,7 +329,7 @@ pub(crate) struct SidecarRuntimeController {
 }
 
 impl SidecarRuntimeController {
-    fn update_status<F>(&self, sidecar_ref: &str, update: F)
+    fn update_status<F>(&self, sidecar_ref: &str, update: F) -> SidecarRuntimeStatus
     where
         F: FnOnce(&mut SidecarRuntimeStatus),
     {
@@ -329,6 +339,7 @@ impl SidecarRuntimeController {
             .entry(sidecar_ref.to_string())
             .or_default();
         update(status);
+        status.clone()
     }
 
     fn status(&self, package_id: &str, sidecar_name: &str) -> Option<SidecarRuntimeStatus> {
@@ -363,28 +374,28 @@ impl SidecarRuntimeController {
             .insert(key, value);
     }
 
-    fn on_start(&self, sidecar_ref: &str) {
-        self.update_status(sidecar_ref, mark_sidecar_running);
+    fn on_start(&self, sidecar_ref: &str) -> SidecarRuntimeStatus {
+        self.update_status(sidecar_ref, mark_sidecar_running)
     }
 
-    fn on_stop(&self, sidecar_ref: &str, exit_code: Option<i32>) {
+    fn on_stop(&self, sidecar_ref: &str, exit_code: Option<i32>) -> SidecarRuntimeStatus {
         self.update_status(sidecar_ref, |status| {
             mark_sidecar_stopped(status, exit_code)
-        });
+        })
     }
 
-    fn on_crash(&self, sidecar_ref: &str, exit_code: Option<i32>) {
+    fn on_crash(&self, sidecar_ref: &str, exit_code: Option<i32>) -> SidecarRuntimeStatus {
         self.update_status(sidecar_ref, |status| {
             mark_sidecar_crashed(status, exit_code)
-        });
+        })
     }
 
-    fn on_restart(&self, sidecar_ref: &str) {
-        self.update_status(sidecar_ref, mark_sidecar_restarted);
+    fn on_restart(&self, sidecar_ref: &str) -> SidecarRuntimeStatus {
+        self.update_status(sidecar_ref, mark_sidecar_restarted)
     }
 
-    fn on_health(&self, sidecar_ref: &str, result: Result<(), String>) {
-        self.update_status(sidecar_ref, |status| mark_sidecar_health(status, result));
+    fn on_health(&self, sidecar_ref: &str, result: Result<(), String>) -> SidecarRuntimeStatus {
+        self.update_status(sidecar_ref, |status| mark_sidecar_health(status, result))
     }
 
     pub fn reload_with_app_handle(
@@ -401,7 +412,8 @@ impl SidecarRuntimeController {
             .cloned()
             .collect();
         for sidecar_ref in stale {
-            self.on_stop(&sidecar_ref, None);
+            let status = self.on_stop(&sidecar_ref, None);
+            emit_sidecar_runtime_status(&app_handle, &sidecar_ref, status);
             if let Some(handle) = handles.remove(&sidecar_ref) {
                 handle.shutdown();
             }
@@ -420,14 +432,18 @@ impl SidecarRuntimeController {
             if let Some(handle) = handles.remove(&sidecar_ref) {
                 handle.shutdown();
             }
-            self.on_stop(&sidecar_ref, None);
+            let status = self.on_stop(&sidecar_ref, None);
+            emit_sidecar_runtime_status(&app_handle, &sidecar_ref, status);
             match spawn_sidecar_runtime(spec, app_handle.clone(), self.state.clone()) {
                 Ok(handle) => {
-                    self.on_start(&sidecar_ref);
+                    let status = self.on_start(&sidecar_ref);
+                    emit_sidecar_runtime_status(&app_handle, &sidecar_ref, status);
                     handles.insert(sidecar_ref, handle);
                 }
                 Err(err) => {
                     warn!("Unable to start sidecar runtime: {}", err);
+                    let status = self.on_crash(&sidecar_ref, None);
+                    emit_sidecar_runtime_status(&app_handle, &sidecar_ref, status);
                     emit_runtime_error(&app_handle, "sidecar", &sidecar_ref, &err.to_string());
                     if first_error.is_none() {
                         first_error = Some(err);
@@ -457,17 +473,21 @@ impl SidecarRuntimeController {
             return Ok(());
         }
         if let Some(handle) = handles.remove(&sidecar_ref) {
-            self.on_stop(&sidecar_ref, None);
+            let status = self.on_stop(&sidecar_ref, None);
+            emit_sidecar_runtime_status(&app_handle, &sidecar_ref, status);
             handle.shutdown();
         }
         match spawn_sidecar_runtime(spec, app_handle.clone(), self.state.clone()) {
             Ok(handle) => {
-                self.on_start(&sidecar_ref);
+                let status = self.on_start(&sidecar_ref);
+                emit_sidecar_runtime_status(&app_handle, &sidecar_ref, status);
                 handles.insert(sidecar_ref, handle);
                 Ok(())
             }
             Err(err) => {
                 warn!("Unable to start sidecar runtime: {}", err);
+                let status = self.on_crash(&sidecar_ref, None);
+                emit_sidecar_runtime_status(&app_handle, &sidecar_ref, status);
                 emit_runtime_error(&app_handle, "sidecar", &sidecar_ref, &err.to_string());
                 Err(err)
             }
@@ -487,7 +507,8 @@ impl SidecarRuntimeController {
                 return Ok(false);
             };
             let spec = handle.spec.clone();
-            self.on_restart(&sidecar_ref);
+            let status = self.on_restart(&sidecar_ref);
+            emit_sidecar_runtime_status(&app_handle, &sidecar_ref, status);
             handle.shutdown();
             spec
         };
@@ -499,6 +520,24 @@ impl SidecarRuntimeController {
         let sidecar_ref = format!("{package_id}/{sidecar_name}");
         let mut handles = self.handles.lock().unwrap();
         self.on_stop(&sidecar_ref, None);
+        if let Some(handle) = handles.remove(&sidecar_ref) {
+            handle.shutdown();
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn stop_with_app_handle(
+        &self,
+        package_id: &str,
+        sidecar_name: &str,
+        app_handle: AppHandle,
+    ) -> bool {
+        let sidecar_ref = format!("{package_id}/{sidecar_name}");
+        let mut handles = self.handles.lock().unwrap();
+        let status = self.on_stop(&sidecar_ref, None);
+        emit_sidecar_runtime_status(&app_handle, &sidecar_ref, status);
         if let Some(handle) = handles.remove(&sidecar_ref) {
             handle.shutdown();
             true
@@ -678,7 +717,8 @@ fn supervise_child(
                     }
                 }
             };
-            set_sidecar_stopped(&runtime_status, &sidecar_ref, sidecar_status);
+            let status = set_sidecar_stopped(&runtime_status, &sidecar_ref, sidecar_status);
+            emit_sidecar_runtime_status(&app_handle, &sidecar_ref, status);
             info!("Sidecar runtime '{}' stopped.", sidecar_ref);
             break;
         }
@@ -688,7 +728,8 @@ fn supervise_child(
                 let result = rpc
                     .request_timeout(&health_check.method, serde_json::json!({}), timeout)
                     .map(|_| ());
-                set_sidecar_health(&runtime_status, &sidecar_ref, result);
+                let status = set_sidecar_health(&runtime_status, &sidecar_ref, result);
+                emit_sidecar_runtime_status(&app_handle, &sidecar_ref, status);
                 let interval = Duration::from_millis(health_check.interval_ms.unwrap_or(5_000));
                 next_health_check = Some(Instant::now() + interval);
             }
@@ -698,10 +739,12 @@ fn supervise_child(
                 let exit_code = status.code();
                 if status.success() {
                     info!("Sidecar runtime '{}' exited with {}.", sidecar_ref, status);
-                    set_sidecar_stopped(&runtime_status, &sidecar_ref, exit_code);
+                    let status = set_sidecar_stopped(&runtime_status, &sidecar_ref, exit_code);
+                    emit_sidecar_runtime_status(&app_handle, &sidecar_ref, status);
                 } else {
                     let message = format!("Sidecar runtime exited with {status}.");
-                    set_sidecar_crash(&runtime_status, &sidecar_ref, exit_code);
+                    let status = set_sidecar_crash(&runtime_status, &sidecar_ref, exit_code);
+                    emit_sidecar_runtime_status(&app_handle, &sidecar_ref, status);
                     warn!("Sidecar '{}': {}", sidecar_ref, message);
                     emit_runtime_error(&app_handle, "sidecar", &sidecar_ref, &message);
                 }
@@ -710,7 +753,8 @@ fn supervise_child(
             Ok(None) => thread::sleep(Duration::from_millis(100)),
             Err(err) => {
                 let message = format!("Unable to inspect sidecar process: {err}");
-                set_sidecar_crash(&runtime_status, &sidecar_ref, None);
+                let status = set_sidecar_crash(&runtime_status, &sidecar_ref, None);
+                emit_sidecar_runtime_status(&app_handle, &sidecar_ref, status);
                 error!("Sidecar '{}': {}", sidecar_ref, message);
                 emit_runtime_error(&app_handle, "sidecar", &sidecar_ref, &message);
                 break;
@@ -805,7 +849,8 @@ fn update_sidecar_status<F>(
     runtime_state: &Arc<Mutex<SidecarRuntimeState>>,
     sidecar_ref: &str,
     update: F,
-) where
+) -> SidecarRuntimeStatus
+where
     F: FnOnce(&mut SidecarRuntimeStatus),
 {
     let mut state = runtime_state.lock().unwrap();
@@ -814,6 +859,7 @@ fn update_sidecar_status<F>(
         .entry(sidecar_ref.to_string())
         .or_default();
     update(status);
+    status.clone()
 }
 
 fn mark_sidecar_running(status: &mut SidecarRuntimeStatus) {
@@ -854,38 +900,41 @@ fn mark_sidecar_health(status: &mut SidecarRuntimeStatus, result: Result<(), Str
     }
 }
 
-fn set_sidecar_running(runtime_state: &Arc<Mutex<SidecarRuntimeState>>, sidecar_ref: &str) {
-    update_sidecar_status(runtime_state, sidecar_ref, mark_sidecar_running);
+fn set_sidecar_running(
+    runtime_state: &Arc<Mutex<SidecarRuntimeState>>,
+    sidecar_ref: &str,
+) -> SidecarRuntimeStatus {
+    update_sidecar_status(runtime_state, sidecar_ref, mark_sidecar_running)
 }
 
 fn set_sidecar_stopped(
     runtime_state: &Arc<Mutex<SidecarRuntimeState>>,
     sidecar_ref: &str,
     exit_code: Option<i32>,
-) {
+) -> SidecarRuntimeStatus {
     update_sidecar_status(runtime_state, sidecar_ref, |status| {
         mark_sidecar_stopped(status, exit_code)
-    });
+    })
 }
 
 fn set_sidecar_crash(
     runtime_state: &Arc<Mutex<SidecarRuntimeState>>,
     sidecar_ref: &str,
     exit_code: Option<i32>,
-) {
+) -> SidecarRuntimeStatus {
     update_sidecar_status(runtime_state, sidecar_ref, |status| {
         mark_sidecar_crashed(status, exit_code)
-    });
+    })
 }
 
 fn set_sidecar_health(
     runtime_state: &Arc<Mutex<SidecarRuntimeState>>,
     sidecar_ref: &str,
     result: Result<(), String>,
-) {
+) -> SidecarRuntimeStatus {
     update_sidecar_status(runtime_state, sidecar_ref, |status| {
         mark_sidecar_health(status, result)
-    });
+    })
 }
 
 fn state_get(
@@ -1277,6 +1326,32 @@ where
             emit_runtime_log(&app_handle, "sidecar", &sidecar_ref, stream_name, &line);
         }
     })
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SidecarRuntimeStatusPayload<'a> {
+    package_id: &'a str,
+    sidecar_id: &'a str,
+    sidecar_ref: &'a str,
+    status: SidecarRuntimeStatus,
+}
+
+fn emit_sidecar_runtime_status(
+    app_handle: &AppHandle,
+    sidecar_ref: &str,
+    status: SidecarRuntimeStatus,
+) {
+    let Some((package_id, sidecar_id)) = sidecar_ref.split_once('/') else {
+        return;
+    };
+    let payload = SidecarRuntimeStatusPayload {
+        package_id,
+        sidecar_id,
+        sidecar_ref,
+        status,
+    };
+    let _ = app_handle.emit("bakingrl-sidecar-runtime-status", payload);
 }
 
 #[derive(Clone, serde::Serialize)]

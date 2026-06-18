@@ -33,6 +33,8 @@ import type {
   RegistryEntry,
   RuntimeInfo,
   RuntimeErrorEvent,
+  RuntimeLogEvent,
+  SidecarRuntimeStatusEvent,
   TelemetryConnectionStatus,
   ToastMessage,
   ToastTone
@@ -753,6 +755,28 @@ export class DashboardState {
     this.notify(`${entry.source}: ${entry.message}`, "error", 8000);
   }
 
+  recordRuntimeLog(log: RuntimeLogEvent) {
+    const line = log.line || "";
+    this.recordDeveloperError({
+      kind: log.kind || "log",
+      source: log.source || "Runtime",
+      message: log.stream ? `[${log.stream}] ${line}` : line
+    });
+  }
+
+  recordSidecarRuntimeStatus(event: SidecarRuntimeStatusEvent) {
+    this.packages = this.packages.map((pkg) => {
+      if (pkg.id !== event.packageId) return pkg;
+      return {
+        ...pkg,
+        sidecarStatuses: {
+          ...(pkg.sidecarStatuses ?? {}),
+          [event.sidecarId]: event.status
+        }
+      };
+    });
+  }
+
   clearDeveloperErrors() {
     this.developerErrors = [];
   }
@@ -849,6 +873,8 @@ export class DashboardState {
     let unlistenTelemetryStatus: (() => void) | undefined;
     let unlistenTelemetry: (() => void) | undefined;
     let unlistenRuntimeErrors: (() => void) | undefined;
+    let unlistenRuntimeLogs: (() => void) | undefined;
+    let unlistenSidecarStatuses: (() => void) | undefined;
 
     if (isTauriRuntime() && getCurrentWindow().label === "main") {
       void getCurrent()
@@ -901,6 +927,16 @@ export class DashboardState {
     }).then((unlisten) => {
       unlistenRuntimeErrors = unlisten;
     });
+    void listen<RuntimeLogEvent>("bakingrl-runtime-log", (event) => {
+      this.recordRuntimeLog(event.payload);
+    }).then((unlisten) => {
+      unlistenRuntimeLogs = unlisten;
+    });
+    void listen<SidecarRuntimeStatusEvent>("bakingrl-sidecar-runtime-status", (event) => {
+      this.recordSidecarRuntimeStatus(event.payload);
+    }).then((unlisten) => {
+      unlistenSidecarStatuses = unlisten;
+    });
 
     return () => {
       unlistenPackages?.();
@@ -909,6 +945,8 @@ export class DashboardState {
       unlistenTelemetryStatus?.();
       unlistenTelemetry?.();
       unlistenRuntimeErrors?.();
+      unlistenRuntimeLogs?.();
+      unlistenSidecarStatuses?.();
       this.clearPackageToggleTimers();
       this.clearDeveloperTelemetryFlushTimer();
     };

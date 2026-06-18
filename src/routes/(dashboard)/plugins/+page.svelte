@@ -1,7 +1,11 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { getDashboardContext } from "$lib/dashboard/context";
-  import type { PackageDescriptor } from "$lib/dashboard/types";
+  import type {
+    PackageDescriptor,
+    PluginRuntimeSidecarDescriptor,
+    SidecarRuntimeStatus
+  } from "$lib/dashboard/types";
 
   const dashboard = getDashboardContext();
 
@@ -51,6 +55,48 @@
       pkg.contributions.webviews[0] ??
       null
     );
+  }
+
+  function packageSidecars(pkg: PackageDescriptor) {
+    return pkg.runtime?.sidecars ?? [];
+  }
+
+  function sidecarStatus(pkg: PackageDescriptor, sidecarId: string): SidecarRuntimeStatus | null {
+    return pkg.sidecarStatuses?.[sidecarId] ?? null;
+  }
+
+  function sidecarRuntimeClass(status: SidecarRuntimeStatus | null) {
+    if (!status) return "connecting";
+    if (status.running && status.healthy !== false) return "connected";
+    if (status.running) return "disconnected";
+    if (status.crashCount > 0 || status.healthy === false) return "disconnected";
+    return "connecting";
+  }
+
+  function sidecarRuntimeLabel(status: SidecarRuntimeStatus | null) {
+    if (!status) return dashboard.t("packages.sidecarNotObserved");
+    if (status.running) return dashboard.t("common.running");
+    if (status.crashCount > 0) return dashboard.t("packages.sidecarCrashed");
+    return dashboard.t("common.stopped");
+  }
+
+  function sidecarHealthLabel(status: SidecarRuntimeStatus | null) {
+    if (!status || status.healthy == null) return dashboard.t("packages.sidecarHealthUnknown");
+    return status.healthy ? dashboard.t("packages.sidecarHealthy") : dashboard.t("packages.sidecarUnhealthy");
+  }
+
+  function sidecarRuntimeTitle(sidecar: PluginRuntimeSidecarDescriptor, status: SidecarRuntimeStatus | null) {
+    return `${sidecar.id}: ${sidecarRuntimeLabel(status)} · ${sidecarHealthLabel(status)}`;
+  }
+
+  function sidecarLastHealthCheck(status: SidecarRuntimeStatus | null) {
+    if (!status?.lastHealthCheckMs) return "n/a";
+    return new Date(status.lastHealthCheckMs).toLocaleTimeString();
+  }
+
+  function sidecarLastExitCode(status: SidecarRuntimeStatus | null) {
+    if (!status || status.lastExitCode == null) return "n/a";
+    return String(status.lastExitCode);
   }
 
   async function openPackageWebview(pkg: PackageDescriptor, webviewId: string) {
@@ -235,6 +281,21 @@
               </div>
             {/if}
 
+            {#if packageSidecars(pkg).length}
+              <div class="package-runtime-strip" aria-label={dashboard.t("packages.sidecarRuntimeTitle")}>
+                {#each packageSidecars(pkg) as sidecar}
+                  {@const status = sidecarStatus(pkg, sidecar.id)}
+                  <span
+                    class="status-pill runtime-mini {sidecarRuntimeClass(status)}"
+                    title={sidecarRuntimeTitle(sidecar, status)}
+                  >
+                    <span class="status-dot"></span>
+                    {sidecar.id}
+                  </span>
+                {/each}
+              </div>
+            {/if}
+
             <div class="card-actions package-actions">
               <button class="btn-outline" onclick={() => openPackageDetails(pkg)}>
                 {dashboard.t("packages.details")}
@@ -373,6 +434,63 @@
           <span>{dashboard.t("packages.compatibility")}</span>
         </div>
       </div>
+
+      {#if packageSidecars(detailPackage).length}
+        <section class="package-detail-section">
+          <div class="package-detail-section-head">
+            <h3>{dashboard.t("packages.sidecarRuntimeTitle")}</h3>
+            <span class="section-count">{packageSidecars(detailPackage).length}</span>
+          </div>
+          <div class="sidecar-runtime-list">
+            {#each packageSidecars(detailPackage) as sidecar}
+              {@const status = sidecarStatus(detailPackage, sidecar.id)}
+              <article class="sidecar-runtime-item">
+                <div class="sidecar-runtime-head">
+                  <div class="sidecar-runtime-title">
+                    <strong>{sidecar.id}</strong>
+                    <span>{sidecar.protocol} · {sidecar.activation}</span>
+                  </div>
+                  <span
+                    class="status-pill runtime-mini {sidecarRuntimeClass(status)}"
+                    title={sidecarRuntimeTitle(sidecar, status)}
+                  >
+                    <span class="status-dot"></span>
+                    {sidecarRuntimeLabel(status)}
+                  </span>
+                </div>
+                <div class="sidecar-runtime-grid">
+                  <div>
+                    <span>{dashboard.t("packages.sidecarHealth")}</span>
+                    <strong>{sidecarHealthLabel(status)}</strong>
+                  </div>
+                  <div>
+                    <span>{dashboard.t("packages.sidecarRestarts")}</span>
+                    <strong>{status?.restartCount ?? 0}</strong>
+                  </div>
+                  <div>
+                    <span>{dashboard.t("packages.sidecarCrashes")}</span>
+                    <strong>{status?.crashCount ?? 0}</strong>
+                  </div>
+                  <div>
+                    <span>{dashboard.t("packages.sidecarExitCode")}</span>
+                    <strong>{sidecarLastExitCode(status)}</strong>
+                  </div>
+                  <div>
+                    <span>{dashboard.t("packages.sidecarLastHealthCheck")}</span>
+                    <strong>{sidecarLastHealthCheck(status)}</strong>
+                  </div>
+                </div>
+                {#if status?.lastHealthError}
+                  <div class="sidecar-runtime-error">
+                    <strong>{dashboard.t("packages.sidecarLastHealthError")}</strong>
+                    <span>{status.lastHealthError}</span>
+                  </div>
+                {/if}
+              </article>
+            {/each}
+          </div>
+        </section>
+      {/if}
 
       <section class="package-detail-section">
         <div class="package-detail-section-head">

@@ -56,7 +56,7 @@ use settings_contract::{
     set_package_secret_configured, write_package_secret,
 };
 pub use settings_contract::{PackageConfigurationState, PackageSecretDescriptor};
-use sidecar_runtime::{SidecarRuntimeManager, SidecarRuntimeSpec};
+use sidecar_runtime::{SidecarRuntimeManager, SidecarRuntimeSpec, SidecarRuntimeStatus};
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -175,6 +175,8 @@ impl PluginHost {
             .values()
             .map(|record| record.descriptor.clone())
             .collect();
+        let sidecar_statuses = self.sidecar_runtimes.status_map();
+        apply_sidecar_runtime_statuses(&mut packages, &sidecar_statuses);
         self.apply_package_statuses(&mut packages);
         packages.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
         packages
@@ -439,7 +441,11 @@ impl PluginHost {
 
     #[allow(dead_code)]
     pub(crate) fn stop_v3_sidecar(&self, package_id: &str, sidecar_name: &str) -> bool {
-        self.sidecar_runtimes.stop(package_id, sidecar_name)
+        self.sidecar_runtimes.stop_with_app_handle(
+            package_id,
+            sidecar_name,
+            self.app_handle.clone(),
+        )
     }
 
     pub fn inspect_package_bundle(&self, path: String) -> Result<BundleInspection, String> {
@@ -1605,6 +1611,26 @@ fn extension_target_is_active(records: &HashMap<String, PackageRecord>, target: 
             .any(|point| point.name == extension_point_id)
 }
 
+fn apply_sidecar_runtime_statuses(
+    packages: &mut [PackageDescriptor],
+    statuses: &HashMap<String, SidecarRuntimeStatus>,
+) {
+    for package in packages {
+        package.sidecar_statuses.clear();
+        let Some(runtime) = package.runtime.as_ref() else {
+            continue;
+        };
+        for sidecar in &runtime.sidecars {
+            let sidecar_ref = format!("{}/{}", package.id, sidecar.id);
+            if let Some(status) = statuses.get(&sidecar_ref) {
+                package
+                    .sidecar_statuses
+                    .insert(sidecar.id.clone(), status.clone());
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1617,6 +1643,65 @@ mod tests {
             descriptor,
             manifest,
         }
+    }
+
+    #[test]
+    fn sidecar_runtime_statuses_are_attached_by_sidecar_id() {
+        let mut packages = vec![
+            package_record(serde_json::json!({
+                "schemaVersion": "bakingrl.plugin/4",
+                "id": "bakingrl.sidecar",
+                "name": "Sidecar",
+                "version": "1.0.0",
+                "bakingrlApi": "2.2.0",
+                "runtime": {
+                    "sidecars": [
+                        {
+                            "id": "helper",
+                            "bin": "bin/helper",
+                            "protocol": "jsonrpc-stdio"
+                        },
+                        {
+                            "id": "cold",
+                            "bin": "bin/cold",
+                            "protocol": "jsonrpc-stdio"
+                        }
+                    ]
+                },
+                "contributes": {}
+            }))
+            .descriptor,
+        ];
+        let mut statuses = HashMap::new();
+        statuses.insert(
+            "bakingrl.sidecar/helper".to_string(),
+            SidecarRuntimeStatus {
+                running: true,
+                healthy: Some(true),
+                restart_count: 2,
+                ..SidecarRuntimeStatus::default()
+            },
+        );
+        statuses.insert(
+            "bakingrl.other/helper".to_string(),
+            SidecarRuntimeStatus {
+                running: true,
+                ..SidecarRuntimeStatus::default()
+            },
+        );
+
+        apply_sidecar_runtime_statuses(&mut packages, &statuses);
+
+        assert_eq!(packages[0].sidecar_statuses.len(), 1);
+        assert_eq!(
+            packages[0].sidecar_statuses.get("helper").map(|status| (
+                status.running,
+                status.healthy,
+                status.restart_count
+            )),
+            Some((true, Some(true), 2))
+        );
+        assert!(!packages[0].sidecar_statuses.contains_key("cold"));
     }
 
     #[test]

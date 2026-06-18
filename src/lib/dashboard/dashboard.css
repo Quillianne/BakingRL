@@ -770,6 +770,17 @@ pre {
   white-space: nowrap;
 }
 
+.package-runtime-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.status-pill.runtime-mini {
+  margin-left: 0;
+  max-width: 100%;
+}
+
 .package-title-row > .icon-button {
   width: 28px;
   height: 28px;
@@ -966,6 +977,83 @@ pre {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.sidecar-runtime-list {
+  display: grid;
+  gap: 10px;
+}
+
+.sidecar-runtime-item {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-dark) 28%, transparent);
+}
+
+.sidecar-runtime-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.sidecar-runtime-title {
+  min-width: 0;
+}
+
+.sidecar-runtime-title strong,
+.sidecar-runtime-grid strong,
+.sidecar-runtime-error strong {
+  display: block;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.sidecar-runtime-title span,
+.sidecar-runtime-grid span,
+.sidecar-runtime-error span {
+  display: block;
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 750;
+  overflow-wrap: anywhere;
+}
+
+.sidecar-runtime-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+  gap: 8px;
+}
+
+.sidecar-runtime-grid > div {
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+}
+
+.sidecar-runtime-grid span,
+.sidecar-runtime-error strong {
+  text-transform: uppercase;
+}
+
+.sidecar-runtime-grid strong {
+  margin-top: 4px;
+  font-size: 13px;
+}
+
+.sidecar-runtime-error {
+  padding: 9px;
+  border: 1px solid color-mix(in srgb, var(--danger) 42%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
 }
 
 .package-detail-tabs {
@@ -2039,6 +2127,11 @@ code {
 
   .package-detail-heading {
     align-items: stretch;
+  }
+
+  .sidecar-runtime-head {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .package-detail-title-row {
