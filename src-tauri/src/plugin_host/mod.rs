@@ -1136,7 +1136,7 @@ impl PluginHost {
         Ok(PackageConfigurationState {
             package_id,
             title,
-            has_custom_page: record.descriptor.contributions.configuration.is_some(),
+            has_custom_page: preferred_settings_webview_id(record).is_some(),
             schema,
             values,
             secrets,
@@ -1577,7 +1577,6 @@ fn listed_extension_contributions(
                         "title": contribution.title,
                         "description": contribution.description,
                         "dataSchema": contribution.data_schema,
-                        "visual": contribution.visual,
                         "service": contribution.service,
                         "resources": contribution.resources,
                         "metadata": contribution.metadata,
@@ -1627,7 +1626,7 @@ mod tests {
             "id": "bakingrl.consumer",
             "name": "Consumer",
             "version": "1.0.0",
-            "bakingrlApi": "2.1.0",
+            "bakingrlApi": "2.2.0",
             "dependencies": [
                 {
                     "packageId": "bakingrl.provider"
@@ -1647,7 +1646,7 @@ mod tests {
             "id": "bakingrl.provider",
             "name": "Provider",
             "version": "1.0.0",
-            "bakingrlApi": "2.1.0",
+            "bakingrlApi": "2.2.0",
             "contributes": {
                 "extensionPoints": [
                     {
@@ -1662,7 +1661,7 @@ mod tests {
             "id": "bakingrl.consumer",
             "name": "Consumer",
             "version": "1.0.0",
-            "bakingrlApi": "2.1.0",
+            "bakingrlApi": "2.2.0",
             "dependencies": [
                 {
                     "packageId": "bakingrl.provider"
@@ -1673,7 +1672,7 @@ mod tests {
                     {
                         "id": "scoreboardBinding",
                         "target": "bakingrl.provider/overlay.visual",
-                        "kind": "visual",
+                        "kind": "widget",
                         "metadata": {
                             "placement": "bottom-right"
                         }
@@ -1737,7 +1736,7 @@ mod tests {
             "id": "bakingrl.consumer",
             "name": "Consumer",
             "version": "1.0.0",
-            "bakingrlApi": "2.1.0",
+            "bakingrlApi": "2.2.0",
             "contributes": {
                 "resources": [
                     {
@@ -1754,7 +1753,7 @@ mod tests {
             "id": "bakingrl.provider",
             "name": "Provider",
             "version": "1.0.0",
-            "bakingrlApi": "2.1.0",
+            "bakingrlApi": "2.2.0",
             "contributes": {
                 "resources": [
                     {
@@ -1826,7 +1825,7 @@ mod tests {
             "id": "bakingrl.webviews",
             "name": "Webviews",
             "version": "1.0.0",
-            "bakingrlApi": "2.1.0",
+            "bakingrlApi": "2.2.0",
             "runtime": {
                 "node": {
                     "entry": "dist/extension/index.js"

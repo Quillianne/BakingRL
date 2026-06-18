@@ -312,7 +312,7 @@ mod tests {
             "id": "com.example.sidecar-only",
             "name": "Sidecar Only",
             "version": "1.0.0",
-            "bakingrlApi": "2.0.0",
+            "bakingrlApi": "2.2.0",
             "runtime": {
                 "sidecars": [
                     {
@@ -352,7 +352,7 @@ mod tests {
             "id": "com.example.sidecar-only",
             "name": "Sidecar Only",
             "version": "1.0.0",
-            "bakingrlApi": "2.0.0",
+            "bakingrlApi": "2.2.0",
             "runtime": {
                 "sidecars": [
                     {
@@ -382,7 +382,7 @@ mod tests {
             "id": "com.example.with-node",
             "name": "With Node",
             "version": "1.0.0",
-            "bakingrlApi": "2.0.0",
+            "bakingrlApi": "2.2.0",
             "runtime": {
                 "node": {"entry": "dist/extension-host.js"},
                 "sidecars": [

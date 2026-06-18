@@ -70,14 +70,6 @@
   function packageContributionSections(pkg: PackageDescriptor): PackageContributionSection[] {
     const sections: PackageContributionSection[] = [
       {
-        title: dashboard.t("packages.visuals"),
-        count: pkg.contributions.visuals.length,
-        rows: pkg.contributions.visuals.map((visual) => ({
-          name: visual.name,
-          meta: `${visual.default_width}x${visual.default_height}`
-        }))
-      },
-      {
         title: dashboard.t("packages.services"),
         count: pkg.contributions.services.length,
         rows: pkg.contributions.services.map((service) => ({
@@ -186,7 +178,7 @@
                         </svg>
                       </button>
                     {/if}
-                    {#if pkg.contributions.configuration || (pkg.settings && pkg.has_public_settings)}
+                    {#if pkg.has_public_settings}
                       <button
                         class="icon-button"
                         onclick={() => openPackageConfiguration(pkg)}
@@ -370,7 +362,7 @@
         </div>
         <div class="package-detail-stat">
           <strong>
-            {detailPackage.contributions.configuration || detailPackage.has_public_settings || detailPackage.has_secrets
+            {detailPackage.has_public_settings || detailPackage.has_secrets
               ? dashboard.t("common.enabled")
               : dashboard.t("common.disabled")}
           </strong>

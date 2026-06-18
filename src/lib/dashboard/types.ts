@@ -1,13 +1,5 @@
 import type { GameEventFrame, RlTelemetryEventName } from "$lib/rlTelemetry";
 
-export type VisualContributionDescriptor = {
-  name: string;
-  entry: string;
-  default_width: number;
-  default_height: number;
-  settings: string | null;
-};
-
 export type NamedContributionDescriptor = {
   name: string;
 };
@@ -34,7 +26,6 @@ export type PluginContributionDescriptor = {
   title: string | null;
   description: string | null;
   data_schema: string | null;
-  visual: string | null;
   service: string | null;
   resources: string[];
   metadata: unknown | null;
@@ -62,13 +53,6 @@ export type WebviewContributionDescriptor = {
   route: string | null;
   default_width: number;
   default_height: number;
-};
-
-export type ConfigurationContributionDescriptor = {
-  title: string | null;
-  description: string | null;
-  path: string;
-  visuals: VisualContributionDescriptor[];
 };
 
 export type PackageCompatibilityStatus =
@@ -141,7 +125,6 @@ export type PackageDescriptor = {
   path: string;
   contributions: {
     commands: NamedContributionDescriptor[];
-    visuals: VisualContributionDescriptor[];
     services: ServiceContributionDescriptor[];
     extension_points: ExtensionPointContributionDescriptor[];
     contributions: PluginContributionDescriptor[];
@@ -150,7 +133,6 @@ export type PackageDescriptor = {
     assets: NamedContributionDescriptor[];
     schemas: NamedContributionDescriptor[];
     webviews: WebviewContributionDescriptor[];
-    configuration: ConfigurationContributionDescriptor | null;
   };
   compatibility: PackageCompatibilityDescriptor;
   settings: string | null;
@@ -206,7 +188,6 @@ export type PackageConfigurationState = {
 
 export type ManifestContributes = {
   commands?: unknown[];
-  visuals?: unknown[];
   services?: unknown[];
   extensionPoints?: unknown[];
   contributions?: unknown[];
@@ -225,7 +206,6 @@ export type BundleInspection = {
     bakingrlApi: string;
     runtime?: Record<string, unknown> | null;
     contributes?: ManifestContributes | null;
-    externalSurfaces?: Record<string, unknown> | null;
   };
   hashes_present: boolean;
   signature_present: boolean;

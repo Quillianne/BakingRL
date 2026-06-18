@@ -194,16 +194,6 @@ fn validate_manifest_declared_files(
     if let Some(settings_schema) = manifest.settings_schema() {
         require_bundle_entry(entries, "contributes.settings.schema", settings_schema)?;
     }
-    for visual in &contributes.visuals {
-        require_bundle_entry(entries, "contributes.visuals.entry", &visual.entry)?;
-        if let Some(instance_settings) = &visual.instance_settings {
-            require_bundle_entry(
-                entries,
-                "contributes.visuals.instanceSettings",
-                instance_settings,
-            )?;
-        }
-    }
     for service in &contributes.services {
         if let Some(schema) = &service.schema {
             require_bundle_entry(entries, "contributes.services.schema", schema)?;
@@ -408,22 +398,14 @@ mod tests {
             "id": "com.example.bundle",
             "name": "Bundle",
             "version": "1.0.0",
-            "bakingrlApi": "2.0.0",
+            "bakingrlApi": "2.2.0",
             "runtime": {
                 "node": {
                     "entry": "dist/extension-host.js"
                 },
                 "sidecars": []
             },
-            "contributes": {
-                "visuals": [
-                    {
-                        "id": "scoreboard",
-                        "entry": "dist/visuals/scoreboard.js",
-                        "defaultSize": [600, 90]
-                    }
-                ]
-            },
+            "contributes": {},
         })
         .to_string()
     }
@@ -446,22 +428,16 @@ mod tests {
                 "dist/extension-host.js",
                 "export default { activate() {} };",
             ),
-            (
-                "dist/visuals/scoreboard.js",
-                "export default { mount() {} };",
-            ),
         ]
     }
 
     fn signed_entries() -> Vec<(String, String)> {
         let manifest = valid_manifest();
         let runtime = "export default { activate() {} };".to_string();
-        let visual = "export default { mount() {} };".to_string();
         let hashes = serde_json::to_string_pretty(&serde_json::json!({
             "files": {
                 MANIFEST_FILE: hex::encode(Sha256::digest(manifest.as_bytes())),
-                "dist/extension-host.js": hex::encode(Sha256::digest(runtime.as_bytes())),
-                "dist/visuals/scoreboard.js": hex::encode(Sha256::digest(visual.as_bytes()))
+                "dist/extension-host.js": hex::encode(Sha256::digest(runtime.as_bytes()))
             }
         }))
         .unwrap();
@@ -477,7 +453,6 @@ mod tests {
         vec![
             (MANIFEST_FILE.to_string(), manifest),
             ("dist/extension-host.js".to_string(), runtime),
-            ("dist/visuals/scoreboard.js".to_string(), visual),
             (HASHES_FILE.to_string(), hashes),
             (SIGNATURE_FILE.to_string(), signature),
         ]
@@ -492,7 +467,7 @@ mod tests {
 
         let inspection = inspect_bundle(&bundle_path).unwrap();
         assert_eq!(inspection.manifest.id(), "com.example.bundle");
-        assert_eq!(inspection.file_count, 3);
+        assert_eq!(inspection.file_count, 2);
     }
 
     #[test]
@@ -512,8 +487,8 @@ mod tests {
             &[
                 (MANIFEST_FILE, &manifest),
                 (
-                    "dist/visuals/scoreboard.js",
-                    "export default { mount() {} };",
+                    "dist/extension-host.js",
+                    "export default { activate() {} };",
                 ),
             ],
         );
@@ -577,20 +552,11 @@ mod tests {
         let dir = tempdir().unwrap();
         let bundle_path = dir.path().join("missing-declared-file.brlp");
         let manifest = valid_manifest();
-        write_bundle(
-            &bundle_path,
-            &[
-                (MANIFEST_FILE, &manifest),
-                (
-                    "dist/extension-host.js",
-                    "export default { activate() {} };",
-                ),
-            ],
-        );
+        write_bundle(&bundle_path, &[(MANIFEST_FILE, &manifest)]);
 
         let error = inspect_bundle(&bundle_path).unwrap_err();
-        assert!(error.contains("contributes.visuals.entry"));
-        assert!(error.contains("dist/visuals/scoreboard.js"));
+        assert!(error.contains("runtime.node.entry"));
+        assert!(error.contains("dist/extension-host.js"));
     }
 
     #[test]
@@ -602,7 +568,7 @@ mod tests {
             "id": "com.example.sidecar",
             "name": "Sidecar",
             "version": "1.0.0",
-            "bakingrlApi": "2.1.0",
+            "bakingrlApi": "2.2.0",
             "runtime": {
                 "sidecars": [
                     {
@@ -626,7 +592,7 @@ mod tests {
             "id": "com.example.sidecar",
             "name": "Sidecar",
             "version": "1.0.0",
-            "bakingrlApi": "2.1.0",
+            "bakingrlApi": "2.2.0",
             "runtime": {
                 "sidecars": [
                     {
@@ -658,6 +624,5 @@ mod tests {
         extract_bundle(&bundle_path, &target).unwrap();
         assert!(target.join(MANIFEST_FILE).exists());
         assert!(target.join("dist/extension-host.js").exists());
-        assert!(target.join("dist/visuals/scoreboard.js").exists());
     }
 }

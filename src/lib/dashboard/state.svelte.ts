@@ -624,7 +624,6 @@ export class DashboardState {
   contributionCount(pkg: PackageDescriptor) {
     return (
       pkg.contributions.commands.length +
-      pkg.contributions.visuals.length +
       pkg.contributions.services.length +
       pkg.contributions.extension_points.length +
       pkg.contributions.contributions.length +
@@ -644,7 +643,6 @@ export class DashboardState {
     const contributes = inspection.manifest.contributes ?? {};
     return (
       (contributes.commands?.length ?? 0) +
-      (contributes.visuals?.length ?? 0) +
       (contributes.services?.length ?? 0) +
       (contributes.extensionPoints?.length ?? 0) +
       (contributes.contributions?.length ?? 0) +

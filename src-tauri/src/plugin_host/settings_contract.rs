@@ -239,7 +239,7 @@ mod tests {
             "id": "com.example.settings",
             "name": "Settings",
             "version": "1.0.0",
-            "bakingrlApi": "2.0.0",
+            "bakingrlApi": "2.2.0",
             "contributes": {
                 "settings": {
                     "schema": "schemas/plugin-settings.json"

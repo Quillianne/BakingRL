@@ -43,7 +43,6 @@ pub enum PackageStatus {
 #[derive(Debug, Clone, serde::Serialize, Default)]
 pub struct PackageContributionsDescriptor {
     pub commands: Vec<NamedContributionDescriptor>,
-    pub visuals: Vec<VisualContributionDescriptor>,
     pub services: Vec<ServiceContributionDescriptor>,
     pub extension_points: Vec<ExtensionPointContributionDescriptor>,
     pub contributions: Vec<PluginContributionDescriptor>,
@@ -52,16 +51,6 @@ pub struct PackageContributionsDescriptor {
     pub assets: Vec<NamedContributionDescriptor>,
     pub schemas: Vec<NamedContributionDescriptor>,
     pub webviews: Vec<WebviewContributionDescriptor>,
-    pub configuration: Option<ConfigurationContributionDescriptor>,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct VisualContributionDescriptor {
-    pub name: String,
-    pub entry: String,
-    pub default_width: f64,
-    pub default_height: f64,
-    pub settings: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -94,7 +83,6 @@ pub struct PluginContributionDescriptor {
     pub title: Option<String>,
     pub description: Option<String>,
     pub data_schema: Option<String>,
-    pub visual: Option<String>,
     pub service: Option<String>,
     pub resources: Vec<String>,
     pub metadata: Option<serde_json::Value>,
@@ -147,14 +135,6 @@ pub struct WebviewContributionDescriptor {
     pub default_height: f64,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct ConfigurationContributionDescriptor {
-    pub title: Option<String>,
-    pub description: Option<String>,
-    pub path: String,
-    pub visuals: Vec<VisualContributionDescriptor>,
-}
-
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PackageCompatibilityStatus {
@@ -197,9 +177,6 @@ pub(super) fn descriptor_for_manifest(
     let enabled = enabled && compatibility.is_compatible();
     let (has_public_settings, has_secrets) = package_settings_capabilities(manifest, &path);
     let contributes = manifest.contributes_v4();
-    let configuration = manifest
-        .settings_ui_visual()
-        .and_then(|ui| configuration_descriptor_for_visuals(ui, &contributes.visuals));
     PackageDescriptor {
         manifest_schema: manifest.manifest_schema().to_string(),
         id: manifest.id().to_string(),
@@ -230,21 +207,6 @@ pub(super) fn descriptor_for_manifest(
                     name: command.id.clone(),
                 })
                 .collect(),
-            visuals: contributes
-                .visuals
-                .iter()
-                .map(|export| {
-                    let [default_width, default_height] =
-                        export.default_size.unwrap_or([320.0, 120.0]);
-                    VisualContributionDescriptor {
-                        name: export.id.clone(),
-                        entry: export.entry.clone(),
-                        default_width,
-                        default_height,
-                        settings: export.instance_settings.clone(),
-                    }
-                })
-                .collect(),
             services: contributes
                 .services
                 .iter()
@@ -264,7 +226,6 @@ pub(super) fn descriptor_for_manifest(
                     title: contribution.title.clone(),
                     description: contribution.description.clone(),
                     data_schema: contribution.data_schema.clone(),
-                    visual: contribution.visual.clone(),
                     service: contribution.service.clone(),
                     resources: contribution.resources.clone(),
                     metadata: contribution.metadata.clone(),
@@ -295,11 +256,10 @@ pub(super) fn descriptor_for_manifest(
                     }
                 })
                 .collect(),
-            configuration,
         },
         compatibility,
         settings: manifest.settings().map(ToOwned::to_owned),
-        has_public_settings: has_public_settings || manifest.settings_ui_visual().is_some(),
+        has_public_settings: has_public_settings || manifest.settings_ui_webview().is_some(),
         has_secrets,
         error: None,
     }
@@ -353,28 +313,6 @@ fn resource_descriptors(
             }
         })
         .collect()
-}
-
-fn configuration_descriptor_for_visuals(
-    ui: &str,
-    visuals: &[crate::plugin_package::manifest::PluginVisualContributionV4],
-) -> Option<ConfigurationContributionDescriptor> {
-    let visual = visuals
-        .iter()
-        .find(|visual| visual.id == ui && visual.kind.as_deref() == Some("config"))?;
-    let [default_width, default_height] = visual.default_size.unwrap_or([1200.0, 740.0]);
-    Some(ConfigurationContributionDescriptor {
-        title: None,
-        description: None,
-        path: visual.entry.clone(),
-        visuals: vec![VisualContributionDescriptor {
-            name: visual.id.clone(),
-            entry: visual.entry.clone(),
-            default_width,
-            default_height,
-            settings: visual.instance_settings.clone(),
-        }],
-    })
 }
 
 fn package_settings_capabilities(manifest: &PluginPackageManifest, path: &str) -> (bool, bool) {
@@ -706,7 +644,7 @@ mod tests {
                     "id": "bakingrl.poc-overlay-studio",
                     "name": "POC Overlay Studio",
                     "version": "1.0.0",
-                    "bakingrlApi": "2.1.0",
+                    "bakingrlApi": "2.2.0",
                     "contributes": {
                         "services": [
                             {
@@ -731,7 +669,7 @@ mod tests {
                     "id": "bakingrl.poc-visual-pack",
                     "name": "POC Visual Pack",
                     "version": "1.0.0",
-                    "bakingrlApi": "2.1.0",
+                    "bakingrlApi": "2.2.0",
                     "dependencies": [
                         {
                             "packageId": "bakingrl.poc-overlay-studio"
@@ -745,13 +683,13 @@ mod tests {
                                 "methods": ["snapshot"]
                             }
                         ],
-                        "visuals": [
-                            {
-                                "id": "demoWidget",
-                                "entry": "dist/visuals/demo-widget.js"
-                            }
-                        ],
                         "resources": [
+                            {
+                                "id": "demoWidgetModule",
+                                "path": "dist/webviews/demo-widget.js",
+                                "type": "application/javascript",
+                                "visibility": "public"
+                            },
                             {
                                 "id": "widgetPreset",
                                 "path": "resources/widget-preset.json",
@@ -769,9 +707,11 @@ mod tests {
                             {
                                 "id": "demo-score-widget",
                                 "target": "bakingrl.poc-overlay-studio/overlay-studio.visual",
-                                "visual": "demoWidget",
                                 "service": "visualPack",
-                                "resources": ["widgetPreset"]
+                                "resources": ["demoWidgetModule", "widgetPreset"],
+                                "metadata": {
+                                    "renderer": "demoWidgetModule"
+                                }
                             }
                         ]
                     }
@@ -784,7 +724,7 @@ mod tests {
                     "id": "bakingrl.poc-content-pack",
                     "name": "POC Content Pack",
                     "version": "1.0.0",
-                    "bakingrlApi": "2.1.0",
+                    "bakingrlApi": "2.2.0",
                     "dependencies": [
                         {
                             "packageId": "bakingrl.poc-visual-pack"
@@ -815,7 +755,7 @@ mod tests {
 
     #[test]
     fn compatibility_accepts_supported_runtime_api_range() {
-        for bakingrl_api in ["2.0.0", "2.0.9", "2.1.0", "2.1.9"] {
+        for bakingrl_api in ["2.2.0", "2.2.9"] {
             let manifest = v4_manifest(serde_json::json!({
                 "schemaVersion": "bakingrl.plugin/4",
                 "id": "com.example.compat",
@@ -850,7 +790,7 @@ mod tests {
             "id": "com.example.newer",
             "name": "Newer",
             "version": "1.0.0",
-            "bakingrlApi": "2.2.0",
+            "bakingrlApi": "2.3.0",
             "contributes": {}
         }));
 
@@ -871,7 +811,7 @@ mod tests {
             "id": "com.example.catalog",
             "name": "Catalog",
             "version": "1.0.0",
-            "bakingrlApi": "2.0.0",
+            "bakingrlApi": "2.2.0",
             "runtime": {
                 "node": {
                     "entry": "dist/runtime.js"
@@ -889,20 +829,6 @@ mod tests {
                     {
                         "id": "openSettings",
                         "title": "Open settings"
-                    }
-                ],
-                "visuals": [
-                    {
-                        "id": "scoreboard",
-                        "entry": "dist/visuals/scoreboard.js",
-                        "defaultSize": [760, 128],
-                        "instanceSettings": "schemas/scoreboard-settings.json"
-                    },
-                    {
-                        "id": "settingsPanel",
-                        "kind": "config",
-                        "entry": "dist/visuals/settings-panel.js",
-                        "defaultSize": [1000, 620]
                     }
                 ],
                 "services": [
@@ -933,9 +859,8 @@ mod tests {
                     {
                         "id": "scoreboardBinding",
                         "target": "com.example.catalog/overlay.visual",
-                        "kind": "visual",
+                        "kind": "widget",
                         "title": "Scoreboard Binding",
-                        "visual": "scoreboard",
                         "resources": ["presetData"]
                     }
                 ],
@@ -944,6 +869,13 @@ mod tests {
                         "id": "inspector",
                         "entry": "dist/webviews/inspector.js",
                         "title": "Inspector"
+                    },
+                    {
+                        "id": "settingsPanel",
+                        "entry": "dist/webviews/settings-panel.js",
+                        "title": "Settings",
+                        "kind": "settings",
+                        "defaultSize": [1000, 620]
                     }
                 ],
                 "settings": {
@@ -963,7 +895,7 @@ mod tests {
         );
         assert_eq!(
             descriptor.compatibility.bakingrl_api.as_deref(),
-            Some("2.0.0")
+            Some("2.2.0")
         );
         assert_eq!(
             descriptor
@@ -980,12 +912,6 @@ mod tests {
                 .map(|runtime| runtime.sidecars.len()),
             Some(1)
         );
-        assert_eq!(descriptor.contributions.visuals[0].name, "scoreboard");
-        assert_eq!(
-            descriptor.contributions.visuals[0].entry,
-            "dist/visuals/scoreboard.js"
-        );
-        assert_eq!(descriptor.contributions.visuals[0].default_width, 760.0);
         assert_eq!(descriptor.contributions.commands[0].name, "openSettings");
         assert_eq!(descriptor.contributions.services[0].name, "matchStats");
         assert_eq!(
@@ -1010,18 +936,18 @@ mod tests {
             Some("dist/webviews/inspector.js")
         );
         assert_eq!(
+            descriptor.contributions.webviews[1].kind.as_deref(),
+            Some("settings")
+        );
+        assert_eq!(
             descriptor.settings.as_deref(),
             Some("schemas/plugin-settings.json")
         );
         assert!(descriptor.contributions.views.is_empty());
-        let configuration = descriptor.contributions.configuration.as_ref().unwrap();
-        assert_eq!(configuration.path, "dist/visuals/settings-panel.js");
-        assert_eq!(configuration.visuals[0].name, "settingsPanel");
-        assert_eq!(configuration.visuals[0].default_width, 1000.0);
         assert!(descriptor
             .contributes
             .as_ref()
-            .and_then(|value| value.get("visuals"))
+            .and_then(|value| value.get("webviews"))
             .is_some());
     }
 
@@ -1034,7 +960,7 @@ mod tests {
                     "id": "bakingrl.provider",
                     "name": "Provider",
                     "version": "1.2.3",
-                    "bakingrlApi": "2.1.0",
+                    "bakingrlApi": "2.2.0",
                     "contributes": {
                         "extensionPoints": [
                             {
@@ -1052,7 +978,7 @@ mod tests {
                     "id": "bakingrl.consumer",
                     "name": "Consumer",
                     "version": "1.0.0",
-                    "bakingrlApi": "2.1.0",
+                    "bakingrlApi": "2.2.0",
                     "dependencies": [
                         {
                             "packageId": "bakingrl.provider",
@@ -1064,7 +990,7 @@ mod tests {
                             {
                                 "id": "scoreboardBinding",
                                 "target": "bakingrl.provider/overlay.visual",
-                                "kind": "visual"
+                                "kind": "widget"
                             }
                         ]
                     }
@@ -1093,7 +1019,7 @@ mod tests {
                     "id": "bakingrl.provider",
                     "name": "Provider",
                     "version": "1.2.3",
-                    "bakingrlApi": "2.1.0",
+                    "bakingrlApi": "2.2.0",
                     "contributes": {}
                 }),
                 true,
@@ -1104,7 +1030,7 @@ mod tests {
                     "id": "bakingrl.consumer",
                     "name": "Consumer",
                     "version": "1.0.0",
-                    "bakingrlApi": "2.1.0",
+                    "bakingrlApi": "2.2.0",
                     "dependencies": [
                         {
                             "packageId": "bakingrl.provider",
@@ -1140,7 +1066,7 @@ mod tests {
                     "id": "bakingrl.provider",
                     "name": "Provider",
                     "version": "1.0.0",
-                    "bakingrlApi": "2.1.0",
+                    "bakingrlApi": "2.2.0",
                     "contributes": {
                         "extensionPoints": [
                             {
@@ -1157,7 +1083,7 @@ mod tests {
                     "id": "bakingrl.consumer",
                     "name": "Consumer",
                     "version": "1.0.0",
-                    "bakingrlApi": "2.1.0",
+                    "bakingrlApi": "2.2.0",
                     "contributes": {
                         "contributions": [
                             {
@@ -1279,7 +1205,7 @@ mod tests {
             "id": "com.example.catalog",
             "name": "Catalog",
             "version": "1.0.0",
-            "bakingrlApi": "2.0.0",
+            "bakingrlApi": "2.2.0",
             "contributes": {
                 "settings": {
                     "schema": "schemas/plugin-settings.json"

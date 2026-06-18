@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use std::path::{Component, Path};
 
 pub const PLUGIN_SCHEMA_V4: &str = "bakingrl.plugin/4";
-pub const HOST_RUNTIME_API_VERSION: &str = "2.1.0";
-pub const MIN_SUPPORTED_RUNTIME_API_VERSION: &str = "2.0.0";
+pub const HOST_RUNTIME_API_VERSION: &str = "2.2.0";
+pub const MIN_SUPPORTED_RUNTIME_API_VERSION: &str = "2.2.0";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PluginPackageManifest {
@@ -85,7 +85,7 @@ impl PluginPackageManifest {
             .and_then(|settings| settings.schema.as_deref())
     }
 
-    pub fn settings_ui_visual(&self) -> Option<&str> {
+    pub fn settings_ui_webview(&self) -> Option<&str> {
         self.v4
             .contributes
             .settings
@@ -108,10 +108,6 @@ impl PluginPackageManifest {
     pub fn contributes_value(&self) -> Option<serde_json::Value> {
         serde_json::to_value(&self.v4.contributes).ok()
     }
-
-    pub fn external_surfaces(&self) -> Option<&PluginExternalSurfacesV4> {
-        self.v4.external_surfaces.as_ref()
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -132,20 +128,19 @@ pub struct PluginPackageManifestV4 {
     pub runtime: Option<PluginRuntimeV4>,
     #[serde(default)]
     pub contributes: PluginContributesV4,
-    #[serde(default, rename = "externalSurfaces")]
-    pub external_surfaces: Option<PluginExternalSurfacesV4>,
 }
 
 fn reject_legacy_manifest_fields(
     value: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<(), String> {
-    const REJECTED: [&str; 6] = [
+    const REJECTED: [&str; 7] = [
         "schema",
         "compatibility",
         "capabilities",
         "kind",
         "activation",
         "settings",
+        "externalSurfaces",
     ];
     for field in REJECTED {
         if value.contains_key(field) {
@@ -159,10 +154,10 @@ fn reject_legacy_manifest_fields(
         let object = value
             .as_object()
             .ok_or_else(|| "contributes must be an object".to_string())?;
-        for field in ["pages", "views", "overlays", "configuration"] {
+        for field in ["pages", "views", "overlays", "configuration", "visuals"] {
             if object.contains_key(field) {
                 return Err(format!(
-                    "legacy contributes.{field} is not supported in {PLUGIN_SCHEMA_V4}"
+                    "host-owned contributes.{field} is not supported in {PLUGIN_SCHEMA_V4}"
                 ));
             }
         }
@@ -192,9 +187,6 @@ impl PluginPackageManifestV4 {
             dependency.validate(&self.id)?;
         }
         self.contributes.validate()?;
-        if let Some(external_surfaces) = &self.external_surfaces {
-            external_surfaces.validate()?;
-        }
         validate_package_id(&self.id)?;
         validate_non_empty("name", &self.name)?;
         validate_non_empty("version", &self.version)?;
@@ -333,8 +325,6 @@ impl PluginRuntimeSidecarHealthCheckV4 {
 #[serde(deny_unknown_fields)]
 pub struct PluginContributesV4 {
     #[serde(default)]
-    pub visuals: Vec<PluginVisualContributionV4>,
-    #[serde(default)]
     pub settings: Option<PluginSettingsContributionV4>,
     #[serde(default)]
     pub services: Vec<PluginServiceContributionV4>,
@@ -352,10 +342,6 @@ pub struct PluginContributesV4 {
 
 impl PluginContributesV4 {
     fn validate(&self) -> Result<(), String> {
-        validate_duplicate_ids(
-            "contributes.visuals",
-            self.visuals.iter().map(|visual| visual.id.as_str()),
-        )?;
         validate_duplicate_ids(
             "contributes.services",
             self.services.iter().map(|service| service.id.as_str()),
@@ -383,9 +369,6 @@ impl PluginContributesV4 {
             self.webviews.iter().map(|webview| webview.id.as_str()),
         )?;
 
-        for visual in &self.visuals {
-            visual.validate()?;
-        }
         for service in &self.services {
             service.validate()?;
         }
@@ -396,7 +379,7 @@ impl PluginContributesV4 {
             extension_point.validate(&self.services)?;
         }
         for contribution in &self.contributions {
-            contribution.validate(&self.visuals, &self.services, &self.resources)?;
+            contribution.validate(&self.services, &self.resources)?;
         }
         for resource in &self.resources {
             resource.validate()?;
@@ -407,13 +390,12 @@ impl PluginContributesV4 {
         if let Some(settings) = &self.settings {
             settings.validate()?;
             if let Some(ui) = &settings.ui {
-                let references_config_visual = self
-                    .visuals
-                    .iter()
-                    .any(|visual| visual.id == *ui && visual.kind.as_deref() == Some("config"));
-                if !references_config_visual {
+                let references_settings_webview = self.webviews.iter().any(|webview| {
+                    webview.id == *ui && webview.kind.as_deref() == Some("settings")
+                });
+                if !references_settings_webview {
                     return Err(format!(
-                        "contributes.settings.ui must reference an existing contributes.visuals id with kind 'config' (missing '{ui}')"
+                        "contributes.settings.ui must reference an existing contributes.webviews id with kind 'settings' (missing '{ui}')"
                     ));
                 }
             }
@@ -473,7 +455,6 @@ pub struct PluginContributionBindingV4 {
     pub description: Option<String>,
     #[serde(rename = "dataSchema")]
     pub data_schema: Option<String>,
-    pub visual: Option<String>,
     pub service: Option<String>,
     #[serde(default)]
     pub resources: Vec<String>,
@@ -483,7 +464,6 @@ pub struct PluginContributionBindingV4 {
 impl PluginContributionBindingV4 {
     fn validate(
         &self,
-        visuals: &[PluginVisualContributionV4],
         services: &[PluginServiceContributionV4],
         resources: &[PluginResourceContributionV4],
     ) -> Result<(), String> {
@@ -500,14 +480,6 @@ impl PluginContributionBindingV4 {
         }
         if let Some(data_schema) = &self.data_schema {
             validate_relative_plugin_path("contributes.contributions.dataSchema", data_schema)?;
-        }
-        if let Some(visual) = &self.visual {
-            validate_export_name("contributes.contributions.visual", visual)?;
-            if !visuals.iter().any(|candidate| candidate.id == *visual) {
-                return Err(format!(
-                    "contributes.contributions.visual references unknown contributes.visuals id '{visual}'"
-                ));
-            }
         }
         if let Some(service) = &self.service {
             validate_export_name("contributes.contributions.service", service)?;
@@ -627,47 +599,6 @@ impl PluginWebviewContributionV4 {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
-pub struct PluginVisualContributionV4 {
-    pub id: String,
-    pub kind: Option<String>,
-    pub entry: String,
-    #[serde(rename = "defaultSize")]
-    pub default_size: Option<[f64; 2]>,
-    #[serde(rename = "instanceSettings")]
-    pub instance_settings: Option<String>,
-    #[serde(rename = "remoteCompatible")]
-    pub remote_compatible: Option<bool>,
-}
-
-impl PluginVisualContributionV4 {
-    fn validate(&self) -> Result<(), String> {
-        validate_export_name("contributes.visuals", &self.id)?;
-        if let Some(kind) = &self.kind {
-            if !matches!(kind.as_str(), "overlay" | "config" | "external") {
-                return Err(
-                    "contributes.visuals.kind must be overlay, config, or external".to_string(),
-                );
-            }
-        }
-        validate_js_entry("contributes.visuals.entry", &self.entry)?;
-        if let Some(size) = self.default_size {
-            if size[0] <= 0.0 || size[1] <= 0.0 {
-                return Err(
-                    "contributes.visuals.defaultSize must contain positive dimensions".to_string(),
-                );
-            }
-        }
-        if let Some(settings) = &self.instance_settings {
-            validate_relative_plugin_path("contributes.visuals.instanceSettings", settings)?;
-        }
-
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-#[serde(deny_unknown_fields)]
 pub struct PluginServiceContributionV4 {
     pub id: String,
     pub runtime: Option<String>,
@@ -690,39 +621,6 @@ impl PluginServiceContributionV4 {
         }
 
         Ok(())
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-#[serde(transparent)]
-pub struct PluginExternalSurfacesV4 {
-    surfaces: BTreeMap<String, PluginExternalSurfaceV4>,
-}
-
-impl PluginExternalSurfacesV4 {
-    pub fn get(&self, id: &str) -> Option<&PluginExternalSurfaceV4> {
-        self.surfaces.get(id)
-    }
-
-    fn validate(&self) -> Result<(), String> {
-        for (id, surface) in &self.surfaces {
-            validate_export_name("externalSurfaces", id)?;
-            surface.validate(&format!("externalSurfaces.{id}"))?;
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-#[serde(deny_unknown_fields)]
-pub struct PluginExternalSurfaceV4 {
-    pub runtime: String,
-}
-
-impl PluginExternalSurfaceV4 {
-    fn validate(&self, field: &str) -> Result<(), String> {
-        validate_runtime_ref(&format!("{field}.runtime"), &self.runtime)
     }
 }
 
@@ -988,7 +886,7 @@ mod tests {
             "id": "com.example.v4",
             "name": "V4 Metadata",
             "version": "1.2.3",
-            "bakingrlApi": "2.0.0",
+            "bakingrlApi": "2.2.0",
             "runtime": {
                 "node": {
                     "entry": "dist/extension-host.js"
@@ -1008,15 +906,6 @@ mod tests {
                 ]
             },
             "contributes": {
-                "visuals": [
-                    {
-                        "id": "scoreboard",
-                        "entry": "dist/visuals/scoreboard.js",
-                        "defaultSize": [640, 80],
-                        "instanceSettings": "schemas/scoreboard-settings.json",
-                        "remoteCompatible": true
-                    }
-                ],
                 "settings": {
                     "schema": "schemas/plugin-settings.json"
                 },
@@ -1036,11 +925,6 @@ mod tests {
                         "icon": "match"
                     }
                 ],
-            },
-            "externalSurfaces": {
-                "broadcast": {
-                    "runtime": "sidecar:helper"
-                }
             }
         })
         .to_string();
@@ -1055,7 +939,7 @@ mod tests {
             manifest
                 .compatibility()
                 .and_then(|c| c.runtime_api.as_deref()),
-            Some("2.0.0")
+            Some("2.2.0")
         );
         assert_eq!(
             manifest
@@ -1065,16 +949,8 @@ mod tests {
             Some("dist/extension-host.js")
         );
         assert_eq!(manifest.runtime_v4().unwrap().sidecars.len(), 1);
-        assert_eq!(manifest.contributes_v4().visuals.len(), 1);
         assert_eq!(manifest.contributes_v4().services.len(), 1);
         assert_eq!(manifest.contributes_v4().commands.len(), 1);
-        assert_eq!(
-            manifest
-                .external_surfaces()
-                .and_then(|external| external.get("broadcast"))
-                .map(|surface| surface.runtime.as_str()),
-            Some("sidecar:helper")
-        );
     }
 
     #[test]
@@ -1084,7 +960,7 @@ mod tests {
             "id": "com.example.platform-extension",
             "name": "Platform Extension",
             "version": "1.0.0",
-            "bakingrlApi": "2.1.0",
+            "bakingrlApi": "2.2.0",
             "dependencies": [
                 {
                     "packageId": "bakingrl.overlay-studio",
@@ -1110,12 +986,6 @@ mod tests {
                 ]
             },
             "contributes": {
-                "visuals": [
-                    {
-                        "id": "scoreboard",
-                        "entry": "dist/visuals/scoreboard.js"
-                    }
-                ],
                 "services": [
                     {
                         "id": "catalog",
@@ -1144,14 +1014,14 @@ mod tests {
                     {
                         "id": "scoreboardBinding",
                         "target": "bakingrl.overlay-studio/overlay-studio.visual",
-                        "kind": "visual",
+                        "kind": "widget",
                         "title": "Scoreboard Binding",
                         "dataSchema": "schemas/binding.json",
-                        "visual": "scoreboard",
                         "service": "catalog",
                         "resources": ["sampleData"],
                         "metadata": {
-                            "category": "match"
+                            "category": "match",
+                            "renderer": "inspector"
                         }
                     }
                 ],
@@ -1207,7 +1077,7 @@ mod tests {
             "id": "com.example.self",
             "name": "Self Dependency",
             "version": "1.0.0",
-            "bakingrlApi": "2.1.0",
+            "bakingrlApi": "2.2.0",
             "dependencies": [
                 {
                     "packageId": "com.example.self"
@@ -1221,18 +1091,18 @@ mod tests {
     }
 
     #[test]
-    fn accepts_v4_settings_ui_referencing_config_visual() {
+    fn accepts_v4_settings_ui_referencing_settings_webview() {
         let raw = serde_json::json!({
             "schemaVersion": "bakingrl.plugin/4",
             "id": "com.example.settings-ui",
             "name": "Settings UI",
             "version": "1.0.0",
-            "bakingrlApi": "2.0.0",
+            "bakingrlApi": "2.2.0",
             "contributes": {
-                "visuals": [
+                "webviews": [
                     {
                         "id": "settingsPanel",
-                        "kind": "config",
+                        "kind": "settings",
                         "entry": "dist/settings-panel.js"
                     }
                 ],
@@ -1244,22 +1114,22 @@ mod tests {
         .to_string();
 
         let manifest = PluginPackageManifest::parse(&raw).unwrap();
-        assert_eq!(manifest.settings_ui_visual(), Some("settingsPanel"));
+        assert_eq!(manifest.settings_ui_webview(), Some("settingsPanel"));
     }
 
     #[test]
-    fn rejects_v4_settings_ui_without_config_visual() {
+    fn rejects_v4_settings_ui_without_settings_webview() {
         let raw = serde_json::json!({
             "schemaVersion": "bakingrl.plugin/4",
             "id": "com.example.settings-ui",
             "name": "Settings UI",
             "version": "1.0.0",
-            "bakingrlApi": "2.0.0",
+            "bakingrlApi": "2.2.0",
             "contributes": {
-                "visuals": [
+                "webviews": [
                     {
                         "id": "settingsPanel",
-                        "kind": "overlay",
+                        "kind": "panel",
                         "entry": "dist/settings-panel.js"
                     }
                 ],
@@ -1281,7 +1151,7 @@ mod tests {
             "id": "com.example.runtime-legacy",
             "name": "Legacy Extension Host",
             "version": "1.0.0",
-            "bakingrlApi": "2.0.0",
+            "bakingrlApi": "2.2.0",
             "runtime": {
                 "extensionHost": {
                     "entry": "dist/extension-host.js"
@@ -1296,13 +1166,13 @@ mod tests {
     }
 
     #[test]
-    fn rejects_v4_external_surface_without_runtime() {
+    fn rejects_v4_external_surfaces_field() {
         let raw = serde_json::json!({
             "schemaVersion": "bakingrl.plugin/4",
             "id": "com.example.external-missing-runtime",
             "name": "External Surface Missing Runtime",
             "version": "1.0.0",
-            "bakingrlApi": "2.0.0",
+            "bakingrlApi": "2.2.0",
             "externalSurfaces": {
                 "broadcast": {}
             }
@@ -1310,27 +1180,7 @@ mod tests {
         .to_string();
 
         let error = PluginPackageManifest::parse(&raw).unwrap_err();
-        assert!(error.contains("runtime"));
-    }
-
-    #[test]
-    fn rejects_v4_external_surface_invalid_id() {
-        let raw = serde_json::json!({
-            "schemaVersion": "bakingrl.plugin/4",
-            "id": "com.example.external-invalid-id",
-            "name": "External Surface Invalid Id",
-            "version": "1.0.0",
-            "bakingrlApi": "2.0.0",
-            "externalSurfaces": {
-                "bad/id": {
-                    "runtime": "node"
-                }
-            }
-        })
-        .to_string();
-
-        let error = PluginPackageManifest::parse(&raw).unwrap_err();
-        assert!(error.contains("externalSurfaces 'bad/id' contains unsupported characters"));
+        assert!(error.contains("manifest field 'externalSurfaces'"));
     }
 
     #[test]
@@ -1348,7 +1198,7 @@ mod tests {
                 "id": "com.example.legacy",
                 "name": "Legacy",
                 "version": "1.0.0",
-                "bakingrlApi": "2.0.0",
+                "bakingrlApi": "2.2.0",
                 "contributes": {}
             });
             let mut raw = raw;
@@ -1365,7 +1215,7 @@ mod tests {
 
     #[test]
     fn rejects_legacy_contributions_sections() {
-        for field in ["pages", "views", "overlays", "configuration"] {
+        for field in ["pages", "views", "overlays", "configuration", "visuals"] {
             let mut contributes = serde_json::Map::new();
             contributes.insert(field.to_string(), serde_json::json!([]));
             let raw = serde_json::json!({
@@ -1373,14 +1223,14 @@ mod tests {
                 "id": "com.example.legacy",
                 "name": "Legacy",
                 "version": "1.0.0",
-                "bakingrlApi": "2.0.0",
+                "bakingrlApi": "2.2.0",
                 "contributes": contributes
             })
             .to_string();
 
             let error = PluginPackageManifest::parse(&raw).unwrap_err();
             assert!(
-                error.contains(&format!("legacy contributes.{field}")),
+                error.contains(&format!("host-owned contributes.{field}")),
                 "contributes.{field} should be rejected"
             );
         }
@@ -1394,7 +1244,7 @@ mod tests {
             "id": "com.example.dual",
             "name": "Dual Schema",
             "version": "1.0.0",
-            "bakingrlApi": "2.0.0",
+            "bakingrlApi": "2.2.0",
             "contributes": {}
         })
         .to_string();
@@ -1410,7 +1260,7 @@ mod tests {
             "id": "com.example.duplicate",
             "name": "Duplicate",
             "version": "1.0.0",
-            "bakingrlApi": "2.0.0",
+            "bakingrlApi": "2.2.0",
             "runtime": {
                 "sidecars": [
                     {
@@ -1428,10 +1278,6 @@ mod tests {
                 ]
             },
             "contributes": {
-                "visuals": [
-                    {"id": "scoreboard", "entry": "dist/visuals/scoreboard.js"},
-                    {"id": "scoreboard", "entry": "dist/visuals/scoreboard-2.js"}
-                ],
                 "services": [
                     {"id": "stats", "methods": ["snapshot"]},
                     {"id": "stats", "runtime": "helper"}
@@ -1456,20 +1302,13 @@ mod tests {
             "id": "com.example.entries",
             "name": "Entries",
             "version": "1.0.0",
-            "bakingrlApi": "2.0.0",
+            "bakingrlApi": "2.2.0",
             "runtime": {
                 "node": {
                     "entry": "dist/extension-host.ts"
                 }
             },
-            "contributes": {
-                "visuals": [
-                    {
-                        "id": "scoreboard",
-                        "entry": "dist/visuals/scoreboard.ts"
-                    }
-                ]
-            }
+            "contributes": {}
         })
         .to_string();
 
@@ -1485,7 +1324,7 @@ mod tests {
                 "id": id,
                 "name": "Bad",
                 "version": "1.0.0",
-                "bakingrlApi": "2.0.0",
+                "bakingrlApi": "2.2.0",
                 "contributes": {}
             })
             .to_string();
