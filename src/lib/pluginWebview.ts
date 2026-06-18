@@ -31,7 +31,8 @@ export type PluginWebviewMountOptions = {
   runtimeApi?: string | null;
   assetUrl(ref: string): string;
   subscribeTelemetry(callback: (event: unknown) => void): () => void;
-  getTelemetrySnapshot?(): unknown;
+  getTelemetrySnapshot?(): unknown | Promise<unknown>;
+  publishTelemetry?(eventName: string, payload?: unknown): unknown | Promise<unknown>;
   emitEditorEvent?(eventName: string, payload?: unknown): void;
   setActive?(active: boolean): void;
   configuration?: {
@@ -149,8 +150,20 @@ export function mountPluginWebview(options: PluginWebviewMountOptions): PluginWe
     }
 
     if (message.type === "bakingrl:telemetry-snapshot") {
-      const snapshot = options.getTelemetrySnapshot?.() ?? latestTelemetryEvent;
-      post("bakingrl:telemetry-snapshot:result", { snapshot }, message.id);
+      const fallback = latestTelemetryEvent;
+      void Promise.resolve(options.getTelemetrySnapshot?.())
+        .then((snapshot) => post("bakingrl:telemetry-snapshot:result", { snapshot: snapshot ?? fallback }, message.id))
+        .catch((error) =>
+          post("bakingrl:telemetry-snapshot:result", { snapshot: fallback, error: String(error) }, message.id)
+        );
+      return;
+    }
+
+    if (message.type === "bakingrl:telemetry-publish" && options.publishTelemetry) {
+      const eventName = typeof message.payload?.eventName === "string" ? message.payload.eventName : "";
+      void Promise.resolve(options.publishTelemetry(eventName, message.payload?.payload))
+        .then(() => post("bakingrl:telemetry-publish:result", { ok: true }, message.id))
+        .catch((error) => post("bakingrl:telemetry-publish:result", { ok: false, error: String(error) }, message.id));
       return;
     }
 

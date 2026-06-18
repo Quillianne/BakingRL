@@ -12,10 +12,14 @@
   let root = $state<HTMLElement | null>(null);
   let message = $state("");
 
-  type TelemetryCallback = (event: unknown) => void;
+  type TelemetryCallback = (event: GameEventFrame) => void | Promise<void>;
+  type TelemetrySubscription = {
+    eventName: string;
+    callback: TelemetryCallback;
+  };
 
   function publishTelemetry(callbacks: Set<TelemetryCallback>, event: unknown) {
-    for (const callback of callbacks) callback(event);
+    for (const callback of callbacks) void callback(event as GameEventFrame);
   }
 
   async function packageSettings() {
@@ -57,6 +61,44 @@
     let unlistenTelemetry: (() => void) | undefined;
     let moduleCleanup: (() => void) | undefined;
     const telemetryCallbacks = new Set<TelemetryCallback>();
+    const telemetrySubscriptions = new Set<TelemetrySubscription>();
+    let latestTelemetryFrame: GameEventFrame | null = null;
+
+    async function readTelemetrySnapshot() {
+      try {
+        const snapshot = await invoke<GameEventFrame | null>("get_telemetry_snapshot");
+        if (snapshot) latestTelemetryFrame = snapshot;
+        return snapshot ?? latestTelemetryFrame;
+      } catch {
+        return latestTelemetryFrame;
+      }
+    }
+
+    function publishTelemetryFrame(eventName: string, payload?: unknown) {
+      return invoke("emit_developer_telemetry", {
+        frame: {
+          Event: eventName,
+          Data: payload ?? null
+        }
+      });
+    }
+
+    function createTelemetryHub() {
+      return {
+        subscribe(eventName: string, callback: TelemetryCallback) {
+          const subscription = { eventName, callback };
+          telemetrySubscriptions.add(subscription);
+          return () => telemetrySubscriptions.delete(subscription);
+        },
+        publish(eventName: string, payload?: unknown) {
+          return publishTelemetryFrame(eventName, payload);
+        },
+        snapshot: readTelemetrySnapshot,
+        getSnapshot: readTelemetrySnapshot
+      };
+    }
+
+    const telemetryHub = createTelemetryHub();
 
     async function mount() {
       if (!root) return;
@@ -79,6 +121,7 @@
               save: savePackageSettings,
               subscribe: subscribePackageSettings
             },
+            telemetryHub,
             dimensions,
             mode: "runtime"
           });
@@ -112,7 +155,9 @@
           subscribeTelemetry(callback) {
             telemetryCallbacks.add(callback);
             return () => telemetryCallbacks.delete(callback);
-          }
+          },
+          getTelemetrySnapshot: readTelemetrySnapshot,
+          publishTelemetry: publishTelemetryFrame
         });
         return;
       }
@@ -121,9 +166,14 @@
     }
 
     void listen<GameEventFrame>("bakingrl-telemetry", (event) => {
+      latestTelemetryFrame = event.payload;
       publishTelemetry(telemetryCallbacks, event.payload);
+      for (const subscription of telemetrySubscriptions) {
+        if (subscription.eventName === event.payload.Event) void subscription.callback(event.payload);
+      }
     }).then((unlisten) => {
-      unlistenTelemetry = unlisten;
+      if (disposed) unlisten();
+      else unlistenTelemetry = unlisten;
     });
 
     void mount().catch((error) => {
