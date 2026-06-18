@@ -9,7 +9,6 @@
   import type { PackageConfigurationState, PageLayout, PagesFile } from "$lib/dashboard/types";
   import {
     consumePendingRouteReturn,
-    returnStateQuery,
     routeReturnFromParams,
     storeRouteScrollRestore,
     type RouteReturnState
@@ -66,12 +65,6 @@
     configurationPage = null;
     configurationState = null;
     pages = await invoke<PagesFile>("get_pages");
-  }
-
-  async function editPage() {
-    if (isPackageConfigurationRoute) return;
-    const pageUrl = `/page/${encodeURIComponent(data.pageId)}${returnStateQuery(pageReturnState)}`;
-    await navigateTo(`/editor/page/${encodeURIComponent(data.pageId)}${returnStateQuery({ returnTo: pageUrl, scrollY: 0 })}`);
   }
 
   async function closePage() {
@@ -135,9 +128,6 @@
       </svg>
     </button>
     <strong class="page-heading">{pageTitle}</strong>
-    {#if !isPackageConfigurationRoute}
-      <button type="button" class="btn-primary" onclick={() => void editPage()}>{t["common.edit"]}</button>
-    {/if}
   </header>
 
   {#if isSecretsPage && configurationState}
@@ -231,19 +221,6 @@
     min-width: 0;
     min-height: 0;
     position: relative;
-  }
-
-  .btn-primary {
-    border: 1px solid var(--border-color);
-    color: var(--text-primary);
-    cursor: pointer;
-  }
-
-  .btn-primary {
-    padding: 8px 12px;
-    border-radius: 6px;
-    background: var(--accent);
-    font-weight: 700;
   }
 
   .icon-btn {

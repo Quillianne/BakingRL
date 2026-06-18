@@ -30,15 +30,11 @@ use crate::window_watcher::start_window_visibility_watcher;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use tauri::{
-    Emitter, Manager, Monitor, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindow,
-    WebviewWindowBuilder,
-};
+use tauri::{Emitter, Manager, Monitor};
 use tracing::{info, warn, Level};
 use tracing_subscriber::FmtSubscriber;
 
 const INGAME_OVERLAY_LABEL: &str = "overlay-ingame";
-const EDITOR_OVERLAY_LABEL: &str = "overlay-editor";
 const PACKAGE_FILE_OPENED_EVENT: &str = "bakingrl-package-files-opened";
 #[cfg(desktop)]
 const TRAY_MENU_SHOW_ID: &str = "bakingrl-tray-show";
@@ -85,56 +81,6 @@ fn monitor_id(monitor: &Monitor) -> String {
 
 fn same_monitor(a: &Monitor, b: &Monitor) -> bool {
     a.position() == b.position() && a.size() == b.size()
-}
-
-fn monitor_matches_setting(monitor: &Monitor, setting: &str) -> bool {
-    monitor_id(monitor) == setting || monitor.name().is_some_and(|name| name == setting)
-}
-
-fn place_editor_like_overlay(
-    app: &tauri::AppHandle,
-    editor_window: &WebviewWindow,
-    plugin_host: &PluginHost,
-) {
-    if let Some(overlay_window) = app.get_webview_window(INGAME_OVERLAY_LABEL) {
-        if let Ok(position) = overlay_window.outer_position() {
-            let _ = editor_window.set_position(position);
-        }
-        if let Ok(size) = overlay_window.inner_size() {
-            let _ = editor_window.set_size(size);
-        }
-        return;
-    }
-
-    let settings = plugin_host.get_app_settings();
-    if settings.overlay.use_monitor_size {
-        let selected_monitor = settings
-            .overlay
-            .monitor_id
-            .as_deref()
-            .and_then(|monitor_id| {
-                editor_window
-                    .available_monitors()
-                    .ok()?
-                    .into_iter()
-                    .find(|monitor| monitor_matches_setting(monitor, monitor_id))
-            });
-        if let Some(monitor) = selected_monitor
-            .or_else(|| editor_window.current_monitor().ok().flatten())
-            .or_else(|| editor_window.primary_monitor().ok().flatten())
-        {
-            let position = monitor.position();
-            let size = monitor.size();
-            let _ = editor_window.set_position(PhysicalPosition::new(position.x, position.y));
-            let _ = editor_window.set_size(PhysicalSize::new(size.width, size.height));
-            return;
-        }
-    }
-
-    let _ = editor_window.set_size(PhysicalSize::new(
-        settings.overlay.screen_width.max(1),
-        settings.overlay.screen_height.max(1),
-    ));
 }
 
 fn normalize_package_file_path(path: PathBuf) -> Option<String> {
@@ -291,69 +237,6 @@ fn enqueue_package_file_opens(app: &tauri::AppHandle, paths: Vec<String>) {
     if let Err(err) = app.emit(PACKAGE_FILE_OPENED_EVENT, ()) {
         warn!("Unable to emit package file open event: {}", err);
     }
-}
-
-#[tauri::command]
-fn open_overlay_layout_editor(
-    app: tauri::AppHandle,
-    plugin_host: tauri::State<'_, Arc<PluginHost>>,
-    layout_id: String,
-) -> Result<(), String> {
-    let overlay_layouts = plugin_host.get_overlay_layouts();
-    if !overlay_layouts
-        .layouts
-        .iter()
-        .any(|layout| layout.id == layout_id)
-    {
-        return Err(format!("Layout '{layout_id}' was not found."));
-    }
-
-    if let Some(overlay_window) = app.get_webview_window(INGAME_OVERLAY_LABEL) {
-        let _ = overlay_window.hide();
-    }
-
-    if let Some(editor_window) = app.get_webview_window(EDITOR_OVERLAY_LABEL) {
-        place_editor_like_overlay(&app, &editor_window, &plugin_host);
-        let _ = editor_window.set_ignore_cursor_events(false);
-        let path = format!("/editor/layout/{layout_id}");
-        let js_path = serde_json::to_string(&path).map_err(|error| error.to_string())?;
-        editor_window
-            .eval(format!("window.location.href = {js_path};"))
-            .map_err(|error| error.to_string())?;
-        let _ = editor_window.show();
-        let _ = editor_window.set_focus();
-        return Ok(());
-    }
-
-    let editor_window = WebviewWindowBuilder::new(
-        &app,
-        EDITOR_OVERLAY_LABEL,
-        WebviewUrl::App(PathBuf::from(format!("/editor/layout/{layout_id}"))),
-    )
-    .title("BakingRL Layout Editor")
-    .transparent(true)
-    .decorations(false)
-    .shadow(false)
-    .always_on_top(true)
-    .skip_taskbar(true)
-    .resizable(false)
-    .visible(false)
-    .build()
-    .map_err(|error| error.to_string())?;
-
-    place_editor_like_overlay(&app, &editor_window, &plugin_host);
-    let _ = editor_window.set_ignore_cursor_events(false);
-    let _ = editor_window.show();
-    let _ = editor_window.set_focus();
-    Ok(())
-}
-
-#[tauri::command]
-fn close_overlay_editor(app: tauri::AppHandle) -> Result<(), String> {
-    if let Some(editor_window) = app.get_webview_window(EDITOR_OVERLAY_LABEL) {
-        editor_window.close().map_err(|error| error.to_string())?;
-    }
-    Ok(())
 }
 
 #[tauri::command]
@@ -639,8 +522,6 @@ pub fn run() {
             open_package_secrets,
             registry_get,
             registry_entries,
-            open_overlay_layout_editor,
-            close_overlay_editor,
             get_telemetry_status,
             get_telemetry_snapshot,
             list_overlay_monitors,
