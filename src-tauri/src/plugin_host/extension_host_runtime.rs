@@ -1313,15 +1313,24 @@ fn telemetry_hub_publish(
 }
 
 fn telemetry_hub_snapshot(context: &ExtensionHostContext) -> Result<serde_json::Value, String> {
-    if let Some(event) = context.bus.latest_game_event() {
-        return Ok(serde_json::to_value(&*event).unwrap_or(serde_json::Value::Null));
+    Ok(telemetry_snapshot_value(
+        context.bus.as_ref(),
+        context.latest_telemetry.as_ref(),
+    ))
+}
+
+fn telemetry_snapshot_value(
+    bus: &EventBus,
+    latest_telemetry: &Mutex<Option<serde_json::Value>>,
+) -> serde_json::Value {
+    if let Some(event) = bus.latest_game_event() {
+        return serde_json::to_value(&*event).unwrap_or(serde_json::Value::Null);
     }
-    Ok(context
-        .latest_telemetry
+    latest_telemetry
         .lock()
         .unwrap()
         .clone()
-        .unwrap_or(serde_json::Value::Null))
+        .unwrap_or(serde_json::Value::Null)
 }
 
 fn telemetry_event(
@@ -1974,4 +1983,40 @@ fn emit_runtime_error(app_handle: &AppHandle, kind: &str, source: &str, message:
         timestamp_ms,
     };
     let _ = app_handle.emit("bakingrl-runtime-error", payload);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn telemetry_snapshot_prefers_latest_bus_game_event() {
+        let bus = EventBus::new(16);
+        let latest_telemetry = Mutex::new(Some(serde_json::json!({
+            "Event": "Fallback",
+            "Data": { "source": "forwarder" }
+        })));
+
+        bus.publish(BusEvent::GameData(Arc::new(GameEvent {
+            event: "UpdateState".to_string(),
+            data: serde_json::json!({ "MatchGuid": "mock-match" }),
+        })));
+
+        let snapshot = telemetry_snapshot_value(&bus, &latest_telemetry);
+        assert_eq!(snapshot["Event"], "UpdateState");
+        assert_eq!(snapshot["Data"]["MatchGuid"], "mock-match");
+    }
+
+    #[test]
+    fn telemetry_snapshot_uses_forwarded_value_until_bus_has_snapshot() {
+        let bus = EventBus::new(16);
+        let latest_telemetry = Mutex::new(Some(serde_json::json!({
+            "Event": "BallHit",
+            "Data": { "Speed": 321 }
+        })));
+
+        let snapshot = telemetry_snapshot_value(&bus, &latest_telemetry);
+        assert_eq!(snapshot["Event"], "BallHit");
+        assert_eq!(snapshot["Data"]["Speed"], 321);
+    }
 }
