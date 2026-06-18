@@ -333,47 +333,21 @@ impl Default for SecuritySettings {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct OverlaySettings {
-    pub hide_when_game_unfocused: bool,
     #[serde(
         default = "default_update_state_throttle_fps",
         alias = "update_rate_fps"
     )]
     pub update_state_throttle_fps: u16,
-    #[serde(default = "default_use_monitor_size")]
-    pub use_monitor_size: bool,
-    #[serde(default)]
-    pub monitor_id: Option<String>,
-    #[serde(default = "default_screen_width")]
-    pub screen_width: u32,
-    #[serde(default = "default_screen_height")]
-    pub screen_height: u32,
-}
-
-fn default_use_monitor_size() -> bool {
-    true
 }
 
 fn default_update_state_throttle_fps() -> u16 {
     30
 }
 
-fn default_screen_width() -> u32 {
-    1920
-}
-
-fn default_screen_height() -> u32 {
-    1080
-}
-
 impl Default for OverlaySettings {
     fn default() -> Self {
         Self {
-            hide_when_game_unfocused: true,
             update_state_throttle_fps: default_update_state_throttle_fps(),
-            use_monitor_size: default_use_monitor_size(),
-            monitor_id: None,
-            screen_width: default_screen_width(),
-            screen_height: default_screen_height(),
         }
     }
 }

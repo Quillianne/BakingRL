@@ -159,15 +159,6 @@ export class BakingRLAdapter {
       case 'list_packages':
         url += '/plugins';
         break;
-      case 'get_overlay_layouts':
-        url += '/layouts';
-        break;
-      case 'get_pages':
-        url += '/pages';
-        break;
-      case 'read_visual_export_source':
-        url += `/packages/${encodeURIComponent(args?.packageId ?? '')}/visuals/${encodeURIComponent(args?.exportName ?? '')}/source`;
-        break;
       case 'call_service_export':
         url += `/packages/${encodeURIComponent(args?.callerPackageId ?? '')}/services/call`;
         method = 'POST';

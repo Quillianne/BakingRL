@@ -173,51 +173,10 @@
                 <label for="telemetryPort">{dashboard.t("settings.port")}</label>
                 <input id="telemetryPort" type="number" bind:value={draftSettings.telemetry.rocket_league_port} />
               </div>
-            </div>
-          </div>
-
-          <div class="settings-group">
-            <h3>{dashboard.t("settings.overlay")}</h3>
-            <div class="studio-grid settings-two-col">
               <div class="input-group">
                 <label for="updateStateThrottle">{dashboard.t("settings.updateStateThrottle")}</label>
                 <input id="updateStateThrottle" type="number" min="1" max="120" bind:value={draftSettings.overlay.update_state_throttle_fps} />
               </div>
-
-              {#if draftSettings.overlay.use_monitor_size}
-                <div class="input-group">
-                  <label for="overlayMonitor">{dashboard.t("settings.overlayMonitor")}</label>
-                  <select id="overlayMonitor" bind:value={draftSettings.overlay.monitor_id}>
-                    <option value="">{dashboard.t("settings.currentPrimary")}</option>
-                    {#each dashboard.overlayMonitors as monitor}
-                      <option value={monitor.id}>
-                        {monitor.name} · {monitor.width}x{monitor.height}{monitor.primary ? " · primary" : ""}{monitor.current ? " · current" : ""}
-                      </option>
-                    {/each}
-                  </select>
-                </div>
-              {:else}
-                <div class="input-group">
-                  <span class="field-label">{dashboard.t("settings.overlaySize")}</span>
-                  <div class="form-row">
-                    <input type="number" min="1" bind:value={draftSettings.overlay.screen_width} aria-label="Overlay width" />
-                    <input type="number" min="1" bind:value={draftSettings.overlay.screen_height} aria-label="Overlay height" />
-                  </div>
-                </div>
-              {/if}
-            </div>
-
-            <div class="settings-check-grid">
-              <label class="check-row">
-                <input type="checkbox" bind:checked={draftSettings.overlay.use_monitor_size} />
-                <span></span>
-                {dashboard.t("settings.useFullMonitor")}
-              </label>
-              <label class="check-row">
-                <input type="checkbox" bind:checked={draftSettings.overlay.hide_when_game_unfocused} />
-                <span></span>
-                {dashboard.t("settings.hideUnfocused")}
-              </label>
             </div>
           </div>
 

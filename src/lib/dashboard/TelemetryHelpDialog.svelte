@@ -42,7 +42,6 @@
         <li>{state.t("telemetry.stepPacket")}</li>
         <li>{state.t("telemetry.stepPort")} <code>{state.appSettings?.telemetry.rocket_league_port ?? state.telemetryStatus?.port ?? 49123}</code>.</li>
         <li>{state.t("telemetry.stepRestart")}</li>
-        <li>{state.t("telemetry.stepBorderless")}</li>
       </ol>
 
       <div class="callout">

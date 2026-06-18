@@ -3,10 +3,9 @@
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
-  import OverlayRenderer from "$lib/OverlayRenderer.svelte";
   import PackageSettingsForm from "$lib/dashboard/PackageSettingsForm.svelte";
   import { getInitialLocale, translations } from "$lib/i18n";
-  import type { PackageConfigurationState, PageLayout, PagesFile } from "$lib/dashboard/types";
+  import type { PackageConfigurationState } from "$lib/dashboard/types";
   import {
     consumePendingRouteReturn,
     routeReturnFromParams,
@@ -17,8 +16,6 @@
   const { data } = $props();
   const t = translations[getInitialLocale()];
 
-  let pages = $state<PagesFile | null>(null);
-  let configurationPage = $state<PageLayout | null>(null);
   let configurationState = $state<PackageConfigurationState | null>(null);
   let message = $state("");
   let pageReturnState = $state<RouteReturnState>({ returnTo: "/", scrollY: 0 });
@@ -35,13 +32,10 @@
   const isConfigurationPage = $derived(configurationPackageId !== null);
   const isSecretsPage = $derived(secretsPackageId !== null);
   const packageConfigurationId = $derived(configurationPackageId ?? secretsPackageId);
-  const isPackageConfigurationRoute = $derived(packageConfigurationId !== null);
-  const page = $derived(configurationPage ?? pages?.pages.find((entry) => entry.id === data.pageId) ?? null);
   const pageTitle = $derived(
-    page?.name ??
-      (isSecretsPage && configurationState
-        ? `${configurationState.title} · ${t["packages.secrets"]}`
-        : configurationState?.title ?? (isPackageConfigurationRoute ? t["packages.configuration"] : t["nav.pages"]))
+    isSecretsPage && configurationState
+      ? `${configurationState.title} · ${t["packages.secrets"]}`
+      : configurationState?.title ?? t["packages.configuration"]
   );
   const routePageReturnState = $derived(routeReturnFromParams(data.returnTo, data.scrollY, "/"));
 
@@ -49,22 +43,10 @@
     message = "";
     if (packageConfigurationId) {
       configurationState = await invoke<PackageConfigurationState>("get_package_configuration_state", { packageId: packageConfigurationId });
-      if (configurationPackageId && configurationState.hasCustomPage) {
-        try {
-          configurationPage = await invoke<PageLayout>("get_package_configuration_page", { packageId: configurationPackageId });
-        } catch (error) {
-          configurationPage = null;
-          message = String(error);
-        }
-      } else {
-        configurationPage = null;
-      }
-      pages = null;
       return;
     }
-    configurationPage = null;
     configurationState = null;
-    pages = await invoke<PagesFile>("get_pages");
+    message = t["packages.configurationUnavailable"];
   }
 
   async function closePage() {
@@ -94,17 +76,10 @@
     void refresh().catch((error) => {
       message = String(error);
     });
-    let unlistenPages: (() => void) | undefined;
     let unlistenPackages: (() => void) | undefined;
-    void listen<PagesFile>("bakingrl-pages-changed", (event) => {
-      if (!packageConfigurationId) pages = event.payload;
-    }).then((unlisten) => {
-      unlistenPages = unlisten;
-    });
     void listen("bakingrl-packages-changed", () => {
       if (packageConfigurationId) {
         void refresh().catch((error) => {
-          configurationPage = null;
           configurationState = null;
           message = String(error);
         });
@@ -113,7 +88,6 @@
       unlistenPackages = unlisten;
     });
     return () => {
-      unlistenPages?.();
       unlistenPackages?.();
     };
   });
@@ -135,34 +109,10 @@
       <PackageSettingsForm packageId={secretsPackageId ?? ""} configuration={configurationState} secretOnly />
     </section>
   {:else if isConfigurationPage && configurationState}
-    {#if page}
-      <section class="page-stage configuration-stage" aria-label={page.name}>
-        <div class="configuration-preview">
-          <OverlayRenderer
-            source="configuration"
-            mode="page"
-            layoutOverride={page}
-            layoutRevision={page.updated_at_ms}
-            preview
-          />
-        </div>
-      </section>
-    {:else}
-      <section class="generated-configuration-stage">
-        {#if configurationState.hasCustomPage && message}
-          <div class="configuration-error">
-            <p>{message}</p>
-          </div>
-        {:else}
-          <PackageSettingsForm packageId={configurationPackageId ?? ""} configuration={configurationState} />
-        {/if}
-      </section>
-    {/if}
-  {:else if page}
-    <section class="page-stage" aria-label={page.name}>
-      <OverlayRenderer source="page" mode="page" layoutId={page.id} />
+    <section class="generated-configuration-stage">
+      <PackageSettingsForm packageId={configurationPackageId ?? ""} configuration={configurationState} />
     </section>
-  {:else if isPackageConfigurationRoute && message}
+  {:else if packageConfigurationId && message}
     <section class="generated-configuration-stage">
       {#if configurationState}
         <PackageSettingsForm packageId={packageConfigurationId ?? ""} configuration={configurationState} secretOnly={isSecretsPage} />
@@ -217,12 +167,6 @@
     font-weight: 650;
   }
 
-  .page-stage {
-    min-width: 0;
-    min-height: 0;
-    position: relative;
-  }
-
   .icon-btn {
     display: inline-flex;
     flex: none;
@@ -254,13 +198,6 @@
     color: var(--text-secondary);
   }
 
-  .configuration-stage {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    gap: 0;
-  }
-
-  .configuration-preview,
   .generated-configuration-stage {
     position: relative;
     min-width: 0;
@@ -276,16 +213,6 @@
 
   .secrets-stage :global(.package-settings-form) {
     width: min(560px, calc(100vw - 48px));
-  }
-
-  .configuration-error {
-    display: flex;
-    width: min(720px, calc(100vw - 48px));
-    flex-direction: column;
-    gap: 14px;
-    color: var(--danger);
-    font-size: 13px;
-    font-weight: 700;
   }
 
 </style>

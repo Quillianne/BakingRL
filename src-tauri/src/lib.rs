@@ -4,7 +4,6 @@ pub mod models;
 pub mod plugin_host;
 pub mod plugin_package;
 pub mod registry;
-pub mod window_watcher;
 
 use crate::bus::{BusEvent, EventBus};
 use crate::ingestor::{start_tcp_ingestor, TelemetryStatusState};
@@ -26,15 +25,13 @@ use crate::plugin_host::{
     PluginHost,
 };
 use crate::registry::{registry_entries, registry_get, Registry};
-use crate::window_watcher::start_window_visibility_watcher;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use tauri::{Emitter, Manager, Monitor};
+use tauri::{Emitter, Manager};
 use tracing::{info, warn, Level};
 use tracing_subscriber::FmtSubscriber;
 
-const INGAME_OVERLAY_LABEL: &str = "overlay-ingame";
 const PACKAGE_FILE_OPENED_EVENT: &str = "bakingrl-package-files-opened";
 #[cfg(desktop)]
 const TRAY_MENU_SHOW_ID: &str = "bakingrl-tray-show";
@@ -48,39 +45,6 @@ impl PendingPackageFileOpens {
     fn new(paths: Vec<String>) -> Self {
         Self(Mutex::new(paths))
     }
-}
-
-#[derive(Debug, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct OverlayMonitorDescriptor {
-    id: String,
-    name: String,
-    x: i32,
-    y: i32,
-    width: u32,
-    height: u32,
-    scale_factor: f64,
-    primary: bool,
-    current: bool,
-}
-
-fn monitor_id(monitor: &Monitor) -> String {
-    if let Some(name) = monitor.name() {
-        if !name.trim().is_empty() {
-            return format!("name:{name}");
-        }
-    }
-
-    let position = monitor.position();
-    let size = monitor.size();
-    format!(
-        "rect:{}:{}:{}:{}",
-        position.x, position.y, size.width, size.height
-    )
-}
-
-fn same_monitor(a: &Monitor, b: &Monitor) -> bool {
-    a.position() == b.position() && a.size() == b.size()
 }
 
 fn normalize_package_file_path(path: PathBuf) -> Option<String> {
@@ -252,54 +216,6 @@ fn get_telemetry_snapshot(bus: tauri::State<'_, Arc<EventBus>>) -> Option<GameEv
 }
 
 #[tauri::command]
-fn list_overlay_monitors(app: tauri::AppHandle) -> Result<Vec<OverlayMonitorDescriptor>, String> {
-    let reference_window = app
-        .get_webview_window(INGAME_OVERLAY_LABEL)
-        .or_else(|| app.get_webview_window("main"))
-        .ok_or_else(|| "No window is available to list monitors.".to_string())?;
-    let monitors = reference_window
-        .available_monitors()
-        .map_err(|error| error.to_string())?;
-    let primary = reference_window.primary_monitor().ok().flatten();
-    let current = reference_window.current_monitor().ok().flatten();
-
-    Ok(monitors
-        .into_iter()
-        .map(|monitor| {
-            let position = monitor.position();
-            let size = monitor.size();
-            let fallback_name = format!(
-                "Display {}x{} at {},{}",
-                size.width, size.height, position.x, position.y
-            );
-            let name = monitor
-                .name()
-                .map(ToString::to_string)
-                .filter(|name| !name.trim().is_empty())
-                .unwrap_or(fallback_name);
-            let primary = primary
-                .as_ref()
-                .is_some_and(|candidate| same_monitor(&monitor, candidate));
-            let current = current
-                .as_ref()
-                .is_some_and(|candidate| same_monitor(&monitor, candidate));
-
-            OverlayMonitorDescriptor {
-                id: monitor_id(&monitor),
-                name,
-                x: position.x,
-                y: position.y,
-                width: size.width,
-                height: size.height,
-                scale_factor: monitor.scale_factor(),
-                primary,
-                current,
-            }
-        })
-        .collect())
-}
-
-#[tauri::command]
 fn emit_developer_telemetry(
     bus: tauri::State<'_, Arc<EventBus>>,
     frame: serde_json::Value,
@@ -371,7 +287,7 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(move |_app| {
-            info!("Démarrage du moteur Core de BakingRL...");
+            info!("Démarrage du moteur BakingRL...");
 
             let app_handle = _app.handle().clone();
 
@@ -388,19 +304,6 @@ pub fn run() {
                 }
             }
 
-            // Configuration du mode "Click-Through" pour l'overlay
-            if let Some(overlay_window) = _app.get_webview_window(INGAME_OVERLAY_LABEL) {
-                info!("Activation du mode Click-Through pour l'overlay...");
-                let _ = overlay_window.set_shadow(false);
-                let _ = overlay_window.set_skip_taskbar(true);
-
-                // Start hidden. Click-through is applied by the watcher after
-                // the overlay has been shown at least once on Linux.
-                let _ = overlay_window.hide();
-            } else {
-                warn!("Impossible de trouver la fenêtre 'overlay-ingame' pour activer le click-through.");
-            }
-
             let bus = Arc::new(EventBus::new(1024));
             let registry = Arc::new(Registry::new());
             _app.manage(bus.clone());
@@ -412,7 +315,6 @@ pub fn run() {
                     .expect("Impossible d'initialiser le gestionnaire de packages"),
             );
             plugin_host.initialize();
-            plugin_host.apply_overlay_window_settings(&plugin_host.get_app_settings());
             _app.manage(plugin_host.clone());
 
             if plugin_host
@@ -452,8 +354,6 @@ pub fn run() {
                 )
                 .await;
             });
-
-            start_window_visibility_watcher(app_handle.clone(), plugin_host.clone());
 
             let mut rx = bus.subscribe();
             tauri::async_runtime::spawn(async move {
@@ -524,7 +424,6 @@ pub fn run() {
             registry_entries,
             get_telemetry_status,
             get_telemetry_snapshot,
-            list_overlay_monitors,
             emit_developer_telemetry,
             take_pending_package_file_opens,
         ])

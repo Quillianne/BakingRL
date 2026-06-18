@@ -1,11 +1,9 @@
 <script lang="ts">
   import "$lib/theme.css";
   import { goto } from "$app/navigation";
-  import { page } from "$app/stores";
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import { getCurrentWindow } from "@tauri-apps/api/window";
-  import { packageRuntime } from "$lib/packageRuntime.svelte";
   import { applyTheme, getStoredTheme } from "$lib/themes";
 
   let { children } = $props();
@@ -13,18 +11,12 @@
 
   const dragZoneHeight = 96;
   const packageFileOpenedEvent = "bakingrl-package-files-opened";
-  const showWindowFrame = $derived(windowLabel !== null && !isOverlayRuntimeRoute($page.url.pathname));
+  const showWindowFrame = $derived(windowLabel !== null);
 
   onMount(() => {
     applyTheme(getStoredTheme());
     windowLabel = detectWindowLabel();
     let unlistenPackageFiles: (() => void) | undefined;
-    let unlistenPackages: (() => void) | undefined;
-    void listen("bakingrl-packages-changed", () => {
-      packageRuntime.markPackagesChanged();
-    }).then((unlisten) => {
-      unlistenPackages = unlisten;
-    });
     if (windowLabel === "main") {
       void listen(packageFileOpenedEvent, () => {
         void navigateToPlugins();
@@ -34,7 +26,6 @@
     }
     return () => {
       unlistenPackageFiles?.();
-      unlistenPackages?.();
     };
   });
 
@@ -44,10 +35,6 @@
     } catch {
       return null;
     }
-  }
-
-  function isOverlayRuntimeRoute(pathname: string) {
-    return pathname === "/overlay" || pathname.startsWith("/overlay/");
   }
 
   async function navigateToPlugins() {

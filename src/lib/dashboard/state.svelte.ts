@@ -27,7 +27,6 @@ import type {
   DeveloperTelemetryEntry,
   DeveloperTelemetryGroup,
   DeveloperTelemetrySort,
-  OverlayMonitor,
   PackageDescriptor,
   PendingInstall,
   PreparedPackageInstall,
@@ -93,7 +92,6 @@ export class DashboardState {
   runtimeInfo = $state<RuntimeInfo | null>(null);
   telemetryHelpOpen = $state(false);
   telemetryHelpDontShow = $state(false);
-  overlayMonitors = $state<OverlayMonitor[]>([]);
   registryEntries = $state<RegistryEntry[]>([]);
   developerTelemetry = $state<DeveloperTelemetryEntry[]>([]);
   developerTelemetryGroups = $state<DeveloperTelemetryGroup[]>([]);
@@ -247,7 +245,6 @@ export class DashboardState {
     this.telemetryStatus = await invoke<TelemetryConnectionStatus>("get_telemetry_status");
     const telemetrySnapshot = await invoke<GameEventFrame | null>("get_telemetry_snapshot");
     if (telemetrySnapshot) this.recordTelemetryFrame(telemetrySnapshot);
-    this.overlayMonitors = await invoke<OverlayMonitor[]>("list_overlay_monitors");
     this.registryEntries = await invoke<RegistryEntry[]>("registry_entries");
   }
 
@@ -613,9 +610,7 @@ export class DashboardState {
     this.busy = true;
     try {
       const nextSettings = JSON.parse(JSON.stringify(settings)) as AppSettings;
-      nextSettings.overlay.monitor_id = nextSettings.overlay.monitor_id || null;
       this.appSettings = await invoke<AppSettings>("save_app_settings", { settings: nextSettings });
-      this.overlayMonitors = await invoke<OverlayMonitor[]>("list_overlay_monitors");
       this.notify(this.t("msg.settingsSaved"), "success");
       return true;
     } catch (error) {

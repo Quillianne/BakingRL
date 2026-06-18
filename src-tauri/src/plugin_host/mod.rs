@@ -17,10 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-use tauri::{
-    AppHandle, Emitter, Manager, Monitor, PhysicalPosition, PhysicalSize, State, WebviewUrl,
-    WebviewWindowBuilder,
-};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tracing::{info, warn};
 
 use crate::bus::EventBus;
@@ -1191,7 +1188,6 @@ impl PluginHost {
         }
         fs::write(&self.app_settings_path, raw)
             .map_err(|e| format!("Failed to write app settings: {e}"))?;
-        self.apply_overlay_window_settings(&settings);
         if previous_settings.security.plugins_safe_mode != settings.security.plugins_safe_mode
             || previous_settings.security.disable_plugin_activation
                 != settings.security.disable_plugin_activation
@@ -1218,42 +1214,6 @@ impl PluginHost {
             }
         }
         Ok(())
-    }
-
-    pub fn apply_overlay_window_settings(&self, settings: &AppSettings) {
-        let Some(window) = self.app_handle.get_webview_window("overlay-ingame") else {
-            return;
-        };
-
-        if settings.overlay.use_monitor_size {
-            let selected_monitor = settings
-                .overlay
-                .monitor_id
-                .as_deref()
-                .and_then(|monitor_id| {
-                    window
-                        .available_monitors()
-                        .ok()?
-                        .into_iter()
-                        .find(|monitor| monitor_matches_setting(monitor, monitor_id))
-                });
-            let Some(monitor) = selected_monitor
-                .or_else(|| window.current_monitor().ok().flatten())
-                .or_else(|| window.primary_monitor().ok().flatten())
-            else {
-                return;
-            };
-            let position = monitor.position();
-            let size = monitor.size();
-            let _ = window.set_position(PhysicalPosition::new(position.x, position.y));
-            let _ = window.set_size(PhysicalSize::new(size.width, size.height));
-            return;
-        }
-
-        let _ = window.set_size(PhysicalSize::new(
-            settings.overlay.screen_width.max(1),
-            settings.overlay.screen_height.max(1),
-        ));
     }
 
     pub fn get_package_settings(&self, package_id: &str) -> Result<serde_json::Value, String> {
@@ -2671,25 +2631,6 @@ fn content_type_for_path(path: &str) -> &'static str {
         "woff2" => "font/woff2",
         _ => "application/octet-stream",
     }
-}
-
-fn monitor_id(monitor: &Monitor) -> String {
-    if let Some(name) = monitor.name() {
-        if !name.trim().is_empty() {
-            return format!("name:{name}");
-        }
-    }
-
-    let position = monitor.position();
-    let size = monitor.size();
-    format!(
-        "rect:{}:{}:{}:{}",
-        position.x, position.y, size.width, size.height
-    )
-}
-
-fn monitor_matches_setting(monitor: &Monitor, setting: &str) -> bool {
-    monitor_id(monitor) == setting || monitor.name().is_some_and(|name| name == setting)
 }
 
 fn merge_settings(

@@ -281,104 +281,6 @@ export type ConfirmRequest = {
   run: () => void | Promise<void>;
 };
 
-export type OverlayItem = {
-  id: string;
-  package_id: string;
-  export_name: string;
-  name: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  z_index: number;
-  visible: boolean;
-  locked: boolean;
-  opacity: number;
-  settings: Record<string, unknown>;
-};
-
-export type OverlayLayer = {
-  id: string;
-  name: string;
-  kind: "normal" | "event";
-  visible: boolean;
-  locked: boolean;
-  order: number;
-  items: OverlayItem[];
-};
-
-export type OverlayLayout = {
-  id: string;
-  name: string;
-  width: number;
-  height: number;
-  layers: OverlayLayer[];
-  items?: OverlayItem[];
-  created_at_ms: number;
-  updated_at_ms: number;
-  template_source?: string | null;
-  thumbnail?: string | null;
-};
-
-export type OverlayLayoutCatalog = {
-  active_layout_id: string;
-  stream_layout_id: string;
-  layouts: OverlayLayout[];
-};
-
-export type PageItem = {
-  id: string;
-  kind: "visual" | "text" | "image" | "shape";
-  package_id?: string | null;
-  export_name?: string | null;
-  name: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  z_index: number;
-  visible: boolean;
-  locked: boolean;
-  opacity: number;
-  settings: Record<string, unknown>;
-};
-
-export type PageLayer = {
-  id: string;
-  name: string;
-  kind: "normal";
-  visible: boolean;
-  locked: boolean;
-  order: number;
-  items: PageItem[];
-};
-
-export type PageLayout = {
-  id: string;
-  name: string;
-  favorite: boolean;
-  width: number;
-  height: number;
-  background: {
-    kind: "color" | "image";
-    color: string;
-    image?: string | null;
-    fit: "cover" | "contain" | "stretch";
-  };
-  settings: {
-    open_target: "app" | "window";
-  };
-  layers: PageLayer[];
-  created_at_ms: number;
-  updated_at_ms: number;
-  template_source?: string | null;
-  thumbnail?: string | null;
-};
-
-export type PagesFile = {
-  pages: PageLayout[];
-};
-
 export type AppSettings = {
   behavior: {
     launch_at_startup: boolean;
@@ -392,12 +294,7 @@ export type AppSettings = {
     trusted_package_public_keys: string[];
   };
   overlay: {
-    hide_when_game_unfocused: boolean;
     update_state_throttle_fps: number;
-    use_monitor_size: boolean;
-    monitor_id?: string | null;
-    screen_width: number;
-    screen_height: number;
   };
   telemetry: {
     rocket_league_host: string;
@@ -421,18 +318,6 @@ export type PluginDiagnosticEvent = {
   message: string;
   timestampMs: number;
   crashCount?: number;
-};
-
-export type OverlayMonitor = {
-  id: string;
-  name: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  scaleFactor: number;
-  primary: boolean;
-  current: boolean;
 };
 
 export type RegistryEntry = {

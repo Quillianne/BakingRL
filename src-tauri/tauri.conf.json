@@ -23,20 +23,6 @@
         "center": true,
         "acceptFirstMouse": true,
         "decorations": false
-      },
-      {
-        "title": "BakingRL Overlay",
-        "label": "overlay-ingame",
-        "url": "/overlay/ingame",
-        "transparent": true,
-        "decorations": false,
-        "shadow": false,
-        "alwaysOnTop": true,
-        "skipTaskbar": true,
-        "visible": false,
-        "focus": false,
-        "width": 1920,
-        "height": 1080
       }
     ],
     "security": {
