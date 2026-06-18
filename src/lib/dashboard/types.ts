@@ -269,86 +269,8 @@ export type PreparedPackageInstall = {
 };
 
 export type PendingInstall = PreparedPackageInstall & {
-  kind: "file" | "url" | "git" | "marketplace";
+  kind: "file" | "url" | "git";
   label: string;
-};
-
-export type MarketplaceListing = {
-  schema: string;
-  packageId: string;
-  displayName: string;
-  shortDescription: string;
-  longDescription: string;
-  tags: string[];
-  repo: string;
-  iconUrl: string | null;
-  bannerUrl: string | null;
-  screenshots: {
-    url: string;
-    alt: string | null;
-    caption: string | null;
-  }[];
-  links: {
-    docs?: string | null;
-    support?: string | null;
-    homepage?: string | null;
-  };
-};
-
-export type MarketplaceApprovedVersion = {
-  version: string;
-  artifacts: MarketplaceArtifact[];
-  bundleUrl?: string | null;
-  bundleSha256?: string | null;
-  signaturePublicKey?: string | null;
-  runtimeApi: string | null;
-  minBakingrlVersion?: string | null;
-  revoked?: boolean;
-  review: {
-    status: string;
-    reviewedAt: string;
-  };
-};
-
-export type MarketplaceArtifact = {
-  platform: "any" | "darwin-arm64" | "darwin-x64" | "linux-x64" | "windows-x64" | string;
-  bundleUrl: string;
-  bundleSha256: string;
-  signaturePublicKey: string;
-};
-
-export type MarketplaceCompatibilityStatus =
-  | "compatible"
-  | "app_too_old"
-  | "platform_unavailable"
-  | "runtime_incompatible";
-
-export type MarketplaceVersionCompatibility = {
-  status: MarketplaceCompatibilityStatus;
-  artifact: MarketplaceArtifact | null;
-  message: string;
-};
-
-export type MarketplaceCatalogPackage = {
-  id: string;
-  developerId: string;
-  developerName: string | null;
-  developerVerified: boolean;
-  repo: string;
-  listingUrl: string;
-  listing: MarketplaceListing | null;
-  listingError: string | null;
-  approvedVersions: MarketplaceApprovedVersion[];
-};
-
-export type MarketplaceCatalog = {
-  generatedAt: string;
-  currentPlatform: string;
-  sections: {
-    recommended: string[];
-    new: string[];
-  };
-  packages: MarketplaceCatalogPackage[];
 };
 
 export type ConfirmRequest = {
