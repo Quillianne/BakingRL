@@ -26,17 +26,7 @@ use crate::plugin_package::install::{
     download_bundle_to_file, inspect_bundle_file, install_bundle_from_file,
     parse_install_deep_link, InstallReceipt,
 };
-use crate::plugin_package::manifest::{
-    parse_runtime_api_version, PluginPackageManifest, HOST_RUNTIME_API_VERSION,
-    MIN_SUPPORTED_RUNTIME_API_VERSION,
-};
-use crate::plugin_package::marketplace::{
-    catalog_for_index, current_marketplace_platform, developer_allows_key,
-    fetch_verified_marketplace_index, find_marketplace_version, read_cached_marketplace_index,
-    select_marketplace_artifact, verified_developer_for_key, write_marketplace_cache,
-    MarketplaceApprovedVersion, MarketplaceArtifact, MarketplaceCatalog, MarketplaceIndex,
-    OFFICIAL_MARKETPLACE_URL,
-};
+use crate::plugin_package::manifest::{PluginPackageManifest, HOST_RUNTIME_API_VERSION};
 use crate::registry::Registry;
 use descriptors::{
     apply_graph_diagnostics, compatibility_for_manifest, descriptor_for_manifest,
@@ -100,7 +90,6 @@ pub struct PluginHost {
     state_path: PathBuf,
     app_settings_path: PathBuf,
     package_settings_path: PathBuf,
-    marketplace_cache_path: PathBuf,
     records: Mutex<HashMap<String, PackageRecord>>,
     deleting_packages: Mutex<HashMap<String, PendingPackageDeletion>>,
     diagnostics: PluginDiagnosticsStore,
@@ -137,7 +126,6 @@ impl PluginHost {
             state_path: app_data.join("package_state.json"),
             app_settings_path: app_data.join("app_settings.json"),
             package_settings_path: app_data.join("package_settings.json"),
-            marketplace_cache_path: app_data.join("marketplace_cache.json"),
             records: Mutex::new(HashMap::new()),
             deleting_packages: Mutex::new(HashMap::new()),
             diagnostics: PluginDiagnosticsStore::default(),
@@ -456,7 +444,6 @@ impl PluginHost {
 
     pub fn inspect_package_bundle(&self, path: String) -> Result<BundleInspection, String> {
         inspect_bundle_file(Path::new(&path))
-            .map(|inspection| self.with_verified_developer_from_cache(inspection))
     }
 
     pub fn install_package_from_file(&self, path: String) -> Result<InstallReceipt, String> {
@@ -551,7 +538,7 @@ impl PluginHost {
             return Err(format!("Unable to stage Git bundle: {err}"));
         }
         let _ = fs::remove_dir_all(&checkout_dir);
-        let mut inspection = match inspect_bundle_file(&download_path) {
+        let inspection = match inspect_bundle_file(&download_path) {
             Ok(inspection) => inspection,
             Err(err) => {
                 let _ = fs::remove_file(&download_path);
@@ -562,86 +549,9 @@ impl PluginHost {
             Some(rev) => format!("git:{repo}#{rev}"),
             None => format!("git:{repo}"),
         };
-        self.attach_verified_developer_from_cache(&mut inspection);
         Ok(PreparedPackageInstall {
             path: download_path.to_string_lossy().to_string(),
             source,
-            inspection,
-        })
-    }
-
-    pub async fn refresh_marketplace(&self) -> Result<MarketplaceCatalog, String> {
-        let index = fetch_verified_marketplace_index(OFFICIAL_MARKETPLACE_URL).await?;
-        write_marketplace_cache(&self.marketplace_cache_path, &index)?;
-        Ok(catalog_for_index(index).await)
-    }
-
-    pub async fn get_marketplace_catalog(&self) -> Result<MarketplaceCatalog, String> {
-        let index = match read_cached_marketplace_index(&self.marketplace_cache_path) {
-            Ok(index) => index,
-            Err(_) => {
-                let index = fetch_verified_marketplace_index(OFFICIAL_MARKETPLACE_URL).await?;
-                write_marketplace_cache(&self.marketplace_cache_path, &index)?;
-                index
-            }
-        };
-        Ok(catalog_for_index(index).await)
-    }
-
-    pub async fn prepare_marketplace_package(
-        &self,
-        package_id: String,
-        version: String,
-    ) -> Result<PreparedPackageInstall, String> {
-        let package_id = package_id.trim();
-        let version = version.trim();
-        if package_id.is_empty() || version.is_empty() {
-            return Err("Marketplace package id and version are required.".to_string());
-        }
-        let index = fetch_verified_marketplace_index(OFFICIAL_MARKETPLACE_URL)
-            .await
-            .map_err(|e| format!("Unable to refresh marketplace index: {e}"))?;
-        write_marketplace_cache(&self.marketplace_cache_path, &index)?;
-        let (package, approved_version) = find_marketplace_version(&index, package_id, version)?;
-        validate_marketplace_version_compatibility(approved_version)?;
-        let artifact =
-            select_marketplace_artifact(approved_version, current_marketplace_platform())?;
-        if !developer_allows_key(
-            &index,
-            &package.developer_id,
-            &artifact.signature_public_key,
-        ) {
-            return Err("Marketplace developer does not own the approved signing key.".to_string());
-        }
-        let developer_id = package.developer_id.clone();
-        let artifact = artifact.clone();
-
-        let download_path = self
-            .downloads_dir()
-            .join(format!("prepared-marketplace-{}.brlp", unique_id("bundle")));
-        download_bundle_to_file(&artifact.bundle_url, &download_path).await?;
-        let mut inspection = match inspect_bundle_file(&download_path) {
-            Ok(inspection) => inspection,
-            Err(err) => {
-                let _ = fs::remove_file(&download_path);
-                return Err(err);
-            }
-        };
-        self.validate_marketplace_bundle(
-            &inspection,
-            package_id,
-            version,
-            &developer_id,
-            &artifact,
-        )
-        .map_err(|err| {
-            let _ = fs::remove_file(&download_path);
-            err
-        })?;
-        self.attach_verified_developer_from_index(&mut inspection, &index);
-        Ok(PreparedPackageInstall {
-            path: download_path.to_string_lossy().to_string(),
-            source: format!("marketplace:official:{package_id}@{version}"),
             inspection,
         })
     }
@@ -656,7 +566,7 @@ impl PluginHost {
             .downloads_dir()
             .join(format!("prepared-{}.brlp", unique_id("bundle")));
         download_bundle_to_file(&url, &download_path).await?;
-        let mut inspection = match inspect_bundle_file(&download_path) {
+        let inspection = match inspect_bundle_file(&download_path) {
             Ok(inspection) => inspection,
             Err(err) => {
                 let _ = fs::remove_file(&download_path);
@@ -669,7 +579,6 @@ impl PluginHost {
                 return Err("Downloaded bundle SHA-256 does not match deep link".to_string());
             }
         }
-        self.attach_verified_developer_from_cache(&mut inspection);
         Ok(PreparedPackageInstall {
             path: download_path.to_string_lossy().to_string(),
             source: format!("{source_kind}:{url}"),
@@ -1462,35 +1371,6 @@ impl PluginHost {
         self.save_state(&state)
     }
 
-    fn with_verified_developer_from_cache(
-        &self,
-        mut inspection: BundleInspection,
-    ) -> BundleInspection {
-        self.attach_verified_developer_from_cache(&mut inspection);
-        inspection
-    }
-
-    fn attach_verified_developer_from_cache(&self, inspection: &mut BundleInspection) {
-        let Ok(index) = read_cached_marketplace_index(&self.marketplace_cache_path) else {
-            return;
-        };
-        self.attach_verified_developer_from_index(inspection, &index);
-    }
-
-    fn attach_verified_developer_from_index(
-        &self,
-        inspection: &mut BundleInspection,
-        index: &MarketplaceIndex,
-    ) {
-        if !inspection.signature_verified {
-            return;
-        }
-        let Some(public_key) = inspection.signature_public_key.as_deref() else {
-            return;
-        };
-        inspection.verified_developer = verified_developer_for_key(index, public_key);
-    }
-
     fn load_app_settings(&self) -> AppSettings {
         read_json_or_default(&self.app_settings_path)
     }
@@ -1504,31 +1384,6 @@ impl PluginHost {
     }
 
     fn validate_install_trust(&self, bundle_path: &Path, source: &str) -> Result<(), String> {
-        if let Some((package_id, version)) = parse_marketplace_source(source) {
-            let inspection = inspect_bundle_file(bundle_path)?;
-            let index = read_cached_marketplace_index(&self.marketplace_cache_path)?;
-            let (package, approved_version) =
-                find_marketplace_version(&index, package_id, version)?;
-            validate_marketplace_version_compatibility(approved_version)?;
-            let artifact =
-                select_marketplace_artifact(approved_version, current_marketplace_platform())?;
-            if !developer_allows_key(
-                &index,
-                &package.developer_id,
-                &artifact.signature_public_key,
-            ) {
-                return Err(
-                    "Marketplace developer does not own the approved signing key.".to_string(),
-                );
-            }
-            return self.validate_marketplace_bundle(
-                &inspection,
-                package_id,
-                version,
-                &package.developer_id,
-                &artifact,
-            );
-        }
         let settings = self.load_app_settings();
         if !settings.security.require_trusted_remote_packages || !is_remote_package_source(source) {
             return Ok(());
@@ -1559,56 +1414,6 @@ impl PluginHost {
                     .to_string(),
             )
         }
-    }
-
-    fn validate_marketplace_bundle(
-        &self,
-        inspection: &BundleInspection,
-        package_id: &str,
-        version: &str,
-        developer_id: &str,
-        approved_artifact: &MarketplaceArtifact,
-    ) -> Result<(), String> {
-        if inspection.manifest.id() != package_id {
-            return Err(
-                "Downloaded marketplace bundle package id does not match the approved entry."
-                    .to_string(),
-            );
-        }
-        if inspection.manifest.version() != version {
-            return Err(
-                "Downloaded marketplace bundle version does not match the approved entry."
-                    .to_string(),
-            );
-        }
-        if !inspection
-            .sha256
-            .eq_ignore_ascii_case(&approved_artifact.bundle_sha256)
-        {
-            return Err(
-                "Downloaded marketplace bundle SHA-256 does not match the approved entry."
-                    .to_string(),
-            );
-        }
-        if !inspection.signature_verified {
-            return Err(
-                "Marketplace packages require a verified Ed25519 bundle signature.".to_string(),
-            );
-        }
-        if inspection.signature_public_key.as_deref()
-            != Some(approved_artifact.signature_public_key.as_str())
-        {
-            return Err(
-                "Marketplace bundle signature key does not match the approved entry.".to_string(),
-            );
-        }
-        if inspection.manifest.author().unwrap_or_default().is_empty() {
-            warn!(
-                "Marketplace package {}@{} from developer {} has no manifest author",
-                package_id, version, developer_id
-            );
-        }
-        Ok(())
     }
 
     fn emit_packages_changed(&self, packages: &[PackageDescriptor]) {
@@ -1684,39 +1489,6 @@ pub fn runtime_info() -> RuntimeInfo {
         runtime_api_version: HOST_RUNTIME_API_VERSION.to_string(),
         supported_runtime_api: supported_runtime_api_label(),
     }
-}
-
-fn validate_marketplace_version_compatibility(
-    approved_version: &MarketplaceApprovedVersion,
-) -> Result<(), String> {
-    validate_marketplace_runtime_api(approved_version.runtime_api.as_deref())?;
-    validate_min_bakingrl_version(approved_version.min_bakingrl_version.as_deref())
-}
-
-fn validate_marketplace_runtime_api(runtime_api: Option<&str>) -> Result<(), String> {
-    let runtime_api = runtime_api
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| "Marketplace version is missing runtimeApi.".to_string())?;
-    let target = parse_runtime_api_version(runtime_api)
-        .ok_or_else(|| format!("Marketplace runtimeApi '{runtime_api}' is invalid."))?;
-    let host = parse_runtime_api_version(HOST_RUNTIME_API_VERSION)
-        .expect("HOST_RUNTIME_API_VERSION must be a semver version");
-    let min = parse_runtime_api_version(MIN_SUPPORTED_RUNTIME_API_VERSION)
-        .expect("MIN_SUPPORTED_RUNTIME_API_VERSION must be a semver version");
-    if target.0 == host.0 && target.0 == min.0 && target.1 >= min.1 && target.1 <= host.1 {
-        return Ok(());
-    }
-    if target.0 > host.0 || (target.0 == host.0 && target.1 > host.1) {
-        return Err(format!(
-            "Marketplace version requires BakingRL runtime API {runtime_api}; this app supports {}.",
-            supported_runtime_api_label()
-        ));
-    }
-    Err(format!(
-        "Marketplace version targets legacy runtime API {runtime_api}; this app supports {}.",
-        supported_runtime_api_label()
-    ))
 }
 
 fn caller_depends_on(provider_package_id: &str, caller: &PackageRecord) -> bool {
@@ -1834,23 +1606,6 @@ fn extension_target_is_active(records: &HashMap<String, PackageRecord>, target: 
             .any(|point| point.name == extension_point_id)
 }
 
-fn validate_min_bakingrl_version(min_version: Option<&str>) -> Result<(), String> {
-    let Some(min_version) = min_version.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Ok(());
-    };
-    let current = semver::Version::parse(env!("CARGO_PKG_VERSION"))
-        .map_err(|err| format!("Current BakingRL version metadata is not valid semver: {err}"))?;
-    let required = semver::Version::parse(min_version.trim_start_matches('v')).map_err(|err| {
-        format!("Marketplace minBakingrlVersion '{min_version}' is invalid: {err}")
-    })?;
-    if current >= required {
-        return Ok(());
-    }
-    Err(format!(
-        "Marketplace version requires BakingRL {required} or newer; this app is {current}."
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1863,22 +1618,6 @@ mod tests {
             descriptor,
             manifest,
         }
-    }
-
-    #[test]
-    fn marketplace_runtime_api_accepts_supported_range_only() {
-        for runtime_api in ["2.0.0", "2.0.9", "2.1.0", "2.1.9"] {
-            assert!(
-                validate_marketplace_runtime_api(Some(runtime_api)).is_ok(),
-                "{runtime_api} should be accepted"
-            );
-        }
-
-        let newer = validate_marketplace_runtime_api(Some("2.2.0")).unwrap_err();
-        assert!(newer.contains("requires BakingRL runtime API 2.2.0"));
-
-        let legacy = validate_marketplace_runtime_api(Some("1.9.9")).unwrap_err();
-        assert!(legacy.contains("targets legacy runtime API 1.9.9"));
     }
 
     #[test]
@@ -2226,16 +1965,6 @@ fn unique_id(prefix: &str) -> String {
     format!("{prefix}-{millis}")
 }
 
-fn parse_marketplace_source(source: &str) -> Option<(&str, &str)> {
-    let value = source.strip_prefix("marketplace:official:")?;
-    let (package_id, version) = value.rsplit_once('@')?;
-    if package_id.is_empty() || version.is_empty() {
-        None
-    } else {
-        Some((package_id, version))
-    }
-}
-
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -2368,29 +2097,6 @@ pub async fn prepare_package_from_git(
     rev: Option<String>,
 ) -> Result<PreparedPackageInstall, String> {
     host.prepare_package_from_git(repo, rev).await
-}
-
-#[tauri::command]
-pub async fn get_marketplace_catalog(
-    host: State<'_, Arc<PluginHost>>,
-) -> Result<MarketplaceCatalog, String> {
-    host.get_marketplace_catalog().await
-}
-
-#[tauri::command]
-pub async fn refresh_marketplace(
-    host: State<'_, Arc<PluginHost>>,
-) -> Result<MarketplaceCatalog, String> {
-    host.refresh_marketplace().await
-}
-
-#[tauri::command]
-pub async fn prepare_marketplace_package(
-    host: State<'_, Arc<PluginHost>>,
-    package_id: String,
-    version: String,
-) -> Result<PreparedPackageInstall, String> {
-    host.prepare_marketplace_package(package_id, version).await
 }
 
 #[tauri::command]

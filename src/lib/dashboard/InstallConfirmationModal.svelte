@@ -50,16 +50,9 @@
       <div class="install-identity">
         <div>
           <h3>{state.pendingInstall.inspection.manifest.name}</h3>
-          {#if state.pendingInstall.inspection.verified_developer || state.pendingInstall.inspection.manifest.author}
+          {#if state.pendingInstall.inspection.manifest.author}
             <p class="verified-developer-line">
-              {state.t("packages.by")} {state.pendingInstall.inspection.verified_developer?.name ?? state.pendingInstall.inspection.manifest.author}
-              {#if state.pendingInstall.inspection.verified_developer}
-                <span class="verified-developer-check" title={state.t("packages.verifiedDeveloper")} aria-label={state.t("packages.verifiedDeveloper")}>
-                  <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
-                    <path d="m4 8 2.5 2.5L12 5"></path>
-                  </svg>
-                </span>
-              {/if}
+              {state.t("packages.by")} {state.pendingInstall.inspection.manifest.author}
             </p>
           {/if}
           <p>{state.pendingInstall.inspection.manifest.id}</p>

@@ -30,16 +30,9 @@ pub struct BundleInspection {
     pub signature_present: bool,
     pub signature_verified: bool,
     pub signature_public_key: Option<String>,
-    pub verified_developer: Option<VerifiedDeveloperDescriptor>,
     pub file_count: usize,
     pub uncompressed_size: u64,
     pub sha256: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VerifiedDeveloperDescriptor {
-    pub id: String,
-    pub name: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -176,7 +169,6 @@ fn inspect_archive<R: Read + Seek>(
         signature_present,
         signature_verified: signature.verified,
         signature_public_key: signature.public_key,
-        verified_developer: None,
         file_count,
         uncompressed_size,
         sha256,
