@@ -482,7 +482,7 @@
     } catch (error) {
       message = String(error);
     }
-    const returnState = routeReturnFromParams(data.returnTo, data.scrollY, "/overlays");
+    const returnState = routeReturnFromParams(data.returnTo, data.scrollY, "/plugins");
     storeRouteScrollRestore(returnState);
     await goto(returnState.returnTo);
   }

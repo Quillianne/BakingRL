@@ -326,20 +326,6 @@ export type OverlayLayoutCatalog = {
   layouts: OverlayLayout[];
 };
 
-export type RecentActivityEntry =
-  | {
-      kind: "page";
-      id: string;
-      updatedAtMs: number;
-      page: PageLayout;
-    }
-  | {
-      kind: "layout";
-      id: string;
-      updatedAtMs: number;
-      layout: OverlayLayout;
-    };
-
 export type PageItem = {
   id: string;
   kind: "visual" | "text" | "image" | "shape";

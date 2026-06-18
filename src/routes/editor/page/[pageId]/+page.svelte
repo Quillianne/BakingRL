@@ -579,7 +579,7 @@
 
   async function closeEditor() {
     await saveThumbnail();
-    const returnState = routeReturnFromParams(data.returnTo, data.scrollY, "/pages");
+    const returnState = routeReturnFromParams(data.returnTo, data.scrollY, "/plugins");
     storeRouteScrollRestore(returnState);
     await goto(returnState.returnTo);
   }

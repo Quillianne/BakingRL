@@ -5,9 +5,6 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { open } from "@tauri-apps/plugin-dialog";
-import { openUrl } from "@tauri-apps/plugin-opener";
-import { createLayoutThumbnail } from "$lib/layoutThumbnail";
-import { captureRouteReturnState, returnStateQuery, storePendingRouteReturn } from "$lib/returnState";
 import {
   RL_TELEMETRY_EVENT_NAMES,
   telemetryFrameTemplateJson,
@@ -30,15 +27,10 @@ import type {
   DeveloperTelemetryEntry,
   DeveloperTelemetryGroup,
   DeveloperTelemetrySort,
-  OverlayLayout,
-  OverlayLayoutCatalog,
   OverlayMonitor,
   PackageDescriptor,
-  PageLayout,
-  PagesFile,
   PendingInstall,
   PreparedPackageInstall,
-  RecentActivityEntry,
   RegistryEntry,
   RuntimeInfo,
   RuntimeErrorEvent,
@@ -85,8 +77,6 @@ function parseRuntimeApiVersion(value: string | null | undefined) {
 export class DashboardState {
   locale = $state<Locale>("fr");
   packages = $state<PackageDescriptor[]>([]);
-  overlayLayouts = $state<OverlayLayoutCatalog | null>(null);
-  pages = $state<PagesFile | null>(null);
   appSettings = $state<AppSettings | null>(null);
   bundlePath = $state("");
   bundleUrl = $state("");
@@ -139,72 +129,6 @@ export class DashboardState {
 
   get packageErrorCount() {
     return this.packages.filter((pkg) => pkg.error).length;
-  }
-
-  get overlayLayoutCount() {
-    return this.overlayLayouts?.layouts.length ?? 0;
-  }
-
-  get pageCount() {
-    return this.pages?.pages.length ?? 0;
-  }
-
-  get homeInGameLayout() {
-    return (
-      this.overlayLayouts?.layouts.find((layout) => layout.id === this.overlayLayouts?.active_layout_id) ??
-      null
-    );
-  }
-
-  get homeStreamLayout() {
-    return (
-      this.overlayLayouts?.layouts.find((layout) => layout.id === this.overlayLayouts?.stream_layout_id) ??
-      null
-    );
-  }
-
-  get favoritePages() {
-    return this.pages?.pages.filter((page) => page.favorite) ?? [];
-  }
-
-  get recentActivity(): RecentActivityEntry[] {
-    const pageEntries: RecentActivityEntry[] = (this.pages?.pages ?? []).map((page) => ({
-      kind: "page",
-      id: `page:${page.id}`,
-      updatedAtMs: page.updated_at_ms || page.created_at_ms || 0,
-      page
-    }));
-    const layoutEntries: RecentActivityEntry[] = (this.overlayLayouts?.layouts ?? []).map((layout) => ({
-      kind: "layout",
-      id: `layout:${layout.id}`,
-      updatedAtMs: layout.updated_at_ms || layout.created_at_ms || 0,
-      layout
-    }));
-    return [...pageEntries, ...layoutEntries]
-      .sort((a, b) => b.updatedAtMs - a.updatedAtMs || a.id.localeCompare(b.id))
-      .slice(0, 3);
-  }
-
-  get pageTemplates() {
-    return this.packages
-      .filter((pkg) => pkg.enabled)
-      .flatMap((pkg) =>
-        pkg.contributions.pages.map((page) => ({
-          package: pkg,
-          page
-        }))
-      );
-  }
-
-  get layoutTemplates() {
-    return this.packages
-      .filter((pkg) => pkg.enabled)
-      .flatMap((pkg) =>
-        pkg.contributions.overlays.map((layoutTemplate) => ({
-          package: pkg,
-          layoutTemplate
-        }))
-      );
   }
 
   get sortedDeveloperTelemetryGroups() {
@@ -319,8 +243,6 @@ export class DashboardState {
   async refresh() {
     this.runtimeInfo = await invoke<RuntimeInfo>("get_runtime_info");
     this.setPackagesFromBackend(await invoke<PackageDescriptor[]>("list_packages"));
-    this.overlayLayouts = await invoke<OverlayLayoutCatalog>("get_overlay_layouts");
-    this.pages = await invoke<PagesFile>("get_pages");
     this.appSettings = await invoke<AppSettings>("get_app_settings");
     this.telemetryStatus = await invoke<TelemetryConnectionStatus>("get_telemetry_status");
     const telemetrySnapshot = await invoke<GameEventFrame | null>("get_telemetry_snapshot");
@@ -686,308 +608,6 @@ export class DashboardState {
     }
   }
 
-  async createOverlayLayout(options: { name?: string; width?: number; height?: number } = {}) {
-    this.busy = true;
-    try {
-      const previousIds = new Set((this.overlayLayouts?.layouts ?? []).map((layout) => layout.id));
-      const createdCatalog = await invoke<OverlayLayoutCatalog>("create_overlay_layout", {
-        name: options.name?.trim() || this.t("overlays.untitled"),
-        width: Math.max(320, Math.round(Number(options.width) || 1920)),
-        height: Math.max(240, Math.round(Number(options.height) || 1080))
-      });
-      this.overlayLayouts = await this.saveCreatedLayoutThumbnail(createdCatalog, previousIds);
-      this.notify(this.t("msg.overlaySaved"), "success");
-      return true;
-    } catch (error) {
-      this.notifyError(error);
-      return false;
-    } finally {
-      this.busy = false;
-    }
-  }
-
-  async saveCreatedLayoutThumbnail(catalog: OverlayLayoutCatalog, previousIds: Set<string>) {
-    const created =
-      catalog.layouts.find((layout) => !previousIds.has(layout.id)) ??
-      catalog.layouts.find((layout) => layout.id === catalog.active_layout_id);
-    if (!created) return catalog;
-    return await invoke<OverlayLayoutCatalog>("save_overlay_layout", {
-      layout: {
-        ...created,
-        thumbnail: createLayoutThumbnail(created, { kind: "overlay" })
-      }
-    });
-  }
-
-  async saveLayout(layout: OverlayLayout) {
-    this.busy = true;
-    try {
-      this.overlayLayouts = await invoke<OverlayLayoutCatalog>("save_overlay_layout", { layout });
-      this.notify(this.t("msg.overlaySaved"), "success");
-    } catch (error) {
-      this.notifyError(error);
-    } finally {
-      this.busy = false;
-    }
-  }
-
-  layoutItemCount(layout: OverlayLayout) {
-    return (layout.layers ?? []).reduce((total, layer) => total + layer.items.length, 0);
-  }
-
-  layoutLayerCount(layout: OverlayLayout) {
-    return layout.layers?.length ?? 0;
-  }
-
-  isInGameLayout(layout: OverlayLayout) {
-    return this.overlayLayouts?.active_layout_id === layout.id;
-  }
-
-  isStreamLayout(layout: OverlayLayout) {
-    return this.overlayLayouts?.stream_layout_id === layout.id;
-  }
-
-  async renameLayout(layout: OverlayLayout, name: string) {
-    const trimmed = name.trim();
-    if (!trimmed || trimmed === layout.name) return;
-    await this.saveLayout({ ...layout, name: trimmed });
-  }
-
-  deleteLayout(layout: OverlayLayout) {
-    if ((this.overlayLayouts?.layouts.length ?? 0) <= 1) {
-      this.notify(this.t("msg.overlayRequired"), "warning");
-      return;
-    }
-    this.askConfirmation({
-      title: this.t("confirm.deleteLayoutTitle"),
-      message: this.tx("confirm.deleteLayoutMessage", { name: layout.name }),
-      confirmLabel: this.t("common.delete"),
-      danger: true,
-      run: () => this.deleteLayoutConfirmed(layout.id)
-    });
-  }
-
-  async deleteLayoutConfirmed(layoutId: string) {
-    this.busy = true;
-    try {
-      this.overlayLayouts = await invoke<OverlayLayoutCatalog>("delete_overlay_layout", { layoutId });
-      this.notify(this.t("msg.overlayDeleted"), "success");
-    } catch (error) {
-      this.notifyError(error);
-    } finally {
-      this.busy = false;
-    }
-  }
-
-  async routeOverlayLayout(layoutId: string, stream = false) {
-    this.busy = true;
-    try {
-      this.overlayLayouts = await invoke<OverlayLayoutCatalog>(
-        stream ? "set_stream_overlay_layout" : "set_active_overlay_layout",
-        { layoutId }
-      );
-    } catch (error) {
-      this.notifyError(error);
-    } finally {
-      this.busy = false;
-    }
-  }
-
-  sortedLayers(layout: OverlayLayout) {
-    return [...(layout.layers ?? [])].sort((a, b) => {
-      if (a.kind === "event" && b.kind !== "event") return 1;
-      if (a.kind !== "event" && b.kind === "event") return -1;
-      return a.order - b.order;
-    });
-  }
-
-  layoutUrl(layoutId: string) {
-    return `/overlay/layout/${encodeURIComponent(layoutId)}`;
-  }
-
-  streamUrl() {
-    return "/overlay/stream";
-  }
-
-  async copyText(value: string, label: string) {
-    if (!value) return;
-    try {
-      await navigator.clipboard.writeText(value);
-      this.notify(`${label} ${this.t("msg.copied")}`, "success");
-    } catch (error) {
-      this.notifyError(error);
-    }
-  }
-
-  async openPreview(value: string) {
-    if (!value) return;
-    try {
-      await openUrl(value);
-    } catch (error) {
-      const popup = window.open(value, "_blank", "noopener,noreferrer");
-      if (!popup) this.notifyError(error);
-    }
-  }
-
-  editorReturnQuery() {
-    return returnStateQuery(captureRouteReturnState());
-  }
-
-  async openLayoutEditor(layoutId: string) {
-    await this.navigate(`/editor/layout/${encodeURIComponent(layoutId)}${this.editorReturnQuery()}`);
-  }
-
-  async importPackageLayout(packageId: string, exportName: string) {
-    this.busy = true;
-    try {
-      this.overlayLayouts = await invoke<OverlayLayoutCatalog>("import_package_layout", {
-        packageId,
-        exportName
-      });
-      this.notify(this.t("msg.overlayImported"), "success");
-      await this.navigate("/overlays");
-    } catch (error) {
-      this.notifyError(error);
-    } finally {
-      this.busy = false;
-    }
-  }
-
-  async createPage(options: { name?: string; openTarget?: "app" | "window"; width?: number; height?: number } = {}) {
-    this.busy = true;
-    try {
-      const previousIds = new Set((this.pages?.pages ?? []).map((page) => page.id));
-      const createdPages = await invoke<PagesFile>("create_page", {
-        name: options.name?.trim() || this.t("pages.untitled"),
-        openTarget: options.openTarget ?? "app",
-        width: Math.max(320, Math.round(Number(options.width) || 1440)),
-        height: Math.max(240, Math.round(Number(options.height) || 900))
-      });
-      this.pages = await this.saveCreatedPageThumbnail(createdPages, previousIds);
-      this.notify(this.t("msg.pageSaved"), "success");
-      return true;
-    } catch (error) {
-      this.notifyError(error);
-      return false;
-    } finally {
-      this.busy = false;
-    }
-  }
-
-  async saveCreatedPageThumbnail(pagesFile: PagesFile, previousIds: Set<string>) {
-    const created =
-      pagesFile.pages.find((page) => !previousIds.has(page.id)) ??
-      [...pagesFile.pages].sort((a, b) => b.created_at_ms - a.created_at_ms)[0];
-    if (!created) return pagesFile;
-    return await invoke<PagesFile>("save_page", {
-      page: {
-        ...created,
-        thumbnail: createLayoutThumbnail(created, { kind: "page" })
-      }
-    });
-  }
-
-  async savePage(page: PageLayout) {
-    this.busy = true;
-    try {
-      this.pages = await invoke<PagesFile>("save_page", { page });
-      this.notify(this.t("msg.pageSaved"), "success");
-    } catch (error) {
-      this.notifyError(error);
-    } finally {
-      this.busy = false;
-    }
-  }
-
-  pageItemCount(page: PageLayout) {
-    return page.layers.reduce((total, layer) => total + layer.items.length, 0);
-  }
-
-  pagePluginCount(page: PageLayout) {
-    return page.layers.reduce(
-      (total, layer) => total + layer.items.filter((item) => item.kind === "visual").length,
-      0
-    );
-  }
-
-  async renamePage(page: PageLayout, name: string) {
-    const trimmed = name.trim();
-    if (!trimmed || trimmed === page.name) return;
-    await this.savePage({ ...page, name: trimmed });
-  }
-
-  async updatePageOpenTarget(page: PageLayout, openTarget: "app" | "window") {
-    await this.savePage({ ...page, settings: { ...page.settings, open_target: openTarget } });
-  }
-
-  async togglePageFavorite(page: PageLayout) {
-    await this.savePage({ ...page, favorite: !page.favorite });
-  }
-
-  async duplicatePage(pageId: string) {
-    this.busy = true;
-    try {
-      this.pages = await invoke<PagesFile>("duplicate_page", { pageId });
-      this.notify(this.t("msg.pageDuplicated"), "success");
-    } catch (error) {
-      this.notifyError(error);
-    } finally {
-      this.busy = false;
-    }
-  }
-
-  deletePage(page: PageLayout) {
-    this.askConfirmation({
-      title: this.t("confirm.deletePageTitle"),
-      message: this.tx("confirm.deletePageMessage", { name: page.name }),
-      confirmLabel: this.t("common.delete"),
-      danger: true,
-      run: () => this.deletePageConfirmed(page.id)
-    });
-  }
-
-  async deletePageConfirmed(pageId: string) {
-    this.busy = true;
-    try {
-      this.pages = await invoke<PagesFile>("delete_page", { pageId });
-      this.notify(this.t("msg.pageDeleted"), "success");
-    } catch (error) {
-      this.notifyError(error);
-    } finally {
-      this.busy = false;
-    }
-  }
-
-  async importPackagePage(packageId: string, exportName: string) {
-    this.busy = true;
-    try {
-      this.pages = await invoke<PagesFile>("import_package_page", {
-        packageId,
-        exportName
-      });
-      this.notify(this.t("msg.pageImported"), "success");
-      await this.navigate("/pages");
-    } catch (error) {
-      this.notifyError(error);
-    } finally {
-      this.busy = false;
-    }
-  }
-
-  async openPage(pageId: string) {
-    const returnState = captureRouteReturnState();
-    storePendingRouteReturn(returnState);
-    try {
-      await invoke("open_page", { pageId });
-    } catch {
-      await this.navigate(`/page/${encodeURIComponent(pageId)}${returnStateQuery(returnState)}`);
-    }
-  }
-
-  async openPageEditor(pageId: string) {
-    await this.navigate(`/editor/page/${encodeURIComponent(pageId)}${this.editorReturnQuery()}`);
-  }
-
   async saveAppSettings(settings: AppSettings | null = this.appSettings) {
     if (!settings) return false;
     this.busy = true;
@@ -1233,8 +853,6 @@ export class DashboardState {
     void this.refresh().catch((error) => this.notifyError(error));
 
     let unlistenPackages: (() => void) | undefined;
-    let unlistenOverlays: (() => void) | undefined;
-    let unlistenPages: (() => void) | undefined;
     let unlistenDeepLinks: (() => void) | undefined;
     let unlistenPackageFiles: (() => void) | undefined;
     let unlistenTelemetryStatus: (() => void) | undefined;
@@ -1273,16 +891,6 @@ export class DashboardState {
     }).then((unlisten) => {
       unlistenPackages = unlisten;
     });
-    void listen<OverlayLayoutCatalog>("bakingrl-overlay-layouts-changed", (event) => {
-      this.overlayLayouts = event.payload;
-    }).then((unlisten) => {
-      unlistenOverlays = unlisten;
-    });
-    void listen<PagesFile>("bakingrl-pages-changed", (event) => {
-      this.pages = event.payload;
-    }).then((unlisten) => {
-      unlistenPages = unlisten;
-    });
     void listen<TelemetryConnectionStatus>("bakingrl-telemetry-status", (event) => {
       this.telemetryStatus = event.payload;
     }).then((unlisten) => {
@@ -1305,8 +913,6 @@ export class DashboardState {
 
     return () => {
       unlistenPackages?.();
-      unlistenOverlays?.();
-      unlistenPages?.();
       unlistenDeepLinks?.();
       unlistenPackageFiles?.();
       unlistenTelemetryStatus?.();
