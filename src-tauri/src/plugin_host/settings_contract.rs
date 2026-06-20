@@ -72,10 +72,18 @@ pub(super) fn merge_package_settings_with_schema(schema: Option<&Value>, values:
     }
     if let Some(values) = values.as_object() {
         let secret_keys = secret_key_set(schema);
+        let declared_keys = declared_setting_key_set(schema);
         for (key, value) in values {
-            if !secret_keys.contains(key) {
-                merged.insert(key.clone(), value.clone());
+            if secret_keys.contains(key) {
+                continue;
             }
+            if declared_keys
+                .as_ref()
+                .is_some_and(|declared_keys| !declared_keys.contains(key))
+            {
+                continue;
+            }
+            merged.insert(key.clone(), value.clone());
         }
     }
     Value::Object(merged)
@@ -89,10 +97,19 @@ pub(super) fn sanitize_package_settings_values(
         return Err("Package settings must be a JSON object.".to_string());
     };
     let secret_keys = secret_key_set(schema);
+    let declared_keys = declared_setting_key_set(schema);
     for key in values.keys() {
         if secret_keys.contains(key) {
             return Err(format!(
                 "Package setting '{key}' is declared as a secret and must be saved through the secret API."
+            ));
+        }
+        if declared_keys
+            .as_ref()
+            .is_some_and(|declared_keys| !declared_keys.contains(key))
+        {
+            return Err(format!(
+                "Package setting '{key}' is not declared in the package settings schema."
             ));
         }
     }
@@ -148,6 +165,13 @@ pub(super) fn secret_key_set(schema: Option<&Value>) -> HashSet<String> {
         .into_iter()
         .map(|definition| definition.key)
         .collect()
+}
+
+fn declared_setting_key_set(schema: Option<&Value>) -> Option<HashSet<String>> {
+    schema
+        .and_then(|schema| schema.get("properties"))
+        .and_then(Value::as_object)
+        .map(|properties| properties.keys().cloned().collect())
 }
 
 pub(super) fn package_secret_configured(
@@ -255,6 +279,68 @@ mod tests {
 
         assert_eq!(loaded, Some(raw_schema));
         let _ = std::fs::remove_dir_all(&package_root);
+    }
+
+    #[test]
+    fn merge_package_settings_filters_secrets_and_undeclared_values() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "theme": {
+                    "type": "string",
+                    "default": "dark"
+                },
+                "apiKey": {
+                    "type": "string",
+                    "x-bakingrl-secret": true
+                }
+            }
+        });
+
+        let merged = merge_package_settings_with_schema(
+            Some(&schema),
+            serde_json::json!({
+                "theme": "light",
+                "apiKey": "should-not-leak",
+                "debug": true
+            }),
+        );
+
+        assert_eq!(merged, serde_json::json!({ "theme": "light" }));
+    }
+
+    #[test]
+    fn sanitize_package_settings_rejects_secrets_and_undeclared_values() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "theme": {
+                    "type": "string"
+                },
+                "apiKey": {
+                    "type": "string",
+                    "x-bakingrl-secret": true
+                }
+            }
+        });
+
+        assert_eq!(
+            sanitize_package_settings_values(Some(&schema), serde_json::json!({ "theme": "dark" }))
+                .unwrap(),
+            serde_json::json!({ "theme": "dark" })
+        );
+        assert!(sanitize_package_settings_values(
+            Some(&schema),
+            serde_json::json!({ "apiKey": "secret" })
+        )
+        .unwrap_err()
+        .contains("declared as a secret"));
+        assert!(sanitize_package_settings_values(
+            Some(&schema),
+            serde_json::json!({ "debug": true })
+        )
+        .unwrap_err()
+        .contains("not declared"));
     }
 }
 
