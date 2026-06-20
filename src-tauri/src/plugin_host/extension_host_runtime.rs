@@ -1030,13 +1030,18 @@ fn spawn_bus_forwarder(
                     let name = event.name().to_string();
                     let value = match event {
                         BusEvent::GameData(event) => {
+                            let value =
+                                serde_json::to_value(&*event).unwrap_or(serde_json::Value::Null);
+                            *context.latest_telemetry.lock().unwrap() = Some(value.clone());
+                            value
+                        }
+                        BusEvent::PluginEvent(event) => {
                             serde_json::to_value(&*event).unwrap_or(serde_json::Value::Null)
                         }
                         BusEvent::RawJson(raw) => {
                             serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null)
                         }
                     };
-                    *context.latest_telemetry.lock().unwrap() = Some(value.clone());
                     if !is_bus_subscribed(&context.bus_subscriptions, &name) {
                         continue;
                     }
@@ -1422,10 +1427,12 @@ fn bus_emit(
         .get("payload")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
-    context.bus.publish(BusEvent::GameData(Arc::new(GameEvent {
-        event: event_name,
-        data: payload,
-    })));
+    context
+        .bus
+        .publish(BusEvent::PluginEvent(Arc::new(GameEvent {
+            event: event_name,
+            data: payload,
+        })));
     Ok(serde_json::json!({ "ok": true }))
 }
 
@@ -1442,13 +1449,11 @@ fn telemetry_hub_publish(
         "Event": event_name.clone(),
         "Data": payload.clone(),
     }));
-    bus_emit(
-        context,
-        serde_json::json!({
-            "eventName": event_name,
-            "payload": payload
-        }),
-    )
+    context.bus.publish(BusEvent::GameData(Arc::new(GameEvent {
+        event: event_name,
+        data: payload,
+    })));
+    Ok(serde_json::json!({ "ok": true }))
 }
 
 fn telemetry_hub_snapshot(context: &ExtensionHostContext) -> Result<serde_json::Value, String> {
@@ -2173,6 +2178,25 @@ mod tests {
         let snapshot = telemetry_snapshot_value(&bus, &latest_telemetry);
         assert_eq!(snapshot["Event"], "BallHit");
         assert_eq!(snapshot["Data"]["Speed"], 321);
+    }
+
+    #[test]
+    fn telemetry_snapshot_ignores_plugin_bus_events() {
+        let bus = EventBus::new(16);
+        let latest_telemetry = Mutex::new(None);
+
+        bus.publish(BusEvent::GameData(Arc::new(GameEvent {
+            event: "UpdateState".to_string(),
+            data: serde_json::json!({ "MatchGuid": "rl-snapshot" }),
+        })));
+        bus.publish(BusEvent::PluginEvent(Arc::new(GameEvent {
+            event: "plugin.example.state".to_string(),
+            data: serde_json::json!({ "status": "ready" }),
+        })));
+
+        let snapshot = telemetry_snapshot_value(&bus, &latest_telemetry);
+        assert_eq!(snapshot["Event"], "UpdateState");
+        assert_eq!(snapshot["Data"]["MatchGuid"], "rl-snapshot");
     }
 
     #[test]

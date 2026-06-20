@@ -6,8 +6,10 @@ use tokio::sync::broadcast;
 /// Il transporte des Arc pour éviter de cloner des données en mémoire pour chaque plugin.
 #[derive(Debug, Clone)]
 pub enum BusEvent {
-    /// Événement typé (provient de Rocket League ou d'un plugin)
+    /// Événement de télémétrie Rocket League.
     GameData(Arc<GameEvent>),
+    /// Événement applicatif publié par un plugin.
+    PluginEvent(Arc<GameEvent>),
     /// Donnée brute (JSON non parsé, au cas où)
     RawJson(Arc<String>),
 }
@@ -15,7 +17,7 @@ pub enum BusEvent {
 impl BusEvent {
     pub fn name(&self) -> &str {
         match self {
-            Self::GameData(event) => event.event.as_str(),
+            Self::GameData(event) | Self::PluginEvent(event) => event.event.as_str(),
             Self::RawJson(_) => "RawJson",
         }
     }
@@ -89,5 +91,22 @@ mod tests {
         let snapshot = bus.latest_game_event().expect("latest game event");
         assert_eq!(snapshot.event, "UpdateState");
         assert_eq!(snapshot.data["MatchGuid"], "first");
+    }
+
+    #[test]
+    fn plugin_event_does_not_replace_latest_game_event() {
+        let bus = EventBus::new(16);
+        bus.publish(BusEvent::GameData(Arc::new(GameEvent {
+            event: "UpdateState".to_string(),
+            data: serde_json::json!({ "MatchGuid": "rl-snapshot" }),
+        })));
+        bus.publish(BusEvent::PluginEvent(Arc::new(GameEvent {
+            event: "plugin.example.state".to_string(),
+            data: serde_json::json!({ "status": "ready" }),
+        })));
+
+        let snapshot = bus.latest_game_event().expect("latest game event");
+        assert_eq!(snapshot.event, "UpdateState");
+        assert_eq!(snapshot.data["MatchGuid"], "rl-snapshot");
     }
 }
