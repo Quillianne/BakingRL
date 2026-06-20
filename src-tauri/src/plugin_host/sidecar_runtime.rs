@@ -1436,9 +1436,8 @@ mod tests {
     fn sidecar_raw_file_reads_are_package_local() {
         assert!(ensure_sidecar_owns_package_file("com.pkg.owner/helper", "com.pkg.owner").is_ok());
 
-        let error =
-            ensure_sidecar_owns_package_file("com.pkg.owner/helper", "com.pkg.provider")
-                .unwrap_err();
+        let error = ensure_sidecar_owns_package_file("com.pkg.owner/helper", "com.pkg.provider")
+            .unwrap_err();
         assert!(error.contains("cannot read undeclared files"));
         assert!(error.contains("resources/read"));
     }

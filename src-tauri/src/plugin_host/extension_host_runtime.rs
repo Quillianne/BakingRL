@@ -1445,10 +1445,12 @@ fn telemetry_hub_publish(
         .get("payload")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
-    context.bus.publish(BusEvent::PluginEvent(Arc::new(GameEvent {
-        event: event_name,
-        data: payload,
-    })));
+    context
+        .bus
+        .publish(BusEvent::PluginEvent(Arc::new(GameEvent {
+            event: event_name,
+            data: payload,
+        })));
     Ok(serde_json::json!({ "ok": true }))
 }
 
