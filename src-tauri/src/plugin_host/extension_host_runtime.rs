@@ -1445,11 +1445,7 @@ fn telemetry_hub_publish(
         .get("payload")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
-    *context.latest_telemetry.lock().unwrap() = Some(serde_json::json!({
-        "Event": event_name.clone(),
-        "Data": payload.clone(),
-    }));
-    context.bus.publish(BusEvent::GameData(Arc::new(GameEvent {
+    context.bus.publish(BusEvent::PluginEvent(Arc::new(GameEvent {
         event: event_name,
         data: payload,
     })));
@@ -2197,6 +2193,20 @@ mod tests {
         let snapshot = telemetry_snapshot_value(&bus, &latest_telemetry);
         assert_eq!(snapshot["Event"], "UpdateState");
         assert_eq!(snapshot["Data"]["MatchGuid"], "rl-snapshot");
+    }
+
+    #[test]
+    fn telemetry_snapshot_does_not_promote_plugin_events() {
+        let bus = EventBus::new(16);
+        let latest_telemetry = Mutex::new(None);
+
+        bus.publish(BusEvent::PluginEvent(Arc::new(GameEvent {
+            event: "plugin.example.state".to_string(),
+            data: serde_json::json!({ "status": "ready" }),
+        })));
+
+        let snapshot = telemetry_snapshot_value(&bus, &latest_telemetry);
+        assert_eq!(snapshot, serde_json::Value::Null);
     }
 
     #[test]
