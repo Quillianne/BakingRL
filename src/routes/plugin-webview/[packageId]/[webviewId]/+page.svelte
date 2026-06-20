@@ -219,7 +219,12 @@
         height: Math.max(1, root.clientHeight || window.innerHeight)
       };
 
-      const module = await importPluginModule(descriptor.packageId, descriptor.entry, Date.now());
+      const module = await importPluginModule(
+        descriptor.packageId,
+        descriptor.webviewId,
+        descriptor.entry,
+        Date.now()
+      );
       const exported = module.default ?? module;
       if (typeof exported?.mount === "function") {
         const moduleSettings = createModuleSettings(settings);

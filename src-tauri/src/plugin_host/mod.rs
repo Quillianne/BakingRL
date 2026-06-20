@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder, Window};
 use tracing::{info, warn};
 
 use crate::bus::EventBus;
@@ -807,6 +807,35 @@ impl PluginHost {
         let bytes = self.read_package_file(package_id, relative_path)?;
         String::from_utf8(bytes)
             .map_err(|e| format!("Package file '{relative_path}' is not valid UTF-8: {e}"))
+    }
+
+    pub fn read_package_webview_module_text(
+        &self,
+        package_id: &str,
+        webview_id: &str,
+        relative_path: &str,
+    ) -> Result<String, String> {
+        let (package_root, safe_path) = {
+            let records = self.records.lock().unwrap();
+            let record = self.require_enabled_record(&records, package_id)?;
+            let webview = record
+                .manifest
+                .contributes_v4()
+                .webviews
+                .iter()
+                .find(|webview| webview.id == webview_id)
+                .ok_or_else(|| {
+                    format!("Package '{package_id}' does not declare webview '{webview_id}'.")
+                })?;
+            (
+                PathBuf::from(&record.descriptor.path),
+                package_webview_module_relative_path(&webview.entry, relative_path)?,
+            )
+        };
+        let bytes = read_binary_package_file(&package_root, &safe_path)?;
+        String::from_utf8(bytes).map_err(|e| {
+            format!("Package webview module '{relative_path}' is not valid UTF-8: {e}")
+        })
     }
 
     pub fn package_webview_runtime_descriptor(
@@ -2165,6 +2194,31 @@ mod tests {
         assert!(error.contains("does not declare webview 'admin'"));
     }
 
+    #[test]
+    fn package_webview_module_paths_stay_with_declared_bundle() {
+        let entry = "dist/webviews/settings.js";
+
+        assert_eq!(
+            package_webview_module_relative_path(entry, entry).unwrap(),
+            PathBuf::from("dist/webviews/settings.js")
+        );
+        assert_eq!(
+            package_webview_module_relative_path(entry, "dist/assets/settings-helper.js").unwrap(),
+            PathBuf::from("dist/assets/settings-helper.js")
+        );
+
+        let outside_bundle =
+            package_webview_module_relative_path(entry, "src/extension/index.js").unwrap_err();
+        assert!(outside_bundle.contains("declared webview bundle"));
+
+        let non_js =
+            package_webview_module_relative_path(entry, "dist/assets/style.css").unwrap_err();
+        assert!(non_js.contains("built .js"));
+
+        let escaping = package_webview_module_relative_path(entry, "../secret.js").unwrap_err();
+        assert!(escaping.contains("escapes the package root"));
+    }
+
     fn resource_ids(resources: Vec<serde_json::Value>) -> Vec<String> {
         let mut ids = resources
             .into_iter()
@@ -2325,6 +2379,30 @@ fn package_webview_runtime_descriptor_for_record(
     })
 }
 
+fn package_webview_module_relative_path(
+    entry: &str,
+    relative_path: &str,
+) -> Result<PathBuf, String> {
+    let entry_path = safe_package_relative_path(entry)?;
+    let requested_path = safe_package_relative_path(relative_path)?;
+    if requested_path.extension().and_then(|ext| ext.to_str()) != Some("js") {
+        return Err(format!(
+            "Package webview module '{relative_path}' must be a built .js file."
+        ));
+    }
+    if requested_path == entry_path {
+        return Ok(requested_path);
+    }
+    if entry_path.iter().next().is_some()
+        && entry_path.iter().next() == requested_path.iter().next()
+    {
+        return Ok(requested_path);
+    }
+    Err(format!(
+        "Package webview module '{relative_path}' is outside the declared webview bundle."
+    ))
+}
+
 fn package_webview_route(package_id: &str, webview_id: &str) -> String {
     format!(
         "/plugin-webview/{}/{}",
@@ -2477,12 +2555,23 @@ pub fn remove_package(
 }
 
 #[tauri::command]
-pub fn read_package_file_text(
+pub fn read_package_webview_module_text(
+    window: Window,
     host: State<'_, Arc<PluginHost>>,
     package_id: String,
+    webview_id: String,
     relative_path: String,
 ) -> Result<String, String> {
-    host.read_package_file_text(&package_id, &relative_path)
+    let expected_label = package_webview_window_label(&package_id, &webview_id);
+    if window.label() != expected_label {
+        return Err(format!(
+            "Window '{}' cannot read module files for webview '{}/{}'.",
+            window.label(),
+            package_id,
+            webview_id
+        ));
+    }
+    host.read_package_webview_module_text(&package_id, &webview_id, &relative_path)
 }
 
 #[tauri::command]

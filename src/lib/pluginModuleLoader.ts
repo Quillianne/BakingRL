@@ -5,34 +5,35 @@ const relativeImportPattern = /\b(import|export)([\s\S]*?)(["'])(\.{1,2}\/[^"']+
 const objectUrls = new Map<string, string>();
 const pendingUrls = new Map<string, Promise<string>>();
 
-export async function importPluginModule(packageId: string, entry: string, version: string | number) {
+export async function importPluginModule(packageId: string, webviewId: string, entry: string, version: string | number) {
   if (!adapter.isTauri) {
     return import(/* @vite-ignore */ adapter.packageModuleUrl(packageId, entry, version));
   }
-  const url = await pluginModuleUrl(packageId, entry, version);
+  const url = await pluginModuleUrl(packageId, webviewId, entry, version);
   return import(/* @vite-ignore */ url);
 }
 
-async function pluginModuleUrl(packageId: string, entry: string, version: string | number): Promise<string> {
+async function pluginModuleUrl(packageId: string, webviewId: string, entry: string, version: string | number): Promise<string> {
   const normalizedEntry = normalizePackagePath(entry);
-  const key = `${packageId}\0${normalizedEntry}\0${version}`;
+  const key = `${packageId}\0${webviewId}\0${normalizedEntry}\0${version}`;
   const cached = objectUrls.get(key);
   if (cached) return cached;
   const pending = pendingUrls.get(key);
   if (pending) return pending;
 
-  const next = buildModuleUrl(packageId, normalizedEntry, version, key);
+  const next = buildModuleUrl(packageId, webviewId, normalizedEntry, version, key);
   pendingUrls.set(key, next);
   return next;
 }
 
-async function buildModuleUrl(packageId: string, entry: string, version: string | number, key: string) {
+async function buildModuleUrl(packageId: string, webviewId: string, entry: string, version: string | number, key: string) {
   try {
-    const source = await invoke<string>("read_package_file_text", {
+    const source = await invoke<string>("read_package_webview_module_text", {
       packageId,
+      webviewId,
       relativePath: entry
     });
-    const rewritten = await rewriteRelativeImports(packageId, entry, version, source);
+    const rewritten = await rewriteRelativeImports(packageId, webviewId, entry, version, source);
     const debugSource = `\n//# sourceURL=bakingrl-plugin://${packageId}/${entry}`;
     const blob = new Blob([rewritten, debugSource], { type: "text/javascript" });
     const url = URL.createObjectURL(blob);
@@ -43,13 +44,13 @@ async function buildModuleUrl(packageId: string, entry: string, version: string 
   }
 }
 
-async function rewriteRelativeImports(packageId: string, entry: string, version: string | number, source: string) {
+async function rewriteRelativeImports(packageId: string, webviewId: string, entry: string, version: string | number, source: string) {
   const replacements: Array<{ start: number; end: number; value: string }> = [];
   for (const match of source.matchAll(relativeImportPattern)) {
     const rawSpecifier = match[4];
     if (!rawSpecifier || match.index === undefined) continue;
     const resolved = resolveRelativePackagePath(entry, rawSpecifier);
-    const rewrittenUrl = await pluginModuleUrl(packageId, resolved, version);
+    const rewrittenUrl = await pluginModuleUrl(packageId, webviewId, resolved, version);
     const specifierStart = match.index + match[0].lastIndexOf(rawSpecifier);
     replacements.push({
       start: specifierStart,
