@@ -63,8 +63,9 @@ on stdio. `stderr` is reserved for plugin logs.
 ## Browser UI
 
 Plugin webviews and configuration surfaces are packaged browser entries. They
-open inside host-owned standalone windows or iframes. Browser code talks to the
-host through the SDK bridge instead of reading local files directly.
+open inside host-owned standalone windows. The host resolves the declared
+`contributes.webviews` entry for the package and webview id; browser code talks
+to the host through the SDK bridge instead of reading local files directly.
 
 This keeps routing and window lifecycle in the host while still allowing rich
 plugin-authored UI.
