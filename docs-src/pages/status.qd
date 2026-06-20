@@ -9,7 +9,7 @@ outside the repository.
 
 ## Current Direction
 
-BakingRL is now centered on the trusted plugin v3 architecture:
+BakingRL is now centered on the trusted plugin v4 architecture:
 
 - host application in `BakingRL`;
 - SDK and generator in `BakingRLSDK`;

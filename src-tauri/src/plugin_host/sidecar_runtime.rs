@@ -1060,9 +1060,9 @@ fn handle_sidecar_jsonrpc(
             let status = get_status_snapshot(&runtime_state, sidecar_ref);
             Ok(serde_json::json!(status))
         }
-        "packages/list" => sidecar_packages_list(app_handle),
+        "packages/list" => sidecar_plugins_list(sidecar_ref, app_handle),
         "packages/settings" | "packages/getSettings" => {
-            sidecar_package_settings(app_handle, params)
+            sidecar_package_settings(sidecar_ref, app_handle, params)
         }
         "packages/readFile" => sidecar_package_read_file(sidecar_ref, app_handle, params),
         "packages/readText" | "packages/readFileText" => {
@@ -1097,10 +1097,6 @@ fn registry_state(app_handle: &AppHandle) -> Result<tauri::State<'_, Arc<Registr
     app_handle
         .try_state::<Arc<Registry>>()
         .ok_or_else(|| "Registry state is not available.".to_string())
-}
-
-fn sidecar_packages_list(app_handle: &AppHandle) -> Result<serde_json::Value, String> {
-    serde_json::to_value(plugin_host(app_handle)?.list_packages()).map_err(|err| err.to_string())
 }
 
 fn sidecar_plugins_list(
@@ -1161,10 +1157,12 @@ fn sidecar_resources_read(
 }
 
 fn sidecar_package_settings(
+    sidecar_ref: &str,
     app_handle: &AppHandle,
     params: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let package_id = required_string(&params, "packageId")?;
+    ensure_sidecar_owns_package_settings(sidecar_ref, &package_id)?;
     plugin_host(app_handle)?.get_package_settings(&package_id)
 }
 
@@ -1205,6 +1203,16 @@ fn ensure_sidecar_owns_package_file(sidecar_ref: &str, package_id: &str) -> Resu
     ))
 }
 
+fn ensure_sidecar_owns_package_settings(sidecar_ref: &str, package_id: &str) -> Result<(), String> {
+    let caller_package_id = sidecar_package_id(sidecar_ref);
+    if package_id == caller_package_id {
+        return Ok(());
+    }
+    Err(format!(
+        "Sidecar '{sidecar_ref}' cannot read settings for package '{package_id}'."
+    ))
+}
+
 fn sidecar_registry_get(
     sidecar_ref: &str,
     app_handle: &AppHandle,
@@ -1223,8 +1231,11 @@ fn sidecar_registry_entries(
     app_handle: &AppHandle,
 ) -> Result<serde_json::Value, String> {
     let host = plugin_host(app_handle)?;
-    host.can_package_read_registry(sidecar_package_id(sidecar_ref), "")?;
-    serde_json::to_value(registry_state(app_handle)?.entries()).map_err(|err| err.to_string())
+    let registry = registry_state(app_handle)?;
+    serde_json::to_value(
+        host.readable_registry_entries(sidecar_package_id(sidecar_ref), &registry)?,
+    )
+    .map_err(|err| err.to_string())
 }
 
 fn sidecar_service_call(
@@ -1440,6 +1451,18 @@ mod tests {
             .unwrap_err();
         assert!(error.contains("cannot read undeclared files"));
         assert!(error.contains("resources/read"));
+    }
+
+    #[test]
+    fn sidecar_settings_reads_are_package_local() {
+        assert!(
+            ensure_sidecar_owns_package_settings("com.pkg.owner/helper", "com.pkg.owner").is_ok()
+        );
+
+        let error =
+            ensure_sidecar_owns_package_settings("com.pkg.owner/helper", "com.pkg.provider")
+                .unwrap_err();
+        assert!(error.contains("cannot read settings"));
     }
 
     #[test]

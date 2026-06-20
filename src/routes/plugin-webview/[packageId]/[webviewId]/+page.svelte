@@ -22,6 +22,7 @@
     packageId: string;
     webviewId: string;
     entry: string;
+    kind?: string | null;
     runtimeApi: string;
   };
 
@@ -117,11 +118,16 @@
     };
   }
 
-  function createModuleSettings(settings: Record<string, unknown>): ModuleSettings {
+  function createModuleSettings(settings: Record<string, unknown>, canSave: boolean): ModuleSettings {
     return {
       ...settings,
       get: packageSettings,
-      save: savePackageSettings,
+      save(values) {
+        if (!canSave) {
+          throw new Error("Only settings webviews can save package settings.");
+        }
+        return savePackageSettings(values);
+      },
       subscribe: subscribePackageSettings
     };
   }
@@ -214,6 +220,7 @@
         }
       );
       const settings = await packageSettings();
+      const isSettingsWebview = descriptor.kind === "settings";
       const dimensions = {
         width: Math.max(1, root.clientWidth || window.innerWidth),
         height: Math.max(1, root.clientHeight || window.innerHeight)
@@ -227,7 +234,7 @@
       );
       const exported = module.default ?? module;
       if (typeof exported?.mount === "function") {
-        const moduleSettings = createModuleSettings(settings);
+        const moduleSettings = createModuleSettings(settings, isSettingsWebview);
         const item = {
           id: descriptor.webviewId,
           package_id: descriptor.packageId,
@@ -259,7 +266,7 @@
           },
           item,
           settings: moduleSettings,
-          configuration,
+          configuration: isSettingsWebview ? configuration : undefined,
           telemetryHub,
           bus: telemetryHub,
           registry: {

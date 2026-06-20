@@ -1427,6 +1427,7 @@ fn bus_emit(
         .get("payload")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
+    plugin_host(context)?.can_package_write_event(&context.package_id, &event_name)?;
     context
         .bus
         .publish(BusEvent::PluginEvent(Arc::new(GameEvent {
@@ -1445,6 +1446,7 @@ fn telemetry_hub_publish(
         .get("payload")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
+    plugin_host(context)?.can_package_write_event(&context.package_id, &event_name)?;
     context
         .bus
         .publish(BusEvent::PluginEvent(Arc::new(GameEvent {
@@ -1505,6 +1507,7 @@ fn registry_get(
     params: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let key = required_string(&params, "key")?;
+    plugin_host(context)?.can_package_read_registry(&context.package_id, &key)?;
     Ok(context
         .registry
         .get(&key)
@@ -1520,12 +1523,14 @@ fn registry_set(
         .get("value")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
+    plugin_host(context)?.can_package_write_registry(&context.package_id, &key)?;
     context.registry.set(key, value);
     Ok(serde_json::json!({ "ok": true }))
 }
 
 fn registry_entries(context: &ExtensionHostContext) -> Result<serde_json::Value, String> {
-    let entries = context.registry.entries().into_iter().collect::<Vec<_>>();
+    let entries =
+        plugin_host(context)?.readable_registry_entries(&context.package_id, &context.registry)?;
     serde_json::to_value(entries).map_err(|err| err.to_string())
 }
 

@@ -72,6 +72,7 @@ pub struct PackageWebviewRuntimeDescriptor {
     pub package_id: String,
     pub webview_id: String,
     pub entry: String,
+    pub kind: Option<String>,
     pub runtime_api: String,
 }
 
@@ -1079,10 +1080,115 @@ impl PluginHost {
         self.command_router.call(command_ref, args).await
     }
 
-    pub fn can_package_read_registry(&self, package_id: &str, _key: &str) -> Result<(), String> {
+    pub fn can_package_read_registry(&self, package_id: &str, key: &str) -> Result<(), String> {
+        let records = self.records.lock().unwrap();
+        let caller = self.require_enabled_record(&records, package_id)?;
+        if key.trim().is_empty() || key_is_in_plugin_namespace(package_id, key) {
+            return Ok(());
+        }
+        if let Some(owner_package_id) = registry_key_owner(&records, key) {
+            if owner_package_id != package_id && caller_depends_on(owner_package_id, caller) {
+                return Ok(());
+            }
+            return Err(format!(
+                "Package '{package_id}' cannot read registry key '{key}' without declaring a dependency on '{owner_package_id}'."
+            ));
+        }
+        if dependency_key_owner(caller, key).is_some() {
+            return Ok(());
+        }
+        Err(format!(
+            "Package '{package_id}' cannot read registry key '{key}' outside a declared plugin namespace."
+        ))
+    }
+
+    pub fn can_package_write_registry(&self, package_id: &str, key: &str) -> Result<(), String> {
         let records = self.records.lock().unwrap();
         self.require_enabled_record(&records, package_id)?;
-        Ok(())
+        ensure_plugin_namespace(package_id, key, "registry key")
+    }
+
+    pub fn readable_registry_entries(
+        &self,
+        package_id: &str,
+        registry: &Registry,
+    ) -> Result<Vec<crate::registry::RegistryEntry>, String> {
+        let records = self.records.lock().unwrap();
+        let caller = self.require_enabled_record(&records, package_id)?;
+        Ok(registry
+            .entries()
+            .into_iter()
+            .filter(|entry| {
+                if key_is_in_plugin_namespace(package_id, &entry.key) {
+                    return true;
+                }
+                registry_key_owner(&records, &entry.key)
+                    .is_some_and(|owner| owner != package_id && caller_depends_on(owner, caller))
+            })
+            .collect())
+    }
+
+    pub fn can_package_write_event(
+        &self,
+        package_id: &str,
+        event_name: &str,
+    ) -> Result<(), String> {
+        let records = self.records.lock().unwrap();
+        self.require_enabled_record(&records, package_id)?;
+        ensure_plugin_namespace(package_id, event_name, "event name")
+    }
+
+    pub fn is_settings_webview(&self, package_id: &str, webview_id: &str) -> Result<bool, String> {
+        let records = self.records.lock().unwrap();
+        let record = self.require_enabled_record(&records, package_id)?;
+        Ok(record
+            .manifest
+            .contributes_v4()
+            .webviews
+            .iter()
+            .any(|webview| webview.id == webview_id && is_settings_webview(webview)))
+    }
+
+    fn can_window_configure_package(
+        &self,
+        window_label: &str,
+        package_id: &str,
+        include_secrets_page: bool,
+    ) -> Result<(), String> {
+        if window_label == "main"
+            || window_label == page_window_label(&format!("configuration-{package_id}"))
+            || (include_secrets_page
+                && window_label == page_window_label(&format!("secrets-{package_id}")))
+        {
+            return Ok(());
+        }
+        let records = self.records.lock().unwrap();
+        let record = records
+            .get(package_id)
+            .ok_or_else(|| format!("Package '{package_id}' is not installed."))?;
+        if settings_webview_label_can_access_package_record(package_id, record, window_label) {
+            Ok(())
+        } else {
+            Err(format!(
+                "Window '{window_label}' cannot configure package '{package_id}'."
+            ))
+        }
+    }
+
+    pub fn can_window_save_package_settings(
+        &self,
+        window_label: &str,
+        package_id: &str,
+    ) -> Result<(), String> {
+        self.can_window_configure_package(window_label, package_id, false)
+    }
+
+    pub fn can_window_manage_package_secrets(
+        &self,
+        window_label: &str,
+        package_id: &str,
+    ) -> Result<(), String> {
+        self.can_window_configure_package(window_label, package_id, true)
     }
 
     fn require_enabled_record<'a>(
@@ -2166,6 +2272,7 @@ mod tests {
         assert_eq!(descriptor.package_id, "bakingrl.webviews");
         assert_eq!(descriptor.webview_id, "settings");
         assert_eq!(descriptor.entry, "dist/webviews/settings.js");
+        assert_eq!(descriptor.kind.as_deref(), Some("settings"));
         assert_eq!(descriptor.runtime_api, "2.2.0");
     }
 
@@ -2271,6 +2378,47 @@ mod tests {
     }
 
     #[test]
+    fn settings_webview_labels_are_the_only_webviews_that_can_configure_package() {
+        let record = package_record(serde_json::json!({
+            "schemaVersion": "bakingrl.plugin/4",
+            "id": "bakingrl.webviews",
+            "name": "Webviews",
+            "version": "1.0.0",
+            "bakingrlApi": "2.2.0",
+            "contributes": {
+                "webviews": [
+                    {
+                        "id": "settings",
+                        "entry": "dist/webviews/settings.js",
+                        "kind": "settings"
+                    },
+                    {
+                        "id": "tool",
+                        "entry": "dist/webviews/tool.js",
+                        "kind": "tool"
+                    }
+                ]
+            }
+        }));
+
+        assert!(settings_webview_label_can_access_package_record(
+            "bakingrl.webviews",
+            &record,
+            &package_webview_window_label("bakingrl.webviews", "settings")
+        ));
+        assert!(!settings_webview_label_can_access_package_record(
+            "bakingrl.webviews",
+            &record,
+            &package_webview_window_label("bakingrl.webviews", "tool")
+        ));
+        assert!(!settings_webview_label_can_access_package_record(
+            "bakingrl.webviews",
+            &record,
+            &package_webview_window_label("bakingrl.other", "settings")
+        ));
+    }
+
+    #[test]
     fn package_window_labels_do_not_collapse_punctuation() {
         assert_ne!(
             package_webview_window_label("bakingrl.poc", "settings"),
@@ -2279,6 +2427,94 @@ mod tests {
         assert_ne!(
             page_window_label("configuration-bakingrl.poc"),
             page_window_label("configuration-bakingrl-poc")
+        );
+    }
+
+    #[test]
+    fn plugin_namespaces_are_package_scoped_without_prefix_collisions() {
+        assert!(key_is_in_plugin_namespace(
+            "com.example.plugin",
+            "plugin.com.example.plugin.state"
+        ));
+        assert!(!key_is_in_plugin_namespace(
+            "com.example.plugin",
+            "plugin.com.example.plugin-extra.state"
+        ));
+        assert!(!key_is_in_plugin_namespace(
+            "com.example.plugin",
+            "UpdateState"
+        ));
+        assert!(ensure_plugin_namespace(
+            "com.example.plugin",
+            "plugin.com.example.plugin.state",
+            "event name"
+        )
+        .is_ok());
+        assert!(
+            ensure_plugin_namespace("com.example.plugin", "UpdateState", "event name")
+                .unwrap_err()
+                .contains("outside namespace")
+        );
+    }
+
+    #[test]
+    fn registry_keys_resolve_to_declared_plugin_namespace_owners() {
+        let provider = package_record(serde_json::json!({
+            "schemaVersion": "bakingrl.plugin/4",
+            "id": "com.example.provider",
+            "name": "Provider",
+            "version": "1.0.0",
+            "bakingrlApi": "2.2.0",
+            "contributes": {}
+        }));
+        let other = package_record(serde_json::json!({
+            "schemaVersion": "bakingrl.plugin/4",
+            "id": "com.example.provider-extra",
+            "name": "Provider Extra",
+            "version": "1.0.0",
+            "bakingrlApi": "2.2.0",
+            "contributes": {}
+        }));
+        let records = HashMap::from([
+            ("com.example.provider".to_string(), provider),
+            ("com.example.provider-extra".to_string(), other),
+        ]);
+
+        assert_eq!(
+            registry_key_owner(&records, "plugin.com.example.provider.state"),
+            Some("com.example.provider")
+        );
+        assert_eq!(
+            registry_key_owner(&records, "plugin.com.example.provider-extra.state"),
+            Some("com.example.provider-extra")
+        );
+        assert_eq!(registry_key_owner(&records, "plugin.unknown.state"), None);
+    }
+
+    #[test]
+    fn registry_keys_can_match_declared_dependency_namespaces() {
+        let caller = package_record(serde_json::json!({
+            "schemaVersion": "bakingrl.plugin/4",
+            "id": "com.example.consumer",
+            "name": "Consumer",
+            "version": "1.0.0",
+            "bakingrlApi": "2.2.0",
+            "dependencies": [
+                {
+                    "packageId": "com.example.provider",
+                    "optional": true
+                }
+            ],
+            "contributes": {}
+        }));
+
+        assert_eq!(
+            dependency_key_owner(&caller, "plugin.com.example.provider.state"),
+            Some("com.example.provider")
+        );
+        assert_eq!(
+            dependency_key_owner(&caller, "plugin.com.example.provider-extra.state"),
+            None
         );
     }
 
@@ -2435,6 +2671,58 @@ fn window_label_can_access_package_record(
         .any(|webview| window_label == package_webview_window_label(package_id, &webview.id))
 }
 
+fn settings_webview_label_can_access_package_record(
+    package_id: &str,
+    record: &PackageRecord,
+    window_label: &str,
+) -> bool {
+    record
+        .manifest
+        .contributes_v4()
+        .webviews
+        .iter()
+        .any(|webview| {
+            is_settings_webview(webview)
+                && window_label == package_webview_window_label(package_id, &webview.id)
+        })
+}
+
+fn ensure_plugin_namespace(package_id: &str, value: &str, label: &str) -> Result<(), String> {
+    if key_is_in_plugin_namespace(package_id, value) {
+        Ok(())
+    } else {
+        Err(format!(
+            "Package '{package_id}' cannot write {label} '{value}' outside namespace 'plugin.{package_id}.'."
+        ))
+    }
+}
+
+fn key_is_in_plugin_namespace(package_id: &str, value: &str) -> bool {
+    value
+        .strip_prefix("plugin.")
+        .and_then(|rest| rest.strip_prefix(package_id))
+        .is_some_and(|rest| rest.starts_with('.'))
+}
+
+fn registry_key_owner<'a>(
+    records: &'a HashMap<String, PackageRecord>,
+    key: &str,
+) -> Option<&'a str> {
+    records
+        .keys()
+        .map(String::as_str)
+        .find(|package_id| key_is_in_plugin_namespace(package_id, key))
+}
+
+fn dependency_key_owner<'a>(record: &'a PackageRecord, key: &str) -> Option<&'a str> {
+    record
+        .manifest
+        .dependencies_v4()
+        .iter()
+        .map(|dependency| dependency.package_id.as_str())
+        .find(|package_id| key_is_in_plugin_namespace(package_id, key))
+}
+
 fn preferred_settings_webview_id(record: &PackageRecord) -> Option<String> {
     record
         .manifest
@@ -2478,6 +2766,7 @@ fn package_webview_runtime_descriptor_for_record(
         package_id: package_id.to_string(),
         webview_id: webview.id.clone(),
         entry: webview.entry.clone(),
+        kind: webview.kind.clone(),
         runtime_api: record.manifest.bakingrl_api().to_string(),
     })
 }
@@ -2805,6 +3094,7 @@ pub fn save_package_settings(
     values: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     ensure_window_label_can_access_package(host.inner().as_ref(), window.label(), &package_id)?;
+    host.can_window_save_package_settings(window.label(), &package_id)?;
     host.save_package_settings(package_id, values)
 }
 
@@ -2827,6 +3117,7 @@ pub fn set_package_secret(
     value: String,
 ) -> Result<PackageConfigurationState, String> {
     ensure_window_label_can_access_package(host.inner().as_ref(), window.label(), &package_id)?;
+    host.can_window_manage_package_secrets(window.label(), &package_id)?;
     host.set_package_secret(package_id, key, value)
 }
 
@@ -2838,6 +3129,7 @@ pub fn delete_package_secret(
     key: String,
 ) -> Result<PackageConfigurationState, String> {
     ensure_window_label_can_access_package(host.inner().as_ref(), window.label(), &package_id)?;
+    host.can_window_manage_package_secrets(window.label(), &package_id)?;
     host.delete_package_secret(package_id, key)
 }
 

@@ -112,9 +112,12 @@ The event bus is the normal way to share live state:
 
 - Rocket League telemetry events keep their event names, such as `UpdateState`
   or `GoalScored`.
-- Plugin events should use `plugin.<package-id>.*`.
-- A package can read and publish its own `plugin.<package-id>.*` namespace.
-- Cross-package reads and writes are host-mediated runtime policy decisions.
+- Plugin events must use `plugin.<package-id>.*` when published by that
+  package.
+- A package can publish its own `plugin.<package-id>.*` namespace.
+- Cross-package registry reads require a declared dependency on the package
+  that owns the target namespace. Cross-package writes stay rejected; use
+  services, resources, and extension points for shared workflows.
 
 Extension hosts use:
 
