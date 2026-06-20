@@ -87,6 +87,7 @@ pub struct ExtensionHostRuntimeSpec {
     pub entry_path: PathBuf,
     pub storage_root: PathBuf,
     pub package_settings_path: PathBuf,
+    pub secret_keys: HashSet<String>,
     pub service_imports: Vec<String>,
     pub service_methods: HashMap<String, Vec<String>>,
     pub settings: serde_json::Value,
@@ -292,6 +293,7 @@ struct ExtensionHostContext {
     runtime_api: Option<semver::VersionReq>,
     storage_root: PathBuf,
     package_settings_path: PathBuf,
+    secret_keys: HashSet<String>,
     service_imports: Vec<String>,
     service_methods: HashMap<String, Vec<String>>,
     bus: Arc<EventBus>,
@@ -532,6 +534,7 @@ fn spawn_extension_host_runtime(
         runtime_api: spec.runtime_api.clone(),
         storage_root: spec.storage_root,
         package_settings_path: spec.package_settings_path,
+        secret_keys: spec.secret_keys,
         service_imports: spec.service_imports,
         service_methods: spec.service_methods,
         bus,
@@ -1660,6 +1663,7 @@ fn secrets_get(
     params: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let key = required_string(&params, "key")?;
+    ensure_declared_secret_key(&context.package_id, &context.secret_keys, &key)?;
     read_package_secret(&context.package_id, &key).map(|value| match value {
         Some(value) => serde_json::Value::String(value),
         None => serde_json::Value::Null,
@@ -1671,11 +1675,26 @@ fn secrets_configured(
     params: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let key = required_string(&params, "key")?;
+    ensure_declared_secret_key(&context.package_id, &context.secret_keys, &key)?;
     Ok(serde_json::Value::Bool(read_package_secret_configured(
         &context.package_settings_path,
         &context.package_id,
         &key,
     )))
+}
+
+fn ensure_declared_secret_key(
+    package_id: &str,
+    secret_keys: &HashSet<String>,
+    key: &str,
+) -> Result<(), String> {
+    if secret_keys.contains(key) {
+        Ok(())
+    } else {
+        Err(format!(
+            "Package '{package_id}' did not declare secret setting '{key}'."
+        ))
+    }
 }
 
 fn diagnostics_log(
@@ -2182,5 +2201,19 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.contains("cannot register command"));
+    }
+
+    #[test]
+    fn secret_key_guard_rejects_undeclared_keys() {
+        let secret_keys = HashSet::from(["apiKey".to_string()]);
+
+        assert!(ensure_declared_secret_key("bakingrl.pkg", &secret_keys, "apiKey").is_ok());
+
+        let error =
+            ensure_declared_secret_key("bakingrl.pkg", &secret_keys, "missingKey").unwrap_err();
+        assert_eq!(
+            error,
+            "Package 'bakingrl.pkg' did not declare secret setting 'missingKey'."
+        );
     }
 }

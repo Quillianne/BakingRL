@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::models::PackageSettingsFile;
@@ -9,6 +9,8 @@ use crate::plugin_package::manifest::{
 
 use super::extension_host_runtime::ExtensionHostRuntimeSpec;
 use super::extension_host_runtime::ExtensionHostWebviewSpec;
+use super::package_files::read_json_package_file;
+use super::settings_contract::secret_key_set;
 use super::sidecar_runtime::{SidecarProtocol, SidecarRuntimeSpec};
 use super::{merge_settings, PackageRecord};
 
@@ -120,6 +122,10 @@ pub(super) fn extension_host_specs_for_records(
                 entry_path: package_root.join(&node.entry),
                 storage_root,
                 package_settings_path: package_settings_path.to_path_buf(),
+                secret_keys: secret_keys_for_package_settings(
+                    record.descriptor.settings.as_deref(),
+                    package_root,
+                ),
                 service_imports: Vec::new(),
                 service_methods: service_methods.clone(),
                 settings,
@@ -131,6 +137,18 @@ pub(super) fn extension_host_specs_for_records(
             })
         })
         .collect()
+}
+
+fn secret_keys_for_package_settings(
+    schema_path: Option<&str>,
+    package_root: &Path,
+) -> HashSet<String> {
+    let Some(schema_path) = schema_path else {
+        return HashSet::new();
+    };
+    read_json_package_file(package_root, schema_path)
+        .map(|schema| secret_key_set(Some(&schema)))
+        .unwrap_or_default()
 }
 
 pub(super) fn sidecar_specs_for_records(
@@ -428,5 +446,80 @@ mod tests {
                 methods: vec!["snapshot".to_string()],
             })
         );
+    }
+
+    #[test]
+    fn extension_host_specs_include_declared_secret_keys() {
+        let package_root = std::env::temp_dir()
+            .join("brl-extension-host-secret-keys")
+            .join(format!(
+                "{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+        let schema_path = package_root.join("schemas").join("settings.json");
+        std::fs::create_dir_all(schema_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &schema_path,
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "apiKey": {
+                        "type": "string",
+                        "x-bakingrl-secret": true
+                    },
+                    "theme": {
+                        "type": "string",
+                        "default": "dark"
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let manifest = PluginPackageManifest::parse(
+            &serde_json::json!({
+                "schemaVersion": "bakingrl.plugin/4",
+                "id": "com.example.secrets",
+                "name": "Secrets",
+                "version": "1.0.0",
+                "bakingrlApi": "2.2.0",
+                "runtime": {
+                    "node": {
+                        "entry": "dist/extension-host.js"
+                    }
+                },
+                "contributes": {
+                    "settings": {
+                        "schema": "schemas/settings.json"
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let record = PackageRecord {
+            descriptor: descriptor_for_manifest(
+                &manifest,
+                package_root.to_string_lossy().to_string(),
+                true,
+            ),
+            manifest,
+        };
+
+        let specs = extension_host_specs_for_records(
+            &HashMap::from([("com.example.secrets".to_string(), record)]),
+            &PackageSettingsFile::default(),
+            &package_root.join("package_settings.json"),
+        );
+
+        assert_eq!(specs.len(), 1);
+        assert!(specs[0].secret_keys.contains("apiKey"));
+        assert!(!specs[0].secret_keys.contains("theme"));
+
+        let _ = std::fs::remove_dir_all(package_root);
     }
 }
