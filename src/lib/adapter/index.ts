@@ -47,11 +47,6 @@ export class BakingRLAdapter {
     return `${this.apiUrl}/packages/${encodedPackageId}/files/${encodedPath}`;
   }
 
-  public packageHtmlUrl(packageId: string, path: string, version?: string | number): string {
-    const url = this.packageFileUrl(packageId, path);
-    return version === undefined ? url : this.withQueryParam(url, 'v', version);
-  }
-
   public packageModuleUrl(packageId: string, path: string, version: string | number): string {
     const { encodedPackageId, encodedPath } = this.encodePackageFilePath(packageId, path);
     return this.withQueryParam(`${this.apiUrl}/packages/${encodedPackageId}/files/${encodedPath}`, 'v', `v${version}`);

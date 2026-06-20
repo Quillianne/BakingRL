@@ -66,6 +66,15 @@ pub struct RuntimeInfo {
     pub supported_runtime_api: String,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageWebviewRuntimeDescriptor {
+    pub package_id: String,
+    pub webview_id: String,
+    pub entry: String,
+    pub runtime_api: String,
+}
+
 #[derive(Debug)]
 struct PackageRecord {
     descriptor: PackageDescriptor,
@@ -800,6 +809,16 @@ impl PluginHost {
             .map_err(|e| format!("Package file '{relative_path}' is not valid UTF-8: {e}"))
     }
 
+    pub fn package_webview_runtime_descriptor(
+        &self,
+        package_id: &str,
+        webview_id: &str,
+    ) -> Result<PackageWebviewRuntimeDescriptor, String> {
+        let records = self.records.lock().unwrap();
+        let record = self.require_enabled_record(&records, package_id)?;
+        package_webview_runtime_descriptor_for_record(package_id, webview_id, record)
+    }
+
     pub fn list_runtime_packages(
         &self,
         caller_package_id: &str,
@@ -1270,12 +1289,7 @@ impl PluginHost {
             let [width, height] = webview.default_size.unwrap_or([960.0, 640.0]);
             (
                 package_webview_window_label(&package_id, &webview.id),
-                package_webview_route(
-                    &package_id,
-                    &webview.id,
-                    &webview.entry,
-                    record.manifest.bakingrl_api(),
-                ),
+                package_webview_route(&package_id, &webview.id),
                 webview
                     .title
                     .clone()
@@ -2088,17 +2102,67 @@ mod tests {
     }
 
     #[test]
-    fn package_webview_route_targets_declared_entry() {
-        let route = package_webview_route(
-            "com.example.plugin",
-            "settings",
-            "dist/webviews/settings.js",
-            "2.1.0",
-        );
+    fn package_webview_route_targets_declared_webview_without_source_query() {
+        let route = package_webview_route("com.example.plugin", "settings");
 
-        assert!(route.starts_with("/plugin-webview/com.example.plugin/settings?"));
-        assert!(route.contains("entry=dist%2Fwebviews%2Fsettings.js"));
-        assert!(route.contains("runtimeApi=2.1.0"));
+        assert_eq!(route, "/plugin-webview/com.example.plugin/settings");
+        assert!(!route.contains("entry="));
+        assert!(!route.contains("path="));
+        assert!(!route.contains("runtimeApi="));
+    }
+
+    #[test]
+    fn package_webview_runtime_descriptor_uses_declared_manifest_entry() {
+        let record = package_record(serde_json::json!({
+            "schemaVersion": "bakingrl.plugin/4",
+            "id": "bakingrl.webviews",
+            "name": "Webviews",
+            "version": "1.0.0",
+            "bakingrlApi": "2.2.0",
+            "contributes": {
+                "webviews": [
+                    {
+                        "id": "settings",
+                        "entry": "dist/webviews/settings.js",
+                        "kind": "settings"
+                    }
+                ]
+            }
+        }));
+
+        let descriptor =
+            package_webview_runtime_descriptor_for_record("bakingrl.webviews", "settings", &record)
+                .unwrap();
+
+        assert_eq!(descriptor.package_id, "bakingrl.webviews");
+        assert_eq!(descriptor.webview_id, "settings");
+        assert_eq!(descriptor.entry, "dist/webviews/settings.js");
+        assert_eq!(descriptor.runtime_api, "2.2.0");
+    }
+
+    #[test]
+    fn package_webview_runtime_descriptor_rejects_undeclared_webview() {
+        let record = package_record(serde_json::json!({
+            "schemaVersion": "bakingrl.plugin/4",
+            "id": "bakingrl.webviews",
+            "name": "Webviews",
+            "version": "1.0.0",
+            "bakingrlApi": "2.2.0",
+            "contributes": {
+                "webviews": [
+                    {
+                        "id": "settings",
+                        "entry": "dist/webviews/settings.js"
+                    }
+                ]
+            }
+        }));
+
+        let error =
+            package_webview_runtime_descriptor_for_record("bakingrl.webviews", "admin", &record)
+                .unwrap_err();
+
+        assert!(error.contains("does not declare webview 'admin'"));
     }
 
     fn resource_ids(resources: Vec<serde_json::Value>) -> Vec<String> {
@@ -2238,20 +2302,34 @@ fn is_settings_webview(
     webview.kind.as_deref() == Some("settings")
 }
 
-fn package_webview_route(
+fn package_webview_runtime_descriptor_for_record(
     package_id: &str,
     webview_id: &str,
-    entry: &str,
-    runtime_api: &str,
-) -> String {
-    let mut query = url::form_urlencoded::Serializer::new(String::new());
-    query.append_pair("entry", entry);
-    query.append_pair("runtimeApi", runtime_api);
+    record: &PackageRecord,
+) -> Result<PackageWebviewRuntimeDescriptor, String> {
+    let webview = record
+        .manifest
+        .contributes_v4()
+        .webviews
+        .iter()
+        .find(|webview| webview.id == webview_id)
+        .ok_or_else(|| {
+            format!("Package '{package_id}' does not declare webview '{webview_id}'.")
+        })?;
+
+    Ok(PackageWebviewRuntimeDescriptor {
+        package_id: package_id.to_string(),
+        webview_id: webview.id.clone(),
+        entry: webview.entry.clone(),
+        runtime_api: record.manifest.bakingrl_api().to_string(),
+    })
+}
+
+fn package_webview_route(package_id: &str, webview_id: &str) -> String {
     format!(
-        "/plugin-webview/{}/{}?{}",
+        "/plugin-webview/{}/{}",
         encode_route_segment(package_id),
-        encode_route_segment(webview_id),
-        query.finish()
+        encode_route_segment(webview_id)
     )
 }
 
@@ -2405,6 +2483,15 @@ pub fn read_package_file_text(
     relative_path: String,
 ) -> Result<String, String> {
     host.read_package_file_text(&package_id, &relative_path)
+}
+
+#[tauri::command]
+pub fn get_package_webview_runtime_descriptor(
+    host: State<'_, Arc<PluginHost>>,
+    package_id: String,
+    webview_id: String,
+) -> Result<PackageWebviewRuntimeDescriptor, String> {
+    host.package_webview_runtime_descriptor(&package_id, &webview_id)
 }
 
 #[tauri::command]

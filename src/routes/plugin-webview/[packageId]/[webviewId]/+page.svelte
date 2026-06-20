@@ -4,7 +4,6 @@
   import { invoke } from "@tauri-apps/api/core";
   import { adapter } from "$lib/adapter/index";
   import { importPluginModule } from "$lib/pluginModuleLoader";
-  import { mountPluginWebview, type PluginWebviewHandle } from "$lib/pluginWebview";
   import type { PackageConfigurationState } from "$lib/dashboard/types";
   import type { GameEventFrame } from "$lib/rlTelemetry";
 
@@ -19,15 +18,18 @@
     callback: TelemetryCallback;
   };
 
+  type PackageWebviewRuntimeDescriptor = {
+    packageId: string;
+    webviewId: string;
+    entry: string;
+    runtimeApi: string;
+  };
+
   type ModuleSettings = Record<string, unknown> & {
     get(): Promise<Record<string, unknown>>;
     save(values: Record<string, unknown>): Promise<Record<string, unknown>>;
     subscribe(callback: (settings: Record<string, unknown>) => void | Promise<void>): () => void;
   };
-
-  function publishTelemetry(callbacks: Set<TelemetryCallback>, event: unknown) {
-    for (const callback of callbacks) void callback(event as GameEventFrame);
-  }
 
   async function packageSettings() {
     try {
@@ -126,10 +128,8 @@
 
   onMount(() => {
     let disposed = false;
-    let webviewHandle: PluginWebviewHandle | null = null;
     let unlistenTelemetry: (() => void) | undefined;
     let moduleCleanup: (() => void) | undefined;
-    const telemetryCallbacks = new Set<TelemetryCallback>();
     const telemetrySubscriptions = new Set<TelemetrySubscription>();
     let latestTelemetryFrame: GameEventFrame | null = null;
 
@@ -206,123 +206,99 @@
 
     async function mount() {
       if (!root) return;
+      const descriptor = await invoke<PackageWebviewRuntimeDescriptor>(
+        "get_package_webview_runtime_descriptor",
+        {
+          packageId: data.packageId,
+          webviewId: data.webviewId
+        }
+      );
       const settings = await packageSettings();
       const dimensions = {
         width: Math.max(1, root.clientWidth || window.innerWidth),
         height: Math.max(1, root.clientHeight || window.innerHeight)
       };
 
-      if (data.entry) {
-        const module = await importPluginModule(data.packageId, data.entry, Date.now());
-        const exported = module.default ?? module;
-        if (typeof exported?.mount === "function") {
-          const moduleSettings = createModuleSettings(settings);
-          const item = {
-            id: data.webviewId,
-            package_id: data.packageId,
-            export_name: data.webviewId,
-            name: data.webviewId,
-            x: 0,
-            y: 0,
-            width: dimensions.width,
-            height: dimensions.height,
-            z_index: 0,
-            visible: true,
-            locked: false,
-            opacity: 1,
-            settings
-          };
-          const cleanup = await exported.mount({
-            root,
-            packageId: data.packageId,
-            webviewId: data.webviewId,
-            exportName: data.webviewId,
-            package: {
-              id: data.packageId,
-              name: data.packageId,
-              enabled: true
-            },
-            item,
-            settings: moduleSettings,
-            configuration,
-            telemetryHub,
-            bus: telemetryHub,
-            registry: {
-              get: readPackageRegistry
-            },
-            state: {
-              get: readPackageRegistry,
-              async set() {
-                throw new Error("Module webview state writes are not supported by the host.");
-              }
-            },
-            services: {
-              call: callPackageService
-            },
-            assets: {
-              url(ref: string) {
-                return adapter.packageFileUrl(data.packageId, ref);
-              }
-            },
-            diagnostics,
-            telemetry: {
-              event: publishTelemetryFrame
-            },
-            secrets: {
-              async get() {
-                return undefined;
-              },
-              configured: packageSecretConfigured
-            },
-            setActive() {
-              // Standalone module webviews stay visible while their window is open.
-            },
-            dimensions,
-            mode: "runtime"
-          });
-          if (typeof cleanup === "function") {
-            if (disposed) cleanup();
-            else moduleCleanup = cleanup;
-          }
-        }
-        return;
-      }
-
-      if (data.path) {
-        webviewHandle = mountPluginWebview({
+      const module = await importPluginModule(descriptor.packageId, descriptor.entry, Date.now());
+      const exported = module.default ?? module;
+      if (typeof exported?.mount === "function") {
+        const moduleSettings = createModuleSettings(settings);
+        const item = {
+          id: descriptor.webviewId,
+          package_id: descriptor.packageId,
+          export_name: descriptor.webviewId,
+          name: descriptor.webviewId,
+          x: 0,
+          y: 0,
+          width: dimensions.width,
+          height: dimensions.height,
+          z_index: 0,
+          visible: true,
+          locked: false,
+          opacity: 1,
+          settings
+        };
+        const cleanup = await exported.mount({
           root,
-          src: adapter.packageHtmlUrl(data.packageId, data.path, Date.now()),
-          packageId: data.packageId,
-          exportName: data.webviewId,
-          runtimeApi: data.runtimeApi,
-          item: {
-            id: data.webviewId,
-            name: data.webviewId,
-            width: dimensions.width,
-            height: dimensions.height,
-            settings: {}
+          packageId: descriptor.packageId,
+          webviewId: descriptor.webviewId,
+          exportName: descriptor.webviewId,
+          package: {
+            id: descriptor.packageId,
+            name: descriptor.packageId,
+            enabled: true
           },
-          settings,
-          mode: "runtime",
-          assetUrl(ref) {
-            return adapter.packageFileUrl(data.packageId, ref);
+          runtime: {
+            packageId: descriptor.packageId,
+            api: descriptor.runtimeApi
           },
-          subscribeTelemetry(callback) {
-            telemetryCallbacks.add(callback);
-            return () => telemetryCallbacks.delete(callback);
+          item,
+          settings: moduleSettings,
+          configuration,
+          telemetryHub,
+          bus: telemetryHub,
+          registry: {
+            get: readPackageRegistry
           },
-          getTelemetrySnapshot: readTelemetrySnapshot,
-          publishTelemetry: publishTelemetryFrame
+          state: {
+            get: readPackageRegistry,
+            async set() {
+              throw new Error("Module webview state writes are not supported by the host.");
+            }
+          },
+          services: {
+            call: callPackageService
+          },
+          assets: {
+            url(ref: string) {
+              return adapter.packageFileUrl(descriptor.packageId, ref);
+            }
+          },
+          diagnostics,
+          telemetry: {
+            event: publishTelemetryFrame
+          },
+          secrets: {
+            async get() {
+              return undefined;
+            },
+            configured: packageSecretConfigured
+          },
+          setActive() {
+            // Standalone module webviews stay visible while their window is open.
+          },
+          dimensions,
+          mode: "runtime"
         });
-        return;
+        if (typeof cleanup === "function") {
+          if (disposed) cleanup();
+          else moduleCleanup = cleanup;
+        }
       }
-
-      throw new Error("Missing plugin webview entry.");
     }
 
     void listen<GameEventFrame>("bakingrl-telemetry", (event) => {
       latestTelemetryFrame = event.payload;
-      publishTelemetry(telemetryCallbacks, event.payload);
       for (const subscription of telemetrySubscriptions) {
         if (subscription.eventName === event.payload.Event) void subscription.callback(event.payload);
       }
@@ -338,7 +314,6 @@
     return () => {
       disposed = true;
       moduleCleanup?.();
-      webviewHandle?.cleanup();
       unlistenTelemetry?.();
     };
   });

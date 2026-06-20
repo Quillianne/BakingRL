@@ -1,11 +1,8 @@
 import type { PageLoad } from "./$types";
 
-export const load: PageLoad = ({ params, url }) => {
+export const load: PageLoad = ({ params }) => {
   return {
     packageId: params.packageId,
-    webviewId: params.webviewId,
-    entry: url.searchParams.get("entry") ?? "",
-    path: url.searchParams.get("path") ?? "",
-    runtimeApi: url.searchParams.get("runtimeApi")
+    webviewId: params.webviewId
   };
 };

@@ -1821,12 +1821,7 @@ fn webview_open(
         .get("options")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
-    let path = webview_route(
-        &context.package_id,
-        &id,
-        webview,
-        context.runtime_api.as_ref(),
-    )?;
+    let path = webview_route(&context.package_id, &id, webview)?;
     let label = webview_window_label(&context.package_id, &id);
     let title = webview_option_string(&options, "title")
         .or_else(|| webview.title.clone())
@@ -1885,7 +1880,6 @@ fn webview_route(
     package_id: &str,
     id: &str,
     webview: &ExtensionHostWebviewSpec,
-    runtime_api: Option<&semver::VersionReq>,
 ) -> Result<String, String> {
     if let Some(route) = webview
         .route
@@ -1894,22 +1888,15 @@ fn webview_route(
     {
         return Ok(route.to_string());
     }
-    let source = webview
+    webview
         .entry
         .as_deref()
-        .map(|entry| ("entry", entry))
-        .or_else(|| webview.path.as_deref().map(|path| ("path", path)))
+        .or(webview.path.as_deref())
         .ok_or_else(|| format!("Webview '{id}' must declare entry or path."))?;
-    let mut query = url::form_urlencoded::Serializer::new(String::new());
-    query.append_pair(source.0, source.1);
-    if let Some(runtime_api) = runtime_api {
-        query.append_pair("runtimeApi", &runtime_api.to_string());
-    }
     Ok(format!(
-        "/plugin-webview/{}/{}?{}",
+        "/plugin-webview/{}/{}",
         encode_path_segment(package_id),
-        encode_path_segment(id),
-        query.finish()
+        encode_path_segment(id)
     ))
 }
 
