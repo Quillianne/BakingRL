@@ -1433,6 +1433,17 @@ mod tests {
     }
 
     #[test]
+    fn sidecar_raw_file_reads_are_package_local() {
+        assert!(ensure_sidecar_owns_package_file("com.pkg.owner/helper", "com.pkg.owner").is_ok());
+
+        let error =
+            ensure_sidecar_owns_package_file("com.pkg.owner/helper", "com.pkg.provider")
+                .unwrap_err();
+        assert!(error.contains("cannot read undeclared files"));
+        assert!(error.contains("resources/read"));
+    }
+
+    #[test]
     fn runtime_status_tracks_health_crash_and_stop() {
         let runtime_state = Arc::new(Mutex::new(SidecarRuntimeState::default()));
         let sidecar_ref = "com.pkg.sidecar/helper";
