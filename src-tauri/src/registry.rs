@@ -46,13 +46,30 @@ impl Registry {
 
 #[tauri::command]
 pub fn registry_get(
+    window: tauri::Window,
     registry: tauri::State<'_, Arc<Registry>>,
     key: String,
-) -> Option<serde_json::Value> {
-    registry.get(&key)
+) -> Result<Option<serde_json::Value>, String> {
+    ensure_admin_window(&window)?;
+    Ok(registry.get(&key))
 }
 
 #[tauri::command]
-pub fn registry_entries(registry: tauri::State<'_, Arc<Registry>>) -> Vec<RegistryEntry> {
-    registry.entries()
+pub fn registry_entries(
+    window: tauri::Window,
+    registry: tauri::State<'_, Arc<Registry>>,
+) -> Result<Vec<RegistryEntry>, String> {
+    ensure_admin_window(&window)?;
+    Ok(registry.entries())
+}
+
+fn ensure_admin_window(window: &tauri::Window) -> Result<(), String> {
+    if window.label() == "main" {
+        Ok(())
+    } else {
+        Err(format!(
+            "Window '{}' cannot call admin-only registry APIs.",
+            window.label()
+        ))
+    }
 }

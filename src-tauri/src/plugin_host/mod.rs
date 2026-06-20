@@ -2219,6 +2219,69 @@ mod tests {
         assert!(escaping.contains("escapes the package root"));
     }
 
+    #[test]
+    fn package_window_labels_are_scoped_to_declared_package_surfaces() {
+        let record = package_record(serde_json::json!({
+            "schemaVersion": "bakingrl.plugin/4",
+            "id": "bakingrl.webviews",
+            "name": "Webviews",
+            "version": "1.0.0",
+            "bakingrlApi": "2.2.0",
+            "contributes": {
+                "webviews": [
+                    {
+                        "id": "settings",
+                        "entry": "dist/webviews/settings.js",
+                        "kind": "settings"
+                    },
+                    {
+                        "id": "tool",
+                        "entry": "dist/webviews/tool.js",
+                        "kind": "tool"
+                    }
+                ]
+            }
+        }));
+
+        assert!(window_label_can_access_package_record(
+            "bakingrl.webviews",
+            &record,
+            &package_webview_window_label("bakingrl.webviews", "settings")
+        ));
+        assert!(window_label_can_access_package_record(
+            "bakingrl.webviews",
+            &record,
+            &package_webview_window_label("bakingrl.webviews", "tool")
+        ));
+        assert!(!window_label_can_access_package_record(
+            "bakingrl.webviews",
+            &record,
+            "main"
+        ));
+        assert!(!window_label_can_access_package_record(
+            "bakingrl.webviews",
+            &record,
+            &package_webview_window_label("bakingrl.other", "settings")
+        ));
+        assert!(!window_label_can_access_package_record(
+            "bakingrl.webviews",
+            &record,
+            &package_webview_window_label("bakingrl.webviews", "undeclared")
+        ));
+    }
+
+    #[test]
+    fn package_window_labels_do_not_collapse_punctuation() {
+        assert_ne!(
+            package_webview_window_label("bakingrl.poc", "settings"),
+            package_webview_window_label("bakingrl-poc", "settings")
+        );
+        assert_ne!(
+            page_window_label("configuration-bakingrl.poc"),
+            page_window_label("configuration-bakingrl-poc")
+        );
+    }
+
     fn resource_ids(resources: Vec<serde_json::Value>) -> Vec<String> {
         let mut ids = resources
             .into_iter()
@@ -2319,17 +2382,57 @@ fn now_ms() -> u64 {
 }
 
 fn page_window_label(page_id: &str) -> String {
-    let safe_id: String = page_id
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
-                ch
-            } else {
-                '-'
-            }
-        })
-        .collect();
-    format!("page-{safe_id}")
+    format!("page-{}", window_label_component(page_id))
+}
+
+fn ensure_admin_window_label(window_label: &str) -> Result<(), String> {
+    if window_label == "main" {
+        Ok(())
+    } else {
+        Err(format!(
+            "Window '{window_label}' cannot call admin-only package APIs."
+        ))
+    }
+}
+
+fn ensure_window_label_can_access_package(
+    host: &PluginHost,
+    window_label: &str,
+    package_id: &str,
+) -> Result<(), String> {
+    if window_label == "main" {
+        return Ok(());
+    }
+    if window_label == page_window_label(&format!("configuration-{package_id}"))
+        || window_label == page_window_label(&format!("secrets-{package_id}"))
+    {
+        return Ok(());
+    }
+
+    let records = host.records.lock().unwrap();
+    let record = records
+        .get(package_id)
+        .ok_or_else(|| format!("Package '{package_id}' is not installed."))?;
+    if window_label_can_access_package_record(package_id, record, window_label) {
+        Ok(())
+    } else {
+        Err(format!(
+            "Window '{window_label}' cannot access package '{package_id}'."
+        ))
+    }
+}
+
+fn window_label_can_access_package_record(
+    package_id: &str,
+    record: &PackageRecord,
+    window_label: &str,
+) -> bool {
+    record
+        .manifest
+        .contributes_v4()
+        .webviews
+        .iter()
+        .any(|webview| window_label == package_webview_window_label(package_id, &webview.id))
 }
 
 fn preferred_settings_webview_id(record: &PackageRecord) -> Option<String> {
@@ -2412,17 +2515,24 @@ fn package_webview_route(package_id: &str, webview_id: &str) -> String {
 }
 
 fn package_webview_window_label(package_id: &str, webview_id: &str) -> String {
-    let safe: String = format!("{package_id}-{webview_id}")
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
-                ch
+    format!(
+        "plugin-webview-{}-{}",
+        window_label_component(package_id),
+        window_label_component(webview_id)
+    )
+}
+
+fn window_label_component(value: &str) -> String {
+    value
+        .bytes()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() {
+                (byte as char).to_string()
             } else {
-                '-'
+                format!("_{byte:02x}")
             }
         })
-        .collect();
-    format!("plugin-webview-{safe}")
+        .collect()
 }
 
 fn encode_route_segment(value: &str) -> String {
@@ -2430,79 +2540,104 @@ fn encode_route_segment(value: &str) -> String {
 }
 
 #[tauri::command]
-pub fn list_packages(host: State<'_, Arc<PluginHost>>) -> Vec<PackageDescriptor> {
-    host.list_packages()
+pub fn list_packages(
+    window: Window,
+    host: State<'_, Arc<PluginHost>>,
+) -> Result<Vec<PackageDescriptor>, String> {
+    ensure_admin_window_label(window.label())?;
+    Ok(host.list_packages())
 }
 
 #[tauri::command]
 pub fn inspect_package_bundle(
+    window: Window,
     host: State<'_, Arc<PluginHost>>,
     path: String,
 ) -> Result<crate::plugin_package::bundle::BundleInspection, String> {
+    ensure_admin_window_label(window.label())?;
     host.inspect_package_bundle(path)
 }
 
 #[tauri::command]
 pub fn install_package_from_file(
+    window: Window,
     host: State<'_, Arc<PluginHost>>,
     path: String,
 ) -> Result<InstallReceipt, String> {
+    ensure_admin_window_label(window.label())?;
     host.install_package_from_file(path)
 }
 
 #[tauri::command]
 pub async fn install_package_from_url(
+    window: Window,
     host: State<'_, Arc<PluginHost>>,
     url: String,
 ) -> Result<InstallReceipt, String> {
+    ensure_admin_window_label(window.label())?;
+    drop(window);
     host.install_package_from_url(url).await
 }
 
 #[tauri::command]
 pub async fn prepare_package_from_url(
+    window: Window,
     host: State<'_, Arc<PluginHost>>,
     url: String,
 ) -> Result<PreparedPackageInstall, String> {
+    ensure_admin_window_label(window.label())?;
+    drop(window);
     host.prepare_package_from_url(url).await
 }
 
 #[tauri::command]
 pub async fn prepare_package_from_deep_link(
+    window: Window,
     host: State<'_, Arc<PluginHost>>,
     deep_link: String,
 ) -> Result<PreparedPackageInstall, String> {
+    ensure_admin_window_label(window.label())?;
+    drop(window);
     host.prepare_package_from_deep_link(deep_link).await
 }
 
 #[tauri::command]
 pub async fn prepare_package_from_git(
+    window: Window,
     host: State<'_, Arc<PluginHost>>,
     repo: String,
     rev: Option<String>,
 ) -> Result<PreparedPackageInstall, String> {
+    ensure_admin_window_label(window.label())?;
+    drop(window);
     host.prepare_package_from_git(repo, rev).await
 }
 
 #[tauri::command]
 pub fn install_prepared_package(
+    window: Window,
     host: State<'_, Arc<PluginHost>>,
     path: String,
     source: String,
 ) -> Result<InstallReceipt, String> {
+    ensure_admin_window_label(window.label())?;
     host.install_prepared_package(path, source)
 }
 
 #[tauri::command]
 pub fn discard_prepared_package(
+    window: Window,
     host: State<'_, Arc<PluginHost>>,
     path: String,
 ) -> Result<(), String> {
+    ensure_admin_window_label(window.label())?;
     host.discard_prepared_package(path)
 }
 
 #[tauri::command]
-pub fn packages_dir(host: State<'_, Arc<PluginHost>>) -> String {
-    host.packages_dir()
+pub fn packages_dir(window: Window, host: State<'_, Arc<PluginHost>>) -> Result<String, String> {
+    ensure_admin_window_label(window.label())?;
+    Ok(host.packages_dir())
 }
 
 #[tauri::command]
@@ -2511,19 +2646,31 @@ pub fn get_runtime_info() -> RuntimeInfo {
 }
 
 #[tauri::command]
-pub fn list_plugin_diagnostics(host: State<'_, Arc<PluginHost>>) -> Vec<PluginDiagnosticEvent> {
-    host.list_diagnostics()
+pub fn list_plugin_diagnostics(
+    window: Window,
+    host: State<'_, Arc<PluginHost>>,
+) -> Result<Vec<PluginDiagnosticEvent>, String> {
+    ensure_admin_window_label(window.label())?;
+    Ok(host.list_diagnostics())
 }
 
 #[tauri::command]
-pub fn clear_plugin_diagnostics(host: State<'_, Arc<PluginHost>>) {
+pub fn clear_plugin_diagnostics(
+    window: Window,
+    host: State<'_, Arc<PluginHost>>,
+) -> Result<(), String> {
+    ensure_admin_window_label(window.label())?;
     host.clear_diagnostics();
+    Ok(())
 }
 
 #[tauri::command]
 pub async fn reload_packages(
+    window: Window,
     host: State<'_, Arc<PluginHost>>,
 ) -> Result<Vec<PackageDescriptor>, String> {
+    ensure_admin_window_label(window.label())?;
+    drop(window);
     let host = host.inner().clone();
     tauri::async_runtime::spawn_blocking(move || host.reload_packages())
         .await
@@ -2532,18 +2679,22 @@ pub async fn reload_packages(
 
 #[tauri::command]
 pub fn set_package_enabled(
+    window: Window,
     host: State<'_, Arc<PluginHost>>,
     package_id: String,
     enabled: bool,
 ) -> Result<Vec<PackageDescriptor>, String> {
+    ensure_admin_window_label(window.label())?;
     host.set_package_enabled(package_id, enabled)
 }
 
 #[tauri::command]
 pub fn remove_package(
+    window: Window,
     host: State<'_, Arc<PluginHost>>,
     package_id: String,
 ) -> Result<Vec<PackageDescriptor>, String> {
+    ensure_admin_window_label(window.label())?;
     let host = host.inner().clone();
     let removal = host.begin_remove_package(&package_id)?;
     if removal.started {
@@ -2576,114 +2727,147 @@ pub fn read_package_webview_module_text(
 
 #[tauri::command]
 pub fn get_package_webview_runtime_descriptor(
+    window: Window,
     host: State<'_, Arc<PluginHost>>,
     package_id: String,
     webview_id: String,
 ) -> Result<PackageWebviewRuntimeDescriptor, String> {
+    ensure_window_label_can_access_package(host.inner().as_ref(), window.label(), &package_id)?;
     host.package_webview_runtime_descriptor(&package_id, &webview_id)
 }
 
 #[tauri::command]
 pub async fn call_service_export(
+    window: Window,
     host: State<'_, Arc<PluginHost>>,
     caller_package_id: String,
     service_ref: String,
     method: String,
     input: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
+    ensure_window_label_can_access_package(
+        host.inner().as_ref(),
+        window.label(),
+        &caller_package_id,
+    )?;
+    drop(window);
     host.call_service_export(&caller_package_id, &service_ref, &method, input)
         .await
 }
 
 #[tauri::command]
 pub fn plugin_registry_get(
+    window: Window,
     host: State<'_, Arc<PluginHost>>,
     registry: State<'_, Arc<Registry>>,
     package_id: String,
     key: String,
 ) -> Result<Option<serde_json::Value>, String> {
+    ensure_window_label_can_access_package(host.inner().as_ref(), window.label(), &package_id)?;
     host.can_package_read_registry(&package_id, &key)?;
     Ok(registry.get(&key))
 }
 
 #[tauri::command]
-pub fn get_app_settings(host: State<'_, Arc<PluginHost>>) -> AppSettings {
-    host.get_app_settings()
+pub fn get_app_settings(
+    window: Window,
+    host: State<'_, Arc<PluginHost>>,
+) -> Result<AppSettings, String> {
+    ensure_admin_window_label(window.label())?;
+    Ok(host.get_app_settings())
 }
 
 #[tauri::command]
 pub fn save_app_settings(
+    window: Window,
     host: State<'_, Arc<PluginHost>>,
     settings: AppSettings,
 ) -> Result<AppSettings, String> {
+    ensure_admin_window_label(window.label())?;
     host.save_app_settings(settings)
 }
 
 #[tauri::command]
 pub fn get_package_settings(
+    window: Window,
     host: State<'_, Arc<PluginHost>>,
     package_id: String,
 ) -> Result<serde_json::Value, String> {
+    ensure_window_label_can_access_package(host.inner().as_ref(), window.label(), &package_id)?;
     host.get_package_settings(&package_id)
 }
 
 #[tauri::command]
 pub fn save_package_settings(
+    window: Window,
     host: State<'_, Arc<PluginHost>>,
     package_id: String,
     values: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
+    ensure_window_label_can_access_package(host.inner().as_ref(), window.label(), &package_id)?;
     host.save_package_settings(package_id, values)
 }
 
 #[tauri::command]
 pub fn get_package_configuration_state(
+    window: Window,
     host: State<'_, Arc<PluginHost>>,
     package_id: String,
 ) -> Result<PackageConfigurationState, String> {
+    ensure_window_label_can_access_package(host.inner().as_ref(), window.label(), &package_id)?;
     host.get_package_configuration_state(package_id)
 }
 
 #[tauri::command]
 pub fn set_package_secret(
+    window: Window,
     host: State<'_, Arc<PluginHost>>,
     package_id: String,
     key: String,
     value: String,
 ) -> Result<PackageConfigurationState, String> {
+    ensure_window_label_can_access_package(host.inner().as_ref(), window.label(), &package_id)?;
     host.set_package_secret(package_id, key, value)
 }
 
 #[tauri::command]
 pub fn delete_package_secret(
+    window: Window,
     host: State<'_, Arc<PluginHost>>,
     package_id: String,
     key: String,
 ) -> Result<PackageConfigurationState, String> {
+    ensure_window_label_can_access_package(host.inner().as_ref(), window.label(), &package_id)?;
     host.delete_package_secret(package_id, key)
 }
 
 #[tauri::command]
 pub fn open_package_webview(
+    window: Window,
     host: State<'_, Arc<PluginHost>>,
     package_id: String,
     webview_id: String,
 ) -> Result<(), String> {
+    ensure_admin_window_label(window.label())?;
     host.open_package_webview(package_id, webview_id)
 }
 
 #[tauri::command]
 pub fn open_package_configuration(
+    window: Window,
     host: State<'_, Arc<PluginHost>>,
     package_id: String,
 ) -> Result<(), String> {
+    ensure_admin_window_label(window.label())?;
     host.open_package_configuration(package_id)
 }
 
 #[tauri::command]
 pub fn open_package_secrets(
+    window: Window,
     host: State<'_, Arc<PluginHost>>,
     package_id: String,
 ) -> Result<(), String> {
+    ensure_admin_window_label(window.label())?;
     host.open_package_secrets(package_id)
 }

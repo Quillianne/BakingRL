@@ -212,6 +212,7 @@ fn get_telemetry_snapshot(bus: tauri::State<'_, Arc<EventBus>>) -> Option<GameEv
 
 #[tauri::command]
 fn emit_developer_telemetry(
+    window: tauri::Window,
     bus: tauri::State<'_, Arc<EventBus>>,
     frame: serde_json::Value,
 ) -> Result<(), String> {
@@ -227,19 +228,31 @@ fn emit_developer_telemetry(
         .cloned()
         .unwrap_or(serde_json::Value::Null);
 
-    bus.publish(BusEvent::GameData(Arc::new(GameEvent {
+    let event = Arc::new(GameEvent {
         event: event_name,
         data,
-    })));
+    });
+    if window.label() == "main" {
+        bus.publish(BusEvent::GameData(event));
+    } else {
+        bus.publish(BusEvent::PluginEvent(event));
+    }
     Ok(())
 }
 
 #[tauri::command]
 fn take_pending_package_file_opens(
+    window: tauri::Window,
     pending: tauri::State<'_, PendingPackageFileOpens>,
-) -> Vec<String> {
+) -> Result<Vec<String>, String> {
+    if window.label() != "main" {
+        return Err(format!(
+            "Window '{}' cannot read pending package file opens.",
+            window.label()
+        ));
+    }
     let mut pending = pending.0.lock().unwrap();
-    std::mem::take(&mut *pending)
+    Ok(std::mem::take(&mut *pending))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
