@@ -140,9 +140,6 @@ export type PackageDescriptor = {
     extension_points: ExtensionPointContributionDescriptor[];
     contributions: PluginContributionDescriptor[];
     resources: ResourceContributionDescriptor[];
-    views: WebviewContributionDescriptor[];
-    assets: NamedContributionDescriptor[];
-    schemas: NamedContributionDescriptor[];
     webviews: WebviewContributionDescriptor[];
   };
   compatibility: PackageCompatibilityDescriptor;

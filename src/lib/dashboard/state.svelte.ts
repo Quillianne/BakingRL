@@ -634,9 +634,6 @@ export class DashboardState {
       pkg.contributions.extension_points.length +
       pkg.contributions.contributions.length +
       pkg.contributions.resources.length +
-      pkg.contributions.views.length +
-      pkg.contributions.assets.length +
-      pkg.contributions.schemas.length +
       pkg.contributions.webviews.length
     );
   }

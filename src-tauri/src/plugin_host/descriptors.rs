@@ -50,9 +50,6 @@ pub struct PackageContributionsDescriptor {
     pub extension_points: Vec<ExtensionPointContributionDescriptor>,
     pub contributions: Vec<PluginContributionDescriptor>,
     pub resources: Vec<ResourceContributionDescriptor>,
-    pub views: Vec<WebviewContributionDescriptor>,
-    pub assets: Vec<NamedContributionDescriptor>,
-    pub schemas: Vec<NamedContributionDescriptor>,
     pub webviews: Vec<WebviewContributionDescriptor>,
 }
 
@@ -236,9 +233,6 @@ pub(super) fn descriptor_for_manifest(
                 })
                 .collect(),
             resources: resource_descriptors(manifest.id(), contributes),
-            views: Vec::new(),
-            assets: Vec::new(),
-            schemas: Vec::new(),
             webviews: contributes
                 .webviews
                 .iter()
@@ -947,7 +941,6 @@ mod tests {
             descriptor.settings.as_deref(),
             Some("schemas/plugin-settings.json")
         );
-        assert!(descriptor.contributions.views.is_empty());
         assert!(descriptor
             .contributes
             .as_ref()

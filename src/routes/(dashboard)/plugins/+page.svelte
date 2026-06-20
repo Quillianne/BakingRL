@@ -159,16 +159,6 @@
             : webview.entry ?? webview.path ?? webview.route ?? undefined,
           webviewId: webview.name
         }))
-      },
-      {
-        title: dashboard.t("packages.assets"),
-        count: pkg.contributions.assets.length,
-        rows: pkg.contributions.assets.map((asset) => ({ name: asset.name }))
-      },
-      {
-        title: dashboard.t("packages.schemas"),
-        count: pkg.contributions.schemas.length,
-        rows: pkg.contributions.schemas.map((schema) => ({ name: schema.name }))
       }
     ];
     return sections.filter((section) => section.count > 0);
