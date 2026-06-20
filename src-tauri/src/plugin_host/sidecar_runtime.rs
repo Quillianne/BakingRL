@@ -1064,9 +1064,9 @@ fn handle_sidecar_jsonrpc(
         "packages/settings" | "packages/getSettings" => {
             sidecar_package_settings(app_handle, params)
         }
-        "packages/readFile" => sidecar_package_read_file(app_handle, params),
+        "packages/readFile" => sidecar_package_read_file(sidecar_ref, app_handle, params),
         "packages/readText" | "packages/readFileText" => {
-            sidecar_package_read_text(app_handle, params)
+            sidecar_package_read_text(sidecar_ref, app_handle, params)
         }
         "plugins/list" => sidecar_plugins_list(sidecar_ref, app_handle),
         "extensions/listPoints" => sidecar_extensions_list_points(sidecar_ref, app_handle, params),
@@ -1169,10 +1169,12 @@ fn sidecar_package_settings(
 }
 
 fn sidecar_package_read_file(
+    sidecar_ref: &str,
     app_handle: &AppHandle,
     params: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let package_id = required_string(&params, "packageId")?;
+    ensure_sidecar_owns_package_file(sidecar_ref, &package_id)?;
     let relative_path = required_relative_path(&params)?;
     let bytes = plugin_host(app_handle)?.read_package_file(&package_id, &relative_path)?;
     Ok(serde_json::json!({
@@ -1182,13 +1184,25 @@ fn sidecar_package_read_file(
 }
 
 fn sidecar_package_read_text(
+    sidecar_ref: &str,
     app_handle: &AppHandle,
     params: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let package_id = required_string(&params, "packageId")?;
+    ensure_sidecar_owns_package_file(sidecar_ref, &package_id)?;
     let relative_path = required_relative_path(&params)?;
     let contents = plugin_host(app_handle)?.read_package_file_text(&package_id, &relative_path)?;
     Ok(serde_json::json!({ "contents": contents }))
+}
+
+fn ensure_sidecar_owns_package_file(sidecar_ref: &str, package_id: &str) -> Result<(), String> {
+    let caller_package_id = sidecar_package_id(sidecar_ref);
+    if package_id == caller_package_id {
+        return Ok(());
+    }
+    Err(format!(
+        "Sidecar '{sidecar_ref}' cannot read undeclared files from package '{package_id}'. Use resources/read for cross-package resources."
+    ))
 }
 
 fn sidecar_registry_get(
