@@ -1,9 +1,9 @@
 # BakingRL
 
-BakingRL is the desktop host application for Rocket League telemetry overlays,
-pages, and plugin runtimes. It owns telemetry ingestion, package discovery,
-runtime lifecycle, host-mediated plugin APIs, overlay windows, OBS browser
-output, and the dashboard UI.
+BakingRL is the desktop host application for Rocket League telemetry and
+plugin runtimes. It owns telemetry ingestion, package discovery, runtime
+lifecycle, host-mediated plugin APIs, package settings/secrets, diagnostics,
+and the dashboard UI.
 
 Plugin authoring tools and public plugin contracts live in the sibling
 `BakingRLSDK` repository. First-party plugin source lives in `BakingRLPlugins`.
@@ -13,9 +13,9 @@ Plugin authoring tools and public plugin contracts live in the sibling
 Use this repository when working on:
 
 - the Tauri host and Rust backend;
-- the Svelte dashboard, page editor, overlay editor, and package manager;
-- package installation, runtime compatibility, settings, and diagnostics;
-- OBS gateway routes and in-game overlay windows;
+- the Svelte dashboard, standalone package webviews, and package manager;
+- package installation, runtime compatibility, settings, secrets, and diagnostics;
+- plugin runtime APIs, command/service routing, resources, and sidecar status;
 - host-facing documentation.
 
 Do not copy plugin source into this repository. Install plugins through local
@@ -54,10 +54,10 @@ generator usage, and authoring workflows are documented in `BakingRLSDK`.
 
 ## Current Runtime Contract
 
-The current host runtime API is `2.0.0`. The host supports packages declaring:
+The current host runtime API is `2.2.0`. The host supports packages declaring:
 
 ```txt
-2.0.0
+2.2.x
 ```
 
 Packages without a compatible top-level `bakingrlApi` field can be installed

@@ -36,13 +36,12 @@ library crate.
 This warning means the runtime cannot reach the local telemetry source yet. It
 is expected if Rocket League or the telemetry bridge is not running.
 
-## Overlay Surface Not Loading
+## Package Webview Not Loading
 
-If a layout or page surface appears blank when opened from the dashboard,
-check:
+If a package webview appears blank when opened from the dashboard, check:
 
 - the host application is running;
-- package visuals are enabled and currently loaded;
+- the package is enabled and currently loaded;
 - the package runtime is healthy in the Developer diagnostics;
 - plugin webview paths are valid for the current package revision.
 
@@ -59,7 +58,7 @@ validation command, reinstall it locally, then reload packages in BakingRL.
 ## Incompatible Plugin Package
 
 If a package is installed but disabled, inspect its package details. Packages
-must declare top-level `bakingrlApi` and the current host supports `2.0.0`.
+must declare top-level `bakingrlApi` and the current host supports `2.2.x`.
 
 When the declared version is different, rebuild the package with a compatible
 SDK and helper CLI. The host keeps the package visible so users can
@@ -70,8 +69,8 @@ removing or updating it.
 
 The package configuration action appears when the manifest declares
 `contributes.settings`. Automatic settings use the declared JSON Schema.
-Custom configuration visuals use `contributes.settings.ui` to reference a
-`contributes.visuals` entry with `kind: "config"`.
+Custom configuration webviews use `contributes.settings.ui` to reference a
+`contributes.webviews` entry with `kind: "settings"`.
 
 Run the package helper validation command after changing the manifest:
 

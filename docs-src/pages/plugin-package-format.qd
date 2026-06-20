@@ -16,7 +16,7 @@ top-level `bakingrlApi`.
   "name": "Example Extension",
   "version": "1.0.0",
   "author": "Example Author",
-  "bakingrlApi": "2.0.0",
+  "bakingrlApi": "2.2.0",
   "runtime": {
     "node": {
       "entry": "dist/extension/index.js"
@@ -26,7 +26,10 @@ top-level `bakingrlApi`.
   "contributes": {
     "commands": [],
     "services": [],
-    "visuals": [],
+    "webviews": [],
+    "resources": [],
+    "extensionPoints": [],
+    "contributions": [],
     "settings": {}
   }
 }
@@ -45,8 +48,8 @@ Stable package identity. Use reverse-DNS style values such as
 
 `bakingrlApi`
 
-Must target the host runtime API. Current runtime API is `2.0.0`; the host
-accepts compatible `2.x` packages.
+Must target the host runtime API. Current runtime API is `2.2.0`; the host
+accepts compatible `2.2.x` packages.
 
 `runtime.node.entry`
 
@@ -69,7 +72,10 @@ and UI.
 
 - `commands`: command IDs discoverable by the host;
 - `services`: service metadata and method schemas;
-- `visuals`: browser visuals for host-owned surfaces;
+- `webviews`: browser entries opened by the host as tools, settings, or panels;
+- `resources`: package-owned files exposed through mediated visibility checks;
+- `extensionPoints`: interfaces another package can contribute to;
+- `contributions`: package-provided entries for another plugin's extension point;
 - `settings`: automatic settings schema metadata.
 
 Services are discovered from the manifest, but live service implementations are
@@ -158,24 +164,24 @@ Fields marked with `x-bakingrl-restart-required: true` are shown as requiring
 a package reload when changed. The host reloads package runtimes after saving
 package settings.
 
-`contributes.settings.ui` can reference the `id` of a visual declared in
-`contributes.visuals` with `kind: "config"`. The host exposes that visual as
-the package configuration surface. Configuration visuals receive the normal
-`VisualContext.settings` snapshot plus `VisualContext.configuration`, which can
-read, save, update, reset, and subscribe to host-owned package settings. Secret
-values remain host-mediated: the configuration context can test whether a
-declared secret is configured and can set or clear it, but it does not expose
-secret values through normal settings JSON.
+`contributes.settings.ui` can reference the `id` of a webview declared in
+`contributes.webviews` with `kind: "settings"`. The host exposes that webview
+as the package configuration surface. Configuration webviews receive the normal
+settings context plus `context.configuration`, which can read, save, update,
+reset, and subscribe to host-owned package settings. Secret values remain
+host-mediated: the configuration context can test whether a declared secret is
+configured and can set or clear it, but it does not expose secret values
+through normal settings JSON.
 
 ```json
 {
   "contributes": {
-    "visuals": [
+    "webviews": [
       {
         "id": "settingsPanel",
-        "kind": "config",
-        "entry": "dist/settings-panel.js",
-        "defaultSize": [1200, 740]
+        "kind": "settings",
+        "entry": "dist/webviews/settings-panel.js",
+        "title": "Settings"
       }
     ],
     "settings": {

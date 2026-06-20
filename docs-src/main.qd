@@ -3,10 +3,9 @@
 .include {docs}
 .doclang {en}
 
-BakingRL is the desktop host for Rocket League telemetry overlays and plugin
-runtimes. It connects to local telemetry, manages packages, enforces runtime
-boundaries, renders pages and overlays, and exposes plugin-owned external
-surfaces.
+BakingRL is the desktop host for Rocket League telemetry and plugin runtimes.
+It connects to local telemetry, manages packages, enforces runtime boundaries,
+opens plugin-declared webviews, and exposes host-mediated runtime APIs.
 
 This documentation explains host behavior. Plugin authoring details belong in
 the `BakingRLSDK` documentation.
@@ -35,5 +34,5 @@ BakingRLSDK/      SDK contracts, generator, CLI, plugin-author docs
 BakingRLPlugins/  First-party and experimental plugin packages
 ```
 
-The current host runtime API is `2.0.0`. Compatible packages declare top-level
-`bakingrlApi` equal to `2.0.0`.
+The current host runtime API is `2.2.0`. Compatible packages declare top-level
+`bakingrlApi` in the supported `2.2.x` range.

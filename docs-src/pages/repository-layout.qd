@@ -11,10 +11,10 @@ host code, SDK contracts, and plugin packages independently understandable.
 This repository contains the desktop host:
 
 - Rust/Tauri backend;
-- Svelte dashboard and editors;
-- telemetry ingestion and overlay routing;
+- Svelte dashboard and package webview routes;
+- telemetry ingestion and runtime routing;
 - package installation and state;
-- service and connector runtime management;
+- command, service, resource, and sidecar runtime management;
 - host documentation.
 
 Host code should not import plugin source directly. Plugins are installed as

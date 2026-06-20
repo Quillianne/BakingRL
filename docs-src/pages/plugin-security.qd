@@ -9,8 +9,8 @@ safety: clear package metadata, explicit runtime declarations, diagnostics,
 safe mode, and process supervision.
 
 This is a deliberate product choice. BakingRL plugins are expected to be
-powerful enough to control production workflows, custom pages, overlays,
-services, and native sidecars.
+powerful enough to control production workflows, package webviews, services,
+extension points, and native sidecars.
 
 ## Trust Boundary
 
@@ -19,7 +19,7 @@ The Tauri host remains the process that owns:
 - package installation and bundle extraction;
 - manifest parsing and runtime compatibility;
 - app settings and package enable state;
-- page, overlay, and window routing;
+- package webview and window routing;
 - extension host and sidecar supervision;
 - diagnostics, crash-loop detection, stop, restart, and safe mode.
 
@@ -36,7 +36,7 @@ host functionality through SDK APIs owned by the host:
 - settings and secret access;
 - telemetry and runtime state streams;
 - sidecar and service calls;
-- visual and configuration contexts.
+- webview and configuration contexts.
 
 Those APIs are the boundary. Manifests describe what the package contributes
 and which runtime API it targets; they do not carry a permission policy that
@@ -50,7 +50,7 @@ does not start:
 - extension hosts;
 - native sidecars;
 - plugin services;
-- plugin webviews, pages, overlays, or visuals.
+- plugin webviews.
 
 Use safe mode when a plugin crashes repeatedly, blocks startup, or renders
 broken UI.
@@ -80,11 +80,11 @@ operators can see what is running and what failed.
 
 ## Distribution Trust
 
-Hashes, signatures, and marketplace metadata help review package provenance.
+Hashes, signatures, and package metadata help review package provenance.
 They do not make code safe by themselves. They answer different questions:
 
 - Did this package match the uploaded artifact?
-- Which developer or marketplace entry published it?
+- Which developer or catalog entry published it?
 - Which capabilities does it claim?
 - Which runtime API does it target?
 

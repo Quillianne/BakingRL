@@ -41,6 +41,6 @@ inside one generated page.
 ## Open Documentation Work
 
 - Add diagrams once the plugin runtime implementation stabilizes.
-- Add screenshots for package installation and overlay editing.
+- Add screenshots for package installation, package settings, and webviews.
 - Add a public plugin author tutorial that links to `BakingRLSDK`.
 - Add deployment instructions for generated Quarkdown docs.

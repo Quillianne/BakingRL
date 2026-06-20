@@ -91,9 +91,9 @@ Host validation checks:
 
 ## Enable
 
-Users enable packages explicitly. Enabled packages become available to overlay
-layouts, pages, webviews, extension-host services, and declared sidecars
-according to their v4 contributions.
+Users enable packages explicitly. Enabled packages become available to
+webviews, extension-host commands/services, resources, extension points,
+contributions, and declared sidecars according to their v4 contributions.
 
 Packages built against an unsupported `bakingrlApi` are visible
 for inspection, but disabled. The package detail view can show the declared
@@ -107,11 +107,9 @@ the UI does not block on backend startup or teardown.
 
 The host loads only the contributions it needs:
 
-- Visuals load when a layout item or page item mounts.
+- Webviews load when opened by the host.
 - Extension-host services are registered from `activate(context)`.
 - Native sidecars start according to their declared activation policy.
-- Page templates load when imported into a page.
-- Layout templates load when imported into the host-owned overlay layout list.
 - Configuration pages load from the package configuration action.
 
 If an extension host or sidecar fails to start, the host emits a runtime error event.
@@ -123,21 +121,21 @@ current session.
 Mounting is where plugin code receives a runtime context. The host owns the
 context and can revoke it during reload or teardown.
 
-Visual mount example:
+Webview mount example:
 
 ```txt
-layout item
-  -> host resolves package visual contribution
-  -> host creates DOM root
-  -> visual module mounts with VisualContext
+package action
+  -> host resolves package webview contribution
+  -> host opens a standalone webview window
+  -> webview receives WebviewContext and optional configuration context
 ```
 
 Configuration mounting uses host-generated settings UI from the package settings
-schema by default. Packages can provide a custom configuration visual by
-declaring `contributes.settings.ui` with the id of a visual whose `kind` is
-`config`. The custom visual is mounted with `VisualContext.configuration` so it
-can call host-owned settings and secret configuration APIs without writing
-directly to package files.
+schema by default. Packages can provide a custom configuration webview by
+declaring `contributes.settings.ui` with the id of a webview whose `kind` is
+`settings`. The custom webview receives `context.configuration` so it can call
+host-owned settings and secret configuration APIs without writing directly to
+package files.
 
 ## Reload
 

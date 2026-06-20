@@ -13,17 +13,18 @@ Rocket League local stream
   -> ingestor
   -> normalized event model
   -> host event bus
-  -> overlays, pages, webviews, services, sidecars
+  -> plugin webviews, services, sidecars, and extension hosts
 ```
 
 ## Event Consumers
 
 Different runtime surfaces consume telemetry differently:
 
-- Visuals subscribe to live events to update DOM output.
+- Webviews subscribe to live events to update DOM output.
 - Services can aggregate state or expose snapshots.
 - Native sidecars can process heavier trusted workloads through JSON-RPC.
-- Editors can use mock events to preview visuals without a live game.
+- Developer tools can use mock events to preview package behavior without a
+  live game.
 
 ## Development Behavior
 
@@ -52,6 +53,6 @@ Good event contracts are:
 
 ## Testing Without Rocket League
 
-The editor should support mock or recorded events for layout development. This
-keeps visual iteration fast and avoids requiring a live match for every UI
-change.
+Developer tooling should support mock or recorded events for package runtime
+development. This keeps iteration fast and avoids requiring a live match for
+every UI or service change.

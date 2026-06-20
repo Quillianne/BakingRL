@@ -3,9 +3,10 @@
 .include {docs}
 .doclang {en}
 
-BakingRL is a desktop host for Rocket League telemetry overlays. The host
-collects local telemetry, normalizes events, loads plugin packages, and renders
-plugin-powered visuals in Tauri windows and external overlay surfaces.
+BakingRL is a desktop host for Rocket League telemetry and plugin runtimes. The
+host collects local telemetry, keeps the runtime boundary small, loads plugin
+packages, and exposes host-mediated APIs that plugins can use to build product
+surfaces outside the core app.
 
 ## What The Host Owns
 
@@ -15,7 +16,8 @@ BakingRL is responsible for:
 - package discovery, installation, compatibility checks, and enable state;
 - trusted plugin v4 activation, package settings, and runtime diagnostics;
 - Node extension hosts and native sidecar supervision;
-- dashboard pages, overlay layouts, and stream routes.
+- standalone package webviews, command/service routing, resources, secrets,
+  and the minimal dashboard.
 
 The host is the operational boundary. Plugin code is trusted enough to power
 production workflows, but it still runs outside the Tauri process and remains
@@ -37,16 +39,17 @@ individual plugin implementation details.
 ## Design Goals
 
 - Keep plugin packages portable as `.brlp` bundles.
-- Keep user-owned pages and overlay layouts editable inside the host.
+- Keep domain workflows such as overlays, OBS, scoreboards, and content packs
+  in plugins instead of BakingRL core.
 - Make package surfaces explicit through `runtime`, `contributes`, settings,
-  and external surface declarations.
+  resources, webviews, services, and extension points.
 - Keep runtime APIs small, versioned, and host-mediated.
 - Surface incompatibility and runtime errors early in the dashboard.
 
 ## Who Should Read This
 
 Read the host docs if you are changing BakingRL itself: package loading,
-runtime behavior, host-mediated APIs, telemetry, overlay rendering, page
-rendering, or the dashboard.
+runtime behavior, host-mediated APIs, telemetry, package webviews, diagnostics,
+or the dashboard.
 
 Read the SDK docs if you are writing or packaging plugins.
