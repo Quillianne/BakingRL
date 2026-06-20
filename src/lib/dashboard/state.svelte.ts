@@ -46,7 +46,6 @@ const PACKAGE_TOGGLE_ROLLBACK_MS = 5000;
 const PACKAGE_RELOAD_MIN_SPIN_MS = 450;
 const PACKAGE_FILE_OPENED_EVENT = "bakingrl-package-files-opened";
 const DEVELOPER_TELEMETRY_FLUSH_MS = 500;
-const MIN_SUPPORTED_RUNTIME_API = "2.0.0";
 
 type PendingPackageToggle = {
   enabled: boolean;
@@ -73,6 +72,11 @@ function parseRuntimeApiVersion(value: string | null | undefined) {
     return null;
   }
   return { major: parts[0], minor: parts[1], patch: parts[2] };
+}
+
+function minimumSupportedRuntimeApi(value: string | null | undefined) {
+  const minimum = typeof value === "string" ? value.split(" - ")[0]?.trim() : null;
+  return parseRuntimeApiVersion(minimum);
 }
 
 export class DashboardState {
@@ -377,7 +381,7 @@ export class DashboardState {
   runtimeApiCompatibility(runtimeApi: string | null | undefined) {
     const targetVersion = parseRuntimeApiVersion(runtimeApi);
     const hostVersion = parseRuntimeApiVersion(this.runtimeInfo?.runtimeApiVersion ?? "1.0.0");
-    const minVersion = parseRuntimeApiVersion(MIN_SUPPORTED_RUNTIME_API);
+    const minVersion = minimumSupportedRuntimeApi(this.runtimeInfo?.supportedRuntimeApi) ?? hostVersion;
     if (!targetVersion || !hostVersion) {
       return "unknown_runtime_api" as const;
     }
@@ -423,7 +427,7 @@ export class DashboardState {
 
   inspectionCompatibilityMessage(inspection: BundleInspection) {
     const runtimeApi = inspection.manifest.bakingrlApi;
-    const hostRange = this.runtimeInfo?.supportedRuntimeApi ?? "2.0.0";
+    const hostRange = this.runtimeInfo?.supportedRuntimeApi ?? this.runtimeInfo?.runtimeApiVersion ?? "n/a";
     if (!runtimeApi) return this.t("packages.missingRuntimeApiMessage");
     return this.tx("packages.runtimeApiMessage", { runtimeApi, hostRange });
   }
