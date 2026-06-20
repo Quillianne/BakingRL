@@ -67,6 +67,18 @@ open inside host-owned standalone windows. The host resolves the declared
 `contributes.webviews` entry for the package and webview id; browser code talks
 to the host through the SDK bridge instead of reading local files directly.
 
+Each package webview window is scoped to its package id and webview id. Package
+settings, secrets metadata, service calls, registry reads, and webview module
+loading are accepted only from the main dashboard, the matching package
+configuration/secrets window, or the matching package webview window. Admin
+package operations such as install, reload, enable, disable, remove, and
+diagnostic clearing stay restricted to the main dashboard.
+
+Webview module loading starts from the manifest-declared entry. Relative
+JavaScript imports may be loaded from the same declared bundle tree, but a
+webview cannot ask the host to read arbitrary package files or another
+webview's bundle.
+
 This keeps routing and window lifecycle in the host while still allowing rich
 plugin-authored UI.
 
