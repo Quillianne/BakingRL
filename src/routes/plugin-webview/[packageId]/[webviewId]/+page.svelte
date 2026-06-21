@@ -26,6 +26,8 @@
     runtimeApi: string;
   };
 
+  type DiagnosticSeverity = "info" | "warning" | "error";
+
   type ModuleSettings = Record<string, unknown> & {
     get(): Promise<Record<string, unknown>>;
     save(values: Record<string, unknown>): Promise<Record<string, unknown>>;
@@ -132,6 +134,33 @@
     };
   }
 
+  function diagnosticDetails(details: unknown) {
+    if (details === undefined) return "";
+    if (typeof details === "string") return details;
+    try {
+      return JSON.stringify(details);
+    } catch {
+      return String(details);
+    }
+  }
+
+  function diagnosticMessage(message: string, details?: unknown) {
+    const suffix = diagnosticDetails(details);
+    return suffix ? `${message} ${suffix}` : message;
+  }
+
+  function reportWebviewDiagnostic(severity: DiagnosticSeverity, message: string, details?: unknown) {
+    void invoke("push_package_webview_diagnostic", {
+      packageId: data.packageId,
+      webviewId: data.webviewId,
+      severity,
+      phase: "webview",
+      message: diagnosticMessage(message, details)
+    }).catch((error) => {
+      console.warn(`[${data.packageId}/${data.webviewId}] diagnostic report failed`, error);
+    });
+  }
+
   onMount(() => {
     let disposed = false;
     let unlistenTelemetry: (() => void) | undefined;
@@ -192,21 +221,26 @@
     const diagnostics = {
       log(message: string, details?: unknown) {
         console.log(`[${data.packageId}/${data.webviewId}] ${message}`, details ?? "");
+        reportWebviewDiagnostic("info", message, details);
       },
       info(message: string, details?: unknown) {
         console.info(`[${data.packageId}/${data.webviewId}] ${message}`, details ?? "");
+        reportWebviewDiagnostic("info", message, details);
       },
       warn(message: string, details?: unknown) {
         console.warn(`[${data.packageId}/${data.webviewId}] ${message}`, details ?? "");
+        reportWebviewDiagnostic("warning", message, details);
       },
       error(message: string, details?: unknown) {
         console.error(`[${data.packageId}/${data.webviewId}] ${message}`, details ?? "");
+        reportWebviewDiagnostic("error", message, details);
       },
       report(diagnostic: unknown) {
         console.warn(`[${data.packageId}/${data.webviewId}] diagnostic`, diagnostic);
+        reportWebviewDiagnostic("warning", "webview diagnostic", diagnostic);
       },
       clear() {
-        // Module webviews currently expose console-backed diagnostics only.
+        // Webview diagnostics are append-only in the host session.
       }
     };
 

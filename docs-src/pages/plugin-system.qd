@@ -160,7 +160,8 @@ The host keeps these guardrails:
 
 - safe mode disables extension hosts, sidecars, plugin services, and plugin UI;
 - plugin diagnostics are collected by package and source;
-- stdout/stderr logs are visible as runtime diagnostics;
+- stdout/stderr logs and declared webview diagnostics are visible as runtime
+  diagnostics;
 - crash loop detection blocks restart after repeated crashes;
 - packages can be stopped, restarted, or reloaded;
 - package metadata can carry hashes, signatures, review state, and trust state.

@@ -1151,6 +1151,32 @@ impl PluginHost {
             .any(|webview| webview.id == webview_id && is_settings_webview(webview)))
     }
 
+    pub fn push_package_webview_diagnostic(
+        &self,
+        package_id: &str,
+        webview_id: &str,
+        severity: PluginDiagnosticSeverity,
+        phase: Option<String>,
+        message: String,
+    ) -> Result<PluginDiagnosticEvent, String> {
+        let input = {
+            let records = self.records.lock().unwrap();
+            let record = self.require_enabled_record(&records, package_id)?;
+            package_webview_diagnostic_input_for_record(
+                package_id, webview_id, record, severity, phase, message,
+            )?
+        };
+        let event = self.diagnostics.push(input.clone());
+        let payload = serde_json::json!({
+            "kind": "webview",
+            "source": input.source,
+            "stream": diagnostic_log_stream(&input.severity),
+            "line": input.message,
+        });
+        let _ = self.app_handle.emit("bakingrl-runtime-log", payload);
+        Ok(event)
+    }
+
     fn can_window_configure_package(
         &self,
         window_label: &str,
@@ -2382,6 +2408,73 @@ mod tests {
     }
 
     #[test]
+    fn package_webview_diagnostic_input_targets_declared_webview() {
+        let record = package_record(serde_json::json!({
+            "schemaVersion": "bakingrl.plugin/4",
+            "id": "bakingrl.webviews",
+            "name": "Webviews",
+            "version": "1.0.0",
+            "bakingrlApi": "2.2.0",
+            "contributes": {
+                "webviews": [
+                    {
+                        "id": "settings",
+                        "entry": "dist/webviews/settings.js"
+                    }
+                ]
+            }
+        }));
+
+        let input = package_webview_diagnostic_input_for_record(
+            "bakingrl.webviews",
+            "settings",
+            &record,
+            PluginDiagnosticSeverity::Warning,
+            Some(" render ".to_string()),
+            " failed to refresh ".to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(input.package_id.as_deref(), Some("bakingrl.webviews"));
+        assert_eq!(input.source, "webview:settings");
+        assert_eq!(input.severity, PluginDiagnosticSeverity::Warning);
+        assert_eq!(input.phase, "render");
+        assert_eq!(input.message, "failed to refresh");
+        assert_eq!(diagnostic_log_stream(&input.severity), "warning");
+    }
+
+    #[test]
+    fn package_webview_diagnostic_input_rejects_undeclared_webview() {
+        let record = package_record(serde_json::json!({
+            "schemaVersion": "bakingrl.plugin/4",
+            "id": "bakingrl.webviews",
+            "name": "Webviews",
+            "version": "1.0.0",
+            "bakingrlApi": "2.2.0",
+            "contributes": {
+                "webviews": [
+                    {
+                        "id": "settings",
+                        "entry": "dist/webviews/settings.js"
+                    }
+                ]
+            }
+        }));
+
+        let error = package_webview_diagnostic_input_for_record(
+            "bakingrl.webviews",
+            "admin",
+            &record,
+            PluginDiagnosticSeverity::Info,
+            None,
+            "".to_string(),
+        )
+        .unwrap_err();
+
+        assert!(error.contains("does not declare webview 'admin'"));
+    }
+
+    #[test]
     fn package_webview_module_paths_stay_with_declared_bundle() {
         let entry = "dist/webviews/settings.js";
 
@@ -2827,6 +2920,59 @@ fn is_settings_webview(
     webview.kind.as_deref() == Some("settings")
 }
 
+fn package_webview_diagnostic_input_for_record(
+    package_id: &str,
+    webview_id: &str,
+    record: &PackageRecord,
+    severity: PluginDiagnosticSeverity,
+    phase: Option<String>,
+    message: String,
+) -> Result<PluginDiagnosticInput, String> {
+    if !record
+        .manifest
+        .contributes_v4()
+        .webviews
+        .iter()
+        .any(|webview| webview.id == webview_id)
+    {
+        return Err(format!(
+            "Package '{package_id}' does not declare webview '{webview_id}'."
+        ));
+    }
+    Ok(PluginDiagnosticInput {
+        package_id: Some(package_id.to_string()),
+        source: format!("webview:{webview_id}"),
+        severity,
+        phase: normalized_diagnostic_phase(phase, "webview"),
+        message: normalized_diagnostic_message(message),
+        crash_count: None,
+    })
+}
+
+fn normalized_diagnostic_phase(phase: Option<String>, fallback: &str) -> String {
+    phase
+        .map(|phase| phase.trim().to_string())
+        .filter(|phase| !phase.is_empty())
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+fn normalized_diagnostic_message(message: String) -> String {
+    let message = message.trim().to_string();
+    if message.is_empty() {
+        "(empty diagnostic)".to_string()
+    } else {
+        message
+    }
+}
+
+fn diagnostic_log_stream(severity: &PluginDiagnosticSeverity) -> &'static str {
+    match severity {
+        PluginDiagnosticSeverity::Info => "diagnostics",
+        PluginDiagnosticSeverity::Warning => "warning",
+        PluginDiagnosticSeverity::Error | PluginDiagnosticSeverity::Fatal => "error",
+    }
+}
+
 fn package_webview_runtime_descriptor_for_record(
     package_id: &str,
     webview_id: &str,
@@ -3103,6 +3249,28 @@ pub fn get_package_webview_runtime_descriptor(
 ) -> Result<PackageWebviewRuntimeDescriptor, String> {
     ensure_window_label_can_access_package(host.inner().as_ref(), window.label(), &package_id)?;
     host.package_webview_runtime_descriptor(&package_id, &webview_id)
+}
+
+#[tauri::command]
+pub fn push_package_webview_diagnostic(
+    window: Window,
+    host: State<'_, Arc<PluginHost>>,
+    package_id: String,
+    webview_id: String,
+    severity: PluginDiagnosticSeverity,
+    phase: Option<String>,
+    message: String,
+) -> Result<PluginDiagnosticEvent, String> {
+    let expected_label = package_webview_window_label(&package_id, &webview_id);
+    if window.label() != expected_label {
+        return Err(format!(
+            "Window '{}' cannot report diagnostics for webview '{}/{}'.",
+            window.label(),
+            package_id,
+            webview_id
+        ));
+    }
+    host.push_package_webview_diagnostic(&package_id, &webview_id, severity, phase, message)
 }
 
 #[tauri::command]
