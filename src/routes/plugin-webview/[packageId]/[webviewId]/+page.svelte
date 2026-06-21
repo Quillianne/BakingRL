@@ -194,11 +194,11 @@
     }
 
     function publishTelemetryFrame(eventName: string, payload?: unknown) {
-      return invoke("emit_developer_telemetry", {
-        frame: {
-          Event: eventName,
-          Data: payload ?? null
-        }
+      return invoke("emit_package_webview_event", {
+        packageId: data.packageId,
+        webviewId: data.webviewId,
+        eventName,
+        payload: payload ?? null
       });
     }
 

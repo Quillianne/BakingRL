@@ -19,8 +19,8 @@ use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder, Window};
 use tracing::{info, warn};
 
-use crate::bus::EventBus;
-use crate::models::{AppSettings, PackageSettingsFile, PackageStateFile};
+use crate::bus::{BusEvent, EventBus};
+use crate::models::{AppSettings, GameEvent, PackageSettingsFile, PackageStateFile};
 use crate::plugin_package::bundle::BundleInspection;
 use crate::plugin_package::install::{
     download_bundle_to_file, inspect_bundle_file, install_bundle_from_file,
@@ -3434,6 +3434,33 @@ pub fn push_package_webview_diagnostic(
         ));
     }
     host.push_package_webview_diagnostic(&package_id, &webview_id, severity, phase, message)
+}
+
+#[tauri::command]
+pub fn emit_package_webview_event(
+    window: Window,
+    host: State<'_, Arc<PluginHost>>,
+    bus: State<'_, Arc<EventBus>>,
+    package_id: String,
+    webview_id: String,
+    event_name: String,
+    payload: serde_json::Value,
+) -> Result<(), String> {
+    let expected_label = package_webview_window_label(&package_id, &webview_id);
+    if window.label() != expected_label {
+        return Err(format!(
+            "Window '{}' cannot publish events for webview '{}/{}'.",
+            window.label(),
+            package_id,
+            webview_id
+        ));
+    }
+    host.can_package_write_event(&package_id, &event_name)?;
+    bus.publish(BusEvent::PluginEvent(Arc::new(GameEvent {
+        event: event_name,
+        data: payload,
+    })));
+    Ok(())
 }
 
 #[tauri::command]

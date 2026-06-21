@@ -10,14 +10,15 @@ use crate::ingestor::{start_tcp_ingestor, TelemetryStatusState};
 use crate::models::{GameEvent, TelemetryConnectionStatus};
 use crate::plugin_host::{
     call_service_export, clear_plugin_diagnostics, delete_package_secret, discard_prepared_package,
-    get_app_settings, get_package_configuration_state, get_package_settings,
-    get_package_webview_runtime_descriptor, get_runtime_info, inspect_package_bundle,
-    install_package_from_file, install_package_from_url, install_prepared_package, list_packages,
-    list_plugin_diagnostics, open_package_configuration, open_package_secrets,
-    open_package_webview, packages_dir, plugin_registry_get, prepare_package_from_deep_link,
-    prepare_package_from_git, prepare_package_from_url, push_package_webview_diagnostic,
-    read_package_webview_asset, read_package_webview_module_text, reload_packages, remove_package,
-    save_app_settings, save_package_settings, set_package_enabled, set_package_secret, PluginHost,
+    emit_package_webview_event, get_app_settings, get_package_configuration_state,
+    get_package_settings, get_package_webview_runtime_descriptor, get_runtime_info,
+    inspect_package_bundle, install_package_from_file, install_package_from_url,
+    install_prepared_package, list_packages, list_plugin_diagnostics, open_package_configuration,
+    open_package_secrets, open_package_webview, packages_dir, plugin_registry_get,
+    prepare_package_from_deep_link, prepare_package_from_git, prepare_package_from_url,
+    push_package_webview_diagnostic, read_package_webview_asset, read_package_webview_module_text,
+    reload_packages, remove_package, save_app_settings, save_package_settings, set_package_enabled,
+    set_package_secret, PluginHost,
 };
 use crate::registry::{registry_entries, registry_get, Registry};
 use std::env;
@@ -210,12 +211,15 @@ fn get_telemetry_snapshot(bus: tauri::State<'_, Arc<EventBus>>) -> Option<GameEv
     bus.latest_game_event().as_deref().cloned()
 }
 
-#[tauri::command]
-fn emit_developer_telemetry(
-    window: tauri::Window,
-    bus: tauri::State<'_, Arc<EventBus>>,
-    frame: serde_json::Value,
-) -> Result<(), String> {
+fn ensure_main_window_label(window_label: &str, action: &str) -> Result<(), String> {
+    if window_label == "main" {
+        Ok(())
+    } else {
+        Err(format!("Window '{window_label}' cannot {action}."))
+    }
+}
+
+fn developer_frame_to_game_event(frame: serde_json::Value) -> Result<GameEvent, String> {
     let event_name = frame
         .get("Event")
         .and_then(|event| event.as_str())
@@ -228,15 +232,21 @@ fn emit_developer_telemetry(
         .cloned()
         .unwrap_or(serde_json::Value::Null);
 
-    let event = Arc::new(GameEvent {
+    Ok(GameEvent {
         event: event_name,
         data,
-    });
-    if window.label() == "main" {
-        bus.publish(BusEvent::GameData(event));
-    } else {
-        bus.publish(BusEvent::PluginEvent(event));
-    }
+    })
+}
+
+#[tauri::command]
+fn emit_developer_telemetry(
+    window: tauri::Window,
+    bus: tauri::State<'_, Arc<EventBus>>,
+    frame: serde_json::Value,
+) -> Result<(), String> {
+    ensure_main_window_label(window.label(), "publish developer telemetry")?;
+    let event = Arc::new(developer_frame_to_game_event(frame)?);
+    bus.publish(BusEvent::GameData(event));
     Ok(())
 }
 
@@ -402,6 +412,7 @@ pub fn run() {
             read_package_webview_asset,
             get_package_webview_runtime_descriptor,
             push_package_webview_diagnostic,
+            emit_package_webview_event,
             call_service_export,
             plugin_registry_get,
             open_package_webview,
@@ -456,5 +467,34 @@ mod tests {
         assert!(labels.contains(&"main"));
         assert!(labels.contains(&"page-*"));
         assert!(labels.contains(&"plugin-webview-*"));
+    }
+
+    #[test]
+    fn developer_telemetry_is_main_window_only() {
+        assert!(super::ensure_main_window_label("main", "publish developer telemetry").is_ok());
+        assert!(super::ensure_main_window_label(
+            "plugin-webview-bakingrl-poc-settings",
+            "publish developer telemetry"
+        )
+        .unwrap_err()
+        .contains("cannot publish developer telemetry"));
+    }
+
+    #[test]
+    fn developer_frame_to_game_event_validates_event_name() {
+        let event = super::developer_frame_to_game_event(serde_json::json!({
+            "Event": " UpdateState ",
+            "Data": { "MatchGuid": "dev-frame" }
+        }))
+        .unwrap();
+
+        assert_eq!(event.event, "UpdateState");
+        assert_eq!(event.data["MatchGuid"], "dev-frame");
+        assert!(super::developer_frame_to_game_event(serde_json::json!({
+            "Event": " ",
+            "Data": {}
+        }))
+        .unwrap_err()
+        .contains("non-empty string Event"));
     }
 }
