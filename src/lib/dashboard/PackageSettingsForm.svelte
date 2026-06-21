@@ -42,7 +42,7 @@
   let currentConfiguration = $state<PackageConfigurationState>({
     packageId: "",
     title: "",
-    hasCustomPage: false,
+    hasSettingsWebview: false,
     schema: null,
     values: {},
     secrets: [],

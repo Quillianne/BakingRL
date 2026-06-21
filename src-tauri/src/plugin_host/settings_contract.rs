@@ -20,7 +20,7 @@ static SECRET_VALUE_CACHE: OnceLock<Mutex<HashMap<String, Option<String>>>> = On
 pub struct PackageConfigurationState {
     pub package_id: String,
     pub title: String,
-    pub has_custom_page: bool,
+    pub has_settings_webview: bool,
     pub schema: Option<Value>,
     pub values: Value,
     pub secrets: Vec<PackageSecretDescriptor>,
@@ -394,6 +394,24 @@ mod tests {
 
     fn v4_manifest(raw: serde_json::Value) -> PluginPackageManifest {
         PluginPackageManifest::parse(&raw.to_string()).unwrap()
+    }
+
+    #[test]
+    fn package_configuration_state_serializes_settings_webview_flag() {
+        let state = PackageConfigurationState {
+            package_id: "com.example.settings".to_string(),
+            title: "Settings".to_string(),
+            has_settings_webview: true,
+            schema: None,
+            values: serde_json::json!({}),
+            secrets: Vec::new(),
+            secret_store_available: true,
+            secret_store_error: None,
+        };
+        let serialized = serde_json::to_value(state).unwrap();
+
+        assert_eq!(serialized["hasSettingsWebview"], true);
+        assert!(serialized.get("hasCustomPage").is_none());
     }
 
     #[test]

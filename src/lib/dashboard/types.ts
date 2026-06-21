@@ -199,7 +199,7 @@ export type PackageSecretDescriptor = {
 export type PackageConfigurationState = {
   packageId: string;
   title: string;
-  hasCustomPage: boolean;
+  hasSettingsWebview: boolean;
   schema: JsonSchema | null;
   values: Record<string, unknown>;
   secrets: PackageSecretDescriptor[];

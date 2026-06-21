@@ -1315,7 +1315,7 @@ impl PluginHost {
         Ok(PackageConfigurationState {
             package_id,
             title,
-            has_custom_page: preferred_settings_webview_id(record).is_some(),
+            has_settings_webview: preferred_settings_webview_id(record).is_some(),
             schema,
             values,
             secrets,
