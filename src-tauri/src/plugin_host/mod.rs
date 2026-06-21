@@ -880,23 +880,10 @@ impl PluginHost {
     ) -> Result<serde_json::Value, String> {
         let records = self.records.lock().unwrap();
         self.require_enabled_record(&records, caller_package_id)?;
-        let packages = records
-            .values()
-            .filter(|record| record.descriptor.enabled && record.descriptor.error.is_none())
-            .map(|record| {
-                serde_json::json!({
-                    "id": record.manifest.id(),
-                    "name": record.manifest.name(),
-                    "version": record.manifest.version(),
-                    "author": record.manifest.author(),
-                    "bakingrlApi": record.manifest.compatibility().and_then(|compatibility| compatibility.runtime_api.as_deref()),
-                    "enabled": record.descriptor.enabled,
-                    "active": record.descriptor.enabled && record.descriptor.error.is_none(),
-                    "dependencies": record.manifest.dependencies_v4(),
-                })
-            })
-            .collect::<Vec<_>>();
-        Ok(serde_json::Value::Array(packages))
+        Ok(serde_json::Value::Array(runtime_packages_for_records(
+            &records,
+            caller_package_id,
+        )))
     }
 
     pub fn list_extension_points(
@@ -1777,6 +1764,70 @@ fn caller_depends_on(provider_package_id: &str, caller: &PackageRecord) -> bool 
         .any(|dependency| dependency.package_id == provider_package_id)
 }
 
+fn runtime_packages_for_records(
+    records: &HashMap<String, PackageRecord>,
+    caller_package_id: &str,
+) -> Vec<serde_json::Value> {
+    records
+        .values()
+        .filter(|record| record.descriptor.enabled && record.descriptor.error.is_none())
+        .map(|record| runtime_package_for_record(record, caller_package_id))
+        .collect()
+}
+
+fn runtime_package_for_record(
+    record: &PackageRecord,
+    caller_package_id: &str,
+) -> serde_json::Value {
+    let contributes = record.manifest.contributes_v4();
+    let package_id = record.manifest.id();
+    let resources = contributes
+        .resources
+        .iter()
+        .filter(|resource| {
+            package_id == caller_package_id
+                || resource.visibility
+                    == crate::plugin_package::manifest::PluginResourceVisibilityV4::Public
+        })
+        .map(|resource| {
+            let visibility = match resource.visibility {
+                crate::plugin_package::manifest::PluginResourceVisibilityV4::Public => "public",
+                crate::plugin_package::manifest::PluginResourceVisibilityV4::Private => "private",
+            };
+            serde_json::json!({
+                "id": resource.id,
+                "path": resource.path,
+                "paths": resource.paths,
+                "type": resource.resource_type,
+                "visibility": visibility,
+                "public": visibility == "public",
+                "metadata": resource.metadata,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    serde_json::json!({
+        "id": record.manifest.id(),
+        "name": record.manifest.name(),
+        "version": record.manifest.version(),
+        "author": record.manifest.author(),
+        "bakingrlApi": record.manifest.compatibility().and_then(|compatibility| compatibility.runtime_api.as_deref()),
+        "enabled": record.descriptor.enabled,
+        "active": record.descriptor.enabled && record.descriptor.error.is_none(),
+        "dependencies": record.manifest.dependencies_v4(),
+        "runtime": record.manifest.runtime_v4(),
+        "contributes": {
+            "settings": contributes.settings,
+            "services": contributes.services,
+            "commands": contributes.commands,
+            "extensionPoints": contributes.extension_points,
+            "contributions": contributes.contributions,
+            "resources": resources,
+            "webviews": contributes.webviews,
+        },
+    })
+}
+
 fn validate_resource_visibility_filter(visibility: Option<&str>) -> Result<(), String> {
     if let Some(visibility) = visibility {
         if !matches!(visibility, "public" | "private") {
@@ -2072,6 +2123,141 @@ mod tests {
 
         assert!(caller_depends_on("bakingrl.provider", &caller));
         assert!(!caller_depends_on("bakingrl.other", &caller));
+    }
+
+    #[test]
+    fn runtime_packages_expose_graph_without_foreign_private_resources() {
+        let caller = package_record(serde_json::json!({
+            "schemaVersion": "bakingrl.plugin/4",
+            "id": "bakingrl.consumer",
+            "name": "Consumer",
+            "version": "1.0.0",
+            "bakingrlApi": "2.2.0",
+            "dependencies": [
+                {
+                    "packageId": "bakingrl.provider"
+                }
+            ],
+            "contributes": {}
+        }));
+        let provider = package_record(serde_json::json!({
+            "schemaVersion": "bakingrl.plugin/4",
+            "id": "bakingrl.provider",
+            "name": "Provider",
+            "version": "1.0.0",
+            "bakingrlApi": "2.2.0",
+            "runtime": {
+                "node": {
+                    "entry": "dist/extension/index.js"
+                }
+            },
+            "contributes": {
+                "commands": [
+                    {
+                        "id": "open"
+                    }
+                ],
+                "services": [
+                    {
+                        "id": "providerService",
+                        "runtime": "node",
+                        "methods": ["snapshot"]
+                    }
+                ],
+                "extensionPoints": [
+                    {
+                        "id": "provider.items",
+                        "version": "1.0.0"
+                    }
+                ],
+                "contributions": [
+                    {
+                        "id": "localItem",
+                        "target": "bakingrl.provider/provider.items",
+                        "resources": ["publicJson"]
+                    }
+                ],
+                "resources": [
+                    {
+                        "id": "publicJson",
+                        "path": "resources/public.json",
+                        "type": "application/json",
+                        "visibility": "public"
+                    },
+                    {
+                        "id": "privateJson",
+                        "path": "resources/private.json",
+                        "type": "application/json",
+                        "visibility": "private"
+                    }
+                ],
+                "webviews": [
+                    {
+                        "id": "studio",
+                        "entry": "dist/webviews/studio.js"
+                    }
+                ]
+            }
+        }));
+        let records = HashMap::from([
+            ("bakingrl.consumer".to_string(), caller),
+            ("bakingrl.provider".to_string(), provider),
+        ]);
+
+        let foreign_view = runtime_packages_for_records(&records, "bakingrl.consumer");
+        let provider_summary = foreign_view
+            .iter()
+            .find(|package| package["id"] == "bakingrl.provider")
+            .unwrap();
+        assert_eq!(
+            provider_summary["runtime"]["node"]["entry"],
+            "dist/extension/index.js"
+        );
+        assert_eq!(
+            provider_summary["contributes"]["services"][0]["id"],
+            "providerService"
+        );
+        assert_eq!(
+            provider_summary["contributes"]["extensionPoints"][0]["id"],
+            "provider.items"
+        );
+        assert_eq!(
+            provider_summary["contributes"]["contributions"][0]["id"],
+            "localItem"
+        );
+        assert_eq!(
+            provider_summary["contributes"]["webviews"][0]["id"],
+            "studio"
+        );
+        assert_eq!(
+            provider_summary["contributes"]["resources"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|resource| resource["id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["publicJson"]
+        );
+
+        let owner_view = runtime_packages_for_records(&records, "bakingrl.provider");
+        let owner_summary = owner_view
+            .iter()
+            .find(|package| package["id"] == "bakingrl.provider")
+            .unwrap();
+        assert_eq!(
+            owner_summary["contributes"]["resources"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|resource| {
+                    (
+                        resource["id"].as_str().unwrap(),
+                        resource["public"].as_bool().unwrap(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            vec![("publicJson", true), ("privateJson", false)]
+        );
     }
 
     #[test]
