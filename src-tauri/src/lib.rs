@@ -437,3 +437,24 @@ pub fn run() {
             }
         });
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn default_capability_covers_plugin_webview_windows() {
+        let capability: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
+        let windows = capability
+            .get("windows")
+            .and_then(|value| value.as_array())
+            .unwrap();
+        let labels = windows
+            .iter()
+            .filter_map(|value| value.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(labels.contains(&"main"));
+        assert!(labels.contains(&"page-*"));
+        assert!(labels.contains(&"plugin-webview-*"));
+    }
+}
