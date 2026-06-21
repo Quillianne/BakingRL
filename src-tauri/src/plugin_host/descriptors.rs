@@ -7,6 +7,7 @@ use crate::plugin_package::manifest::{
     HOST_RUNTIME_API_VERSION, MIN_SUPPORTED_RUNTIME_API_VERSION,
 };
 
+use super::extension_host_runtime::ExtensionHostRuntimeStatus;
 use super::package_files::read_json_package_file;
 use super::settings_contract::secret_key_set;
 use super::sidecar_runtime::SidecarRuntimeStatus;
@@ -21,6 +22,8 @@ pub struct PackageDescriptor {
     pub version: String,
     pub author: Option<String>,
     pub runtime: Option<PluginRuntimeV4>,
+    #[serde(rename = "extensionHostStatus")]
+    pub extension_host_status: Option<ExtensionHostRuntimeStatus>,
     #[serde(rename = "sidecarStatuses")]
     pub sidecar_statuses: HashMap<String, SidecarRuntimeStatus>,
     pub contributes: Option<serde_json::Value>,
@@ -184,6 +187,7 @@ pub(super) fn descriptor_for_manifest(
         version: manifest.version().to_string(),
         author: manifest.author().map(ToOwned::to_owned),
         runtime: manifest.runtime_v4().cloned(),
+        extension_host_status: None,
         sidecar_statuses: HashMap::new(),
         contributes: manifest.contributes_value(),
         dependencies: manifest

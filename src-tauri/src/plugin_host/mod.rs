@@ -187,6 +187,8 @@ impl PluginHost {
             .values()
             .map(|record| record.descriptor.clone())
             .collect();
+        let extension_host_statuses = self.extension_host_runtimes.status_map();
+        apply_extension_host_runtime_statuses(&mut packages, &extension_host_statuses);
         let sidecar_statuses = self.sidecar_runtimes.status_map();
         apply_sidecar_runtime_statuses(&mut packages, &sidecar_statuses);
         self.apply_package_statuses(&mut packages);
@@ -1852,6 +1854,24 @@ fn apply_sidecar_runtime_statuses(
     }
 }
 
+fn apply_extension_host_runtime_statuses(
+    packages: &mut [PackageDescriptor],
+    statuses: &HashMap<String, extension_host_runtime::ExtensionHostRuntimeStatus>,
+) {
+    for package in packages {
+        package.extension_host_status = None;
+        if package
+            .runtime
+            .as_ref()
+            .and_then(|runtime| runtime.node.as_ref())
+            .is_none()
+        {
+            continue;
+        }
+        package.extension_host_status = statuses.get(&package.id).cloned();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1923,6 +1943,66 @@ mod tests {
             Some((true, Some(true), 2))
         );
         assert!(!packages[0].sidecar_statuses.contains_key("cold"));
+    }
+
+    #[test]
+    fn extension_host_runtime_statuses_are_attached_to_node_packages() {
+        let mut packages = vec![
+            package_record(serde_json::json!({
+                "schemaVersion": "bakingrl.plugin/4",
+                "id": "bakingrl.node",
+                "name": "Node",
+                "version": "1.0.0",
+                "bakingrlApi": "2.2.0",
+                "runtime": {
+                    "node": {
+                        "entry": "dist/extension/index.js"
+                    }
+                },
+                "contributes": {}
+            }))
+            .descriptor,
+            package_record(serde_json::json!({
+                "schemaVersion": "bakingrl.plugin/4",
+                "id": "bakingrl.content",
+                "name": "Content",
+                "version": "1.0.0",
+                "bakingrlApi": "2.2.0",
+                "contributes": {}
+            }))
+            .descriptor,
+        ];
+        let mut statuses = HashMap::new();
+        statuses.insert(
+            "bakingrl.node".to_string(),
+            extension_host_runtime::ExtensionHostRuntimeStatus {
+                state: extension_host_runtime::ExtensionHostRuntimeState::Running,
+                running: true,
+                ..extension_host_runtime::ExtensionHostRuntimeStatus::default()
+            },
+        );
+        statuses.insert(
+            "bakingrl.content".to_string(),
+            extension_host_runtime::ExtensionHostRuntimeStatus {
+                state: extension_host_runtime::ExtensionHostRuntimeState::Running,
+                running: true,
+                ..extension_host_runtime::ExtensionHostRuntimeStatus::default()
+            },
+        );
+
+        apply_extension_host_runtime_statuses(&mut packages, &statuses);
+
+        assert_eq!(
+            packages[0]
+                .extension_host_status
+                .as_ref()
+                .map(|status| (&status.state, status.running)),
+            Some((
+                &extension_host_runtime::ExtensionHostRuntimeState::Running,
+                true
+            ))
+        );
+        assert!(packages[1].extension_host_status.is_none());
     }
 
     #[test]

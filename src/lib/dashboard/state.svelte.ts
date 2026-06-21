@@ -27,6 +27,7 @@ import type {
   DeveloperTelemetryEntry,
   DeveloperTelemetryGroup,
   DeveloperTelemetrySort,
+  ExtensionHostRuntimeStatusEvent,
   PackageDescriptor,
   PendingInstall,
   PreparedPackageInstall,
@@ -778,6 +779,16 @@ export class DashboardState {
     });
   }
 
+  recordExtensionHostRuntimeStatus(event: ExtensionHostRuntimeStatusEvent) {
+    this.packages = this.packages.map((pkg) => {
+      if (pkg.id !== event.packageId) return pkg;
+      return {
+        ...pkg,
+        extensionHostStatus: event.status
+      };
+    });
+  }
+
   clearDeveloperErrors() {
     this.developerErrors = [];
   }
@@ -875,6 +886,7 @@ export class DashboardState {
     let unlistenTelemetry: (() => void) | undefined;
     let unlistenRuntimeErrors: (() => void) | undefined;
     let unlistenRuntimeLogs: (() => void) | undefined;
+    let unlistenExtensionHostStatuses: (() => void) | undefined;
     let unlistenSidecarStatuses: (() => void) | undefined;
 
     if (isTauriRuntime() && getCurrentWindow().label === "main") {
@@ -933,6 +945,11 @@ export class DashboardState {
     }).then((unlisten) => {
       unlistenRuntimeLogs = unlisten;
     });
+    void listen<ExtensionHostRuntimeStatusEvent>("bakingrl-extension-host-runtime-status", (event) => {
+      this.recordExtensionHostRuntimeStatus(event.payload);
+    }).then((unlisten) => {
+      unlistenExtensionHostStatuses = unlisten;
+    });
     void listen<SidecarRuntimeStatusEvent>("bakingrl-sidecar-runtime-status", (event) => {
       this.recordSidecarRuntimeStatus(event.payload);
     }).then((unlisten) => {
@@ -947,6 +964,7 @@ export class DashboardState {
       unlistenTelemetry?.();
       unlistenRuntimeErrors?.();
       unlistenRuntimeLogs?.();
+      unlistenExtensionHostStatuses?.();
       unlistenSidecarStatuses?.();
       this.clearPackageToggleTimers();
       this.clearDeveloperTelemetryFlushTimer();

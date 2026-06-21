@@ -35,6 +35,40 @@ const CRASH_WINDOW: Duration = Duration::from_secs(60);
 const RESTART_DELAY: Duration = Duration::from_millis(500);
 const STATE_HUB_FILE: &str = "runtime-state.json";
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExtensionHostRuntimeState {
+    Stopped,
+    Starting,
+    Running,
+    Stopping,
+    Crashed,
+}
+
+impl Default for ExtensionHostRuntimeState {
+    fn default() -> Self {
+        Self::Stopped
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtensionHostRuntimeStatus {
+    pub state: ExtensionHostRuntimeState,
+    pub running: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_exit_code: Option<i32>,
+    pub restart_count: u32,
+    pub crash_count: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at_ms: Option<u128>,
+}
+
+type ExtensionHostRuntimeStatusMap = HashMap<String, ExtensionHostRuntimeStatus>;
+type SharedExtensionHostRuntimeStatus = Arc<Mutex<ExtensionHostRuntimeStatusMap>>;
+
 #[derive(Debug, Error)]
 pub enum ExtensionHostRuntimeError {
     #[error("Unable to find Node.js on PATH or in prepared Tauri sidecar resources.")]
@@ -105,7 +139,10 @@ impl ExtensionHostRuntimeSpec {
 }
 
 struct ExtensionHostRuntimeHandle {
+    runtime_key: String,
     fingerprint: String,
+    app_handle: AppHandle,
+    statuses: SharedExtensionHostRuntimeStatus,
     shutdown: Option<mpsc::Sender<()>>,
     thread: Option<thread::JoinHandle<()>>,
 }
@@ -118,8 +155,16 @@ impl ExtensionHostRuntimeHandle {
     }
 
     fn shutdown(mut self) {
-        if let Some(shutdown) = self.shutdown.take() {
-            let _ = shutdown.send(());
+        let already_finished = self
+            .thread
+            .as_ref()
+            .is_some_and(thread::JoinHandle::is_finished);
+        if !already_finished {
+            let status = set_extension_host_stopping(&self.statuses, &self.runtime_key);
+            emit_extension_host_runtime_status(&self.app_handle, &self.runtime_key, status);
+            if let Some(shutdown) = self.shutdown.take() {
+                let _ = shutdown.send(());
+            }
         }
         if let Some(thread) = self.thread.take() {
             let start = Instant::now();
@@ -140,9 +185,14 @@ impl ExtensionHostRuntimeHandle {
 #[derive(Default)]
 pub struct ExtensionHostRuntimeManager {
     handles: Mutex<HashMap<String, ExtensionHostRuntimeHandle>>,
+    statuses: SharedExtensionHostRuntimeStatus,
 }
 
 impl ExtensionHostRuntimeManager {
+    pub fn status_map(&self) -> HashMap<String, ExtensionHostRuntimeStatus> {
+        self.statuses.lock().unwrap().clone()
+    }
+
     pub fn reload_with_app_handle(
         &self,
         specs: Vec<ExtensionHostRuntimeSpec>,
@@ -193,6 +243,7 @@ impl ExtensionHostRuntimeManager {
                 service_router.clone(),
                 sidecars.clone(),
                 diagnostics.clone(),
+                self.statuses.clone(),
             ) {
                 Ok(handle) => {
                     handles.insert(runtime_key, handle);
@@ -205,6 +256,13 @@ impl ExtensionHostRuntimeManager {
                         &runtime_key,
                         &err.to_string(),
                     );
+                    let status = set_extension_host_crashed(
+                        &self.statuses,
+                        &runtime_key,
+                        None,
+                        err.to_string(),
+                    );
+                    emit_extension_host_runtime_status(&app_handle, &runtime_key, status);
                     diagnostics.push(PluginDiagnosticInput {
                         package_id: Some(runtime_key.clone()),
                         source: "extensionHost".to_string(),
@@ -258,6 +316,7 @@ impl ExtensionHostRuntimeManager {
             service_router,
             sidecars,
             diagnostics,
+            self.statuses.clone(),
         )?;
         handles.insert(runtime_key, handle);
         Ok(())
@@ -307,6 +366,7 @@ struct ExtensionHostContext {
     service_call_tx: tokio_mpsc::Sender<ServiceCallRequest>,
     registered_services: Arc<Mutex<HashSet<String>>>,
     diagnostics: PluginDiagnosticsStore,
+    runtime_statuses: SharedExtensionHostRuntimeStatus,
     sidecars: SidecarRuntimeController,
     sidecar_specs: HashMap<String, SidecarRuntimeSpec>,
     webviews: HashMap<String, ExtensionHostWebviewSpec>,
@@ -458,9 +518,12 @@ fn spawn_extension_host_runtime(
     service_router: ServiceCallRouter,
     sidecars: SidecarRuntimeController,
     diagnostics: PluginDiagnosticsStore,
+    statuses: SharedExtensionHostRuntimeStatus,
 ) -> Result<ExtensionHostRuntimeHandle, ExtensionHostRuntimeError> {
     let runtime_key = spec.runtime_key();
     let fingerprint = format!("{spec:?}");
+    let status = set_extension_host_starting(&statuses, &runtime_key);
+    emit_extension_host_runtime_status(&app_handle, &runtime_key, status);
     let package_root = canonicalize_package_root(&spec.package_root)?;
     let entry_path = canonicalize_package_file(&package_root, &spec.entry_path)?;
     let node_path = resolve_node_path(&app_handle, spec.node_path.clone())?;
@@ -548,6 +611,7 @@ fn spawn_extension_host_runtime(
         service_call_tx,
         registered_services: Arc::new(Mutex::new(HashSet::new())),
         diagnostics,
+        runtime_statuses: statuses.clone(),
         sidecars,
         sidecar_specs,
         webviews,
@@ -580,18 +644,37 @@ fn spawn_extension_host_runtime(
         }
     }
 
-    let child = spawn_runtime_child(&launch)?;
+    let child = match spawn_runtime_child(&launch) {
+        Ok(child) => child,
+        Err(err) => {
+            let status = set_extension_host_crashed(&statuses, &runtime_key, None, err.to_string());
+            emit_extension_host_runtime_status(&app_handle, &runtime_key, status);
+            return Err(err);
+        }
+    };
     let (shutdown_tx, shutdown_rx) = mpsc::channel();
-    let thread = thread::Builder::new()
+    let thread = match thread::Builder::new()
         .name(format!("bakingrl-extension-host-{runtime_key}"))
         .spawn(move || supervise_runtime(launch, context, child, shutdown_rx))
-        .map_err(|source| ExtensionHostRuntimeError::Spawn {
-            runtime_key: runtime_key.clone(),
-            source,
-        })?;
+    {
+        Ok(thread) => thread,
+        Err(source) => {
+            let error = ExtensionHostRuntimeError::Spawn {
+                runtime_key: runtime_key.clone(),
+                source,
+            };
+            let status =
+                set_extension_host_crashed(&statuses, &runtime_key, None, error.to_string());
+            emit_extension_host_runtime_status(&app_handle, &runtime_key, status);
+            return Err(error);
+        }
+    };
 
     Ok(ExtensionHostRuntimeHandle {
+        runtime_key,
         fingerprint,
+        app_handle,
+        statuses,
         shutdown: Some(shutdown_tx),
         thread: Some(thread),
     })
@@ -811,7 +894,111 @@ fn exe_suffix() -> &'static str {
 enum ChildOutcome {
     Shutdown,
     ExitSuccess,
-    Crash(String),
+    Crash {
+        message: String,
+        exit_code: Option<i32>,
+    },
+}
+
+fn now_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default()
+}
+
+fn update_extension_host_status<F>(
+    statuses: &SharedExtensionHostRuntimeStatus,
+    package_id: &str,
+    update: F,
+) -> ExtensionHostRuntimeStatus
+where
+    F: FnOnce(&mut ExtensionHostRuntimeStatus),
+{
+    let mut statuses = statuses.lock().unwrap();
+    let status = statuses.entry(package_id.to_string()).or_default();
+    update(status);
+    status.updated_at_ms = Some(now_millis());
+    status.clone()
+}
+
+fn set_extension_host_starting(
+    statuses: &SharedExtensionHostRuntimeStatus,
+    package_id: &str,
+) -> ExtensionHostRuntimeStatus {
+    update_extension_host_status(statuses, package_id, |status| {
+        status.state = ExtensionHostRuntimeState::Starting;
+        status.running = false;
+        status.last_exit_code = None;
+        status.last_error = None;
+    })
+}
+
+fn set_extension_host_running(
+    statuses: &SharedExtensionHostRuntimeStatus,
+    package_id: &str,
+) -> ExtensionHostRuntimeStatus {
+    update_extension_host_status(statuses, package_id, |status| {
+        status.state = ExtensionHostRuntimeState::Running;
+        status.running = true;
+        status.last_exit_code = None;
+        status.last_error = None;
+    })
+}
+
+fn set_extension_host_stopping(
+    statuses: &SharedExtensionHostRuntimeStatus,
+    package_id: &str,
+) -> ExtensionHostRuntimeStatus {
+    update_extension_host_status(statuses, package_id, |status| {
+        status.state = ExtensionHostRuntimeState::Stopping;
+        status.running = true;
+    })
+}
+
+fn set_extension_host_stopped(
+    statuses: &SharedExtensionHostRuntimeStatus,
+    package_id: &str,
+    exit_code: Option<i32>,
+) -> ExtensionHostRuntimeStatus {
+    update_extension_host_status(statuses, package_id, |status| {
+        status.state = ExtensionHostRuntimeState::Stopped;
+        status.running = false;
+        status.last_exit_code = exit_code;
+        status.last_error = None;
+    })
+}
+
+fn set_extension_host_crashed(
+    statuses: &SharedExtensionHostRuntimeStatus,
+    package_id: &str,
+    exit_code: Option<i32>,
+    message: String,
+) -> ExtensionHostRuntimeStatus {
+    update_extension_host_status(statuses, package_id, |status| {
+        let is_same_crash = status.state == ExtensionHostRuntimeState::Crashed
+            && status.last_exit_code == exit_code
+            && status.last_error.as_deref() == Some(message.as_str());
+        status.state = ExtensionHostRuntimeState::Crashed;
+        status.running = false;
+        status.last_exit_code = exit_code;
+        if !is_same_crash {
+            status.crash_count += 1;
+        }
+        status.last_error = Some(message);
+    })
+}
+
+fn set_extension_host_restarting(
+    statuses: &SharedExtensionHostRuntimeStatus,
+    package_id: &str,
+) -> ExtensionHostRuntimeStatus {
+    update_extension_host_status(statuses, package_id, |status| {
+        status.state = ExtensionHostRuntimeState::Starting;
+        status.running = false;
+        status.last_exit_code = None;
+        status.restart_count += 1;
+    })
 }
 
 fn supervise_runtime(
@@ -830,6 +1017,17 @@ fn supervise_runtime(
                 Ok(child) => child,
                 Err(err) => {
                     let message = err.to_string();
+                    let status = set_extension_host_crashed(
+                        &context.runtime_statuses,
+                        &launch.runtime_key,
+                        None,
+                        message.clone(),
+                    );
+                    emit_extension_host_runtime_status(
+                        &context.app_handle,
+                        &launch.runtime_key,
+                        status,
+                    );
                     emit_runtime_error(
                         &context.app_handle,
                         "extensionHost",
@@ -850,7 +1048,7 @@ fn supervise_runtime(
 
         match supervise_child_once(&launch.runtime_key, running_child, &shutdown_rx, &context) {
             ChildOutcome::Shutdown | ChildOutcome::ExitSuccess => break,
-            ChildOutcome::Crash(message) => {
+            ChildOutcome::Crash { message, .. } => {
                 let now = Instant::now();
                 crashes.push_back(now);
                 while crashes
@@ -900,6 +1098,13 @@ fn supervise_runtime(
                     );
                     break;
                 }
+                let status =
+                    set_extension_host_restarting(&context.runtime_statuses, &launch.runtime_key);
+                emit_extension_host_runtime_status(
+                    &context.app_handle,
+                    &launch.runtime_key,
+                    status,
+                );
                 thread::sleep(RESTART_DELAY);
             }
         }
@@ -947,9 +1152,13 @@ fn supervise_child_once(
         )
     });
 
+    let status = set_extension_host_running(&context.runtime_statuses, runtime_key);
+    emit_extension_host_runtime_status(&context.app_handle, runtime_key, status);
     info!("Extension host runtime '{}' started.", runtime_key);
     let outcome = loop {
         if shutdown_rx.try_recv().is_ok() {
+            let status = set_extension_host_stopping(&context.runtime_statuses, runtime_key);
+            emit_extension_host_runtime_status(&context.app_handle, runtime_key, status);
             if let Some(stdin) = stdin.as_ref() {
                 send_jsonrpc_notification(stdin, "bakingrl/shutdown", serde_json::json!({}));
             }
@@ -968,26 +1177,52 @@ fn supervise_child_once(
                 }
             }
             info!("Extension host runtime '{}' stopped.", runtime_key);
+            let status = set_extension_host_stopped(&context.runtime_statuses, runtime_key, None);
+            emit_extension_host_runtime_status(&context.app_handle, runtime_key, status);
             break ChildOutcome::Shutdown;
         }
         match child.try_wait() {
             Ok(Some(status)) => {
+                let exit_code = status.code();
                 if status.success() {
                     info!(
                         "Extension host runtime '{}' exited with {}.",
                         runtime_key, status
                     );
+                    let status = set_extension_host_stopped(
+                        &context.runtime_statuses,
+                        runtime_key,
+                        exit_code,
+                    );
+                    emit_extension_host_runtime_status(&context.app_handle, runtime_key, status);
                     break ChildOutcome::ExitSuccess;
                 }
                 let message = format!("Extension host runtime exited with {status}.");
                 warn!("extensionHost '{}': {}", runtime_key, message);
-                break ChildOutcome::Crash(message);
+                let status = set_extension_host_crashed(
+                    &context.runtime_statuses,
+                    runtime_key,
+                    exit_code,
+                    message.clone(),
+                );
+                emit_extension_host_runtime_status(&context.app_handle, runtime_key, status);
+                break ChildOutcome::Crash { message, exit_code };
             }
             Ok(None) => thread::sleep(Duration::from_millis(100)),
             Err(err) => {
                 let message = format!("Unable to inspect extension host process: {err}");
                 error!("extensionHost '{}': {}", runtime_key, message);
-                break ChildOutcome::Crash(message);
+                let status = set_extension_host_crashed(
+                    &context.runtime_statuses,
+                    runtime_key,
+                    None,
+                    message.clone(),
+                );
+                emit_extension_host_runtime_status(&context.app_handle, runtime_key, status);
+                break ChildOutcome::Crash {
+                    message,
+                    exit_code: None,
+                };
             }
         }
     };
@@ -2114,6 +2349,22 @@ fn emit_runtime_log(app_handle: &AppHandle, kind: &str, source: &str, stream: &s
 
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+struct ExtensionHostRuntimeStatusPayload<'a> {
+    package_id: &'a str,
+    status: ExtensionHostRuntimeStatus,
+}
+
+fn emit_extension_host_runtime_status(
+    app_handle: &AppHandle,
+    package_id: &str,
+    status: ExtensionHostRuntimeStatus,
+) {
+    let payload = ExtensionHostRuntimeStatusPayload { package_id, status };
+    let _ = app_handle.emit("bakingrl-extension-host-runtime-status", payload);
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 struct RuntimeErrorPayload<'a> {
     kind: &'a str,
     source: &'a str,
@@ -2138,6 +2389,73 @@ fn emit_runtime_error(app_handle: &AppHandle, kind: &str, source: &str, message:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extension_host_runtime_status_tracks_lifecycle() {
+        let statuses = SharedExtensionHostRuntimeStatus::default();
+        let package_id = "com.pkg.extension";
+
+        let starting = set_extension_host_starting(&statuses, package_id);
+        assert_eq!(starting.state, ExtensionHostRuntimeState::Starting);
+        assert!(!starting.running);
+        assert_eq!(starting.crash_count, 0);
+
+        let running = set_extension_host_running(&statuses, package_id);
+        assert_eq!(running.state, ExtensionHostRuntimeState::Running);
+        assert!(running.running);
+        assert_eq!(running.last_error, None);
+
+        let crashed = set_extension_host_crashed(
+            &statuses,
+            package_id,
+            Some(42),
+            "process exited".to_string(),
+        );
+        assert_eq!(crashed.state, ExtensionHostRuntimeState::Crashed);
+        assert!(!crashed.running);
+        assert_eq!(crashed.last_exit_code, Some(42));
+        assert_eq!(crashed.crash_count, 1);
+        assert_eq!(crashed.last_error.as_deref(), Some("process exited"));
+
+        let restarting = set_extension_host_restarting(&statuses, package_id);
+        assert_eq!(restarting.state, ExtensionHostRuntimeState::Starting);
+        assert!(!restarting.running);
+        assert_eq!(restarting.restart_count, 1);
+        assert_eq!(restarting.crash_count, 1);
+
+        let stopped = set_extension_host_stopped(&statuses, package_id, Some(0));
+        assert_eq!(stopped.state, ExtensionHostRuntimeState::Stopped);
+        assert!(!stopped.running);
+        assert_eq!(stopped.last_exit_code, Some(0));
+        assert_eq!(stopped.last_error, None);
+        assert!(stopped.updated_at_ms.is_some());
+    }
+
+    #[test]
+    fn extension_host_runtime_status_serializes_dashboard_contract() {
+        let status = ExtensionHostRuntimeStatus {
+            state: ExtensionHostRuntimeState::Crashed,
+            running: false,
+            last_exit_code: Some(1),
+            restart_count: 2,
+            crash_count: 3,
+            last_error: Some("boom".to_string()),
+            updated_at_ms: Some(1234),
+        };
+
+        assert_eq!(
+            serde_json::to_value(status).unwrap(),
+            serde_json::json!({
+                "state": "crashed",
+                "running": false,
+                "lastExitCode": 1,
+                "restartCount": 2,
+                "crashCount": 3,
+                "lastError": "boom",
+                "updatedAtMs": 1234,
+            })
+        );
+    }
 
     #[test]
     fn telemetry_snapshot_prefers_latest_bus_game_event() {

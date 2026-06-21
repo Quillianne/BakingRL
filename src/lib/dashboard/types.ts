@@ -99,6 +99,18 @@ export type SidecarRuntimeStatus = {
   lastHealthCheckMs?: number | null;
 };
 
+export type ExtensionHostRuntimeState = "stopped" | "starting" | "running" | "stopping" | "crashed";
+
+export type ExtensionHostRuntimeStatus = {
+  state: ExtensionHostRuntimeState;
+  running: boolean;
+  lastExitCode?: number | null;
+  restartCount: number;
+  crashCount: number;
+  lastError?: string | null;
+  updatedAtMs?: number | null;
+};
+
 export type PluginRuntimeDescriptor = {
   node: PluginRuntimeNodeDescriptor | null;
   sidecars: PluginRuntimeSidecarDescriptor[];
@@ -128,6 +140,7 @@ export type PackageDescriptor = {
   version: string;
   author: string | null;
   runtime: PluginRuntimeDescriptor | null;
+  extensionHostStatus?: ExtensionHostRuntimeStatus | null;
   sidecarStatuses: Record<string, SidecarRuntimeStatus>;
   contributes: Record<string, unknown> | null;
   dependencies: PackageDependencyDescriptor[];
@@ -328,6 +341,11 @@ export type SidecarRuntimeStatusEvent = {
   sidecarId: string;
   sidecarRef: string;
   status: SidecarRuntimeStatus;
+};
+
+export type ExtensionHostRuntimeStatusEvent = {
+  packageId: string;
+  status: ExtensionHostRuntimeStatus;
 };
 
 export type DeveloperErrorEntry = {
