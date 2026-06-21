@@ -2,7 +2,6 @@
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import { invoke } from "@tauri-apps/api/core";
-  import { adapter } from "$lib/adapter/index";
   import { importPluginModule } from "$lib/pluginModuleLoader";
   import type { PackageConfigurationState } from "$lib/dashboard/types";
   import type { GameEventFrame } from "$lib/rlTelemetry";
@@ -27,6 +26,12 @@
   };
 
   type DiagnosticSeverity = "info" | "warning" | "error";
+
+  type PackageWebviewAssetPayload = {
+    contentsBase64: string;
+    contentType: string;
+    path: string;
+  };
 
   type ModuleSettings = Record<string, unknown> & {
     get(): Promise<Record<string, unknown>>;
@@ -93,6 +98,16 @@
       method,
       input: input ?? null
     });
+  }
+
+  async function packageAssetUrl(packageId: string, webviewId: string, relativePath: string) {
+    const asset = await invoke<PackageWebviewAssetPayload>("read_package_webview_asset", {
+      packageId,
+      webviewId,
+      relativePath
+    });
+    const contentType = asset.contentType.replace(/\s*;\s*/g, ";");
+    return `data:${contentType};base64,${asset.contentsBase64}`;
   }
 
   async function readPackageRegistry(key: string) {
@@ -317,7 +332,7 @@
           },
           assets: {
             url(ref: string) {
-              return adapter.packageFileUrl(descriptor.packageId, ref);
+              return packageAssetUrl(descriptor.packageId, descriptor.webviewId, ref);
             }
           },
           diagnostics,

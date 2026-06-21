@@ -16,8 +16,8 @@ use crate::plugin_host::{
     list_plugin_diagnostics, open_package_configuration, open_package_secrets,
     open_package_webview, packages_dir, plugin_registry_get, prepare_package_from_deep_link,
     prepare_package_from_git, prepare_package_from_url, push_package_webview_diagnostic,
-    read_package_webview_module_text, reload_packages, remove_package, save_app_settings,
-    save_package_settings, set_package_enabled, set_package_secret, PluginHost,
+    read_package_webview_asset, read_package_webview_module_text, reload_packages, remove_package,
+    save_app_settings, save_package_settings, set_package_enabled, set_package_secret, PluginHost,
 };
 use crate::registry::{registry_entries, registry_get, Registry};
 use std::env;
@@ -399,6 +399,7 @@ pub fn run() {
             remove_package,
             reload_packages,
             read_package_webview_module_text,
+            read_package_webview_asset,
             get_package_webview_runtime_descriptor,
             push_package_webview_diagnostic,
             call_service_export,

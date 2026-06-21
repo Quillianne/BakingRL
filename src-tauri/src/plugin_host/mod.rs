@@ -76,6 +76,14 @@ pub struct PackageWebviewRuntimeDescriptor {
     pub runtime_api: String,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageWebviewAssetPayload {
+    pub contents_base64: String,
+    pub content_type: String,
+    pub path: String,
+}
+
 #[derive(Debug)]
 struct PackageRecord {
     descriptor: PackageDescriptor,
@@ -810,6 +818,21 @@ impl PluginHost {
         let bytes = self.read_package_file(package_id, relative_path)?;
         String::from_utf8(bytes)
             .map_err(|e| format!("Package file '{relative_path}' is not valid UTF-8: {e}"))
+    }
+
+    pub fn read_package_webview_asset(
+        &self,
+        package_id: &str,
+        relative_path: &str,
+    ) -> Result<PackageWebviewAssetPayload, String> {
+        let safe_path = safe_package_relative_path(relative_path)?;
+        let safe_path = safe_path.to_string_lossy().to_string();
+        let bytes = self.read_package_file(package_id, &safe_path)?;
+        Ok(PackageWebviewAssetPayload {
+            contents_base64: BASE64_STANDARD.encode(bytes),
+            content_type: content_type_for_path(&safe_path).to_string(),
+            path: safe_path,
+        })
     }
 
     pub fn read_package_webview_module_text(
@@ -3238,6 +3261,26 @@ pub fn read_package_webview_module_text(
         ));
     }
     host.read_package_webview_module_text(&package_id, &webview_id, &relative_path)
+}
+
+#[tauri::command]
+pub fn read_package_webview_asset(
+    window: Window,
+    host: State<'_, Arc<PluginHost>>,
+    package_id: String,
+    webview_id: String,
+    relative_path: String,
+) -> Result<PackageWebviewAssetPayload, String> {
+    let expected_label = package_webview_window_label(&package_id, &webview_id);
+    if window.label() != expected_label {
+        return Err(format!(
+            "Window '{}' cannot read assets for webview '{}/{}'.",
+            window.label(),
+            package_id,
+            webview_id
+        ));
+    }
+    host.read_package_webview_asset(&package_id, &relative_path)
 }
 
 #[tauri::command]

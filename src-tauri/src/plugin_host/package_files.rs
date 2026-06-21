@@ -68,6 +68,19 @@ pub(super) fn read_binary_package_file(
     package_root: &Path,
     relative_path: &Path,
 ) -> Result<Vec<u8>, String> {
+    let resolved = resolve_package_file_path(package_root, relative_path)?;
+    fs::read(resolved).map_err(|e| {
+        format!(
+            "Unable to read package file '{}': {e}",
+            relative_path.display()
+        )
+    })
+}
+
+pub(super) fn resolve_package_file_path(
+    package_root: &Path,
+    relative_path: &Path,
+) -> Result<PathBuf, String> {
     let root = package_root
         .canonicalize()
         .map_err(|e| format!("Unable to resolve package root: {e}"))?;
@@ -96,12 +109,7 @@ pub(super) fn read_binary_package_file(
             relative_path.display()
         ));
     }
-    fs::read(resolved).map_err(|e| {
-        format!(
-            "Unable to read package file '{}': {e}",
-            relative_path.display()
-        )
-    })
+    Ok(resolved)
 }
 
 pub(super) fn read_package_file(
@@ -139,6 +147,46 @@ pub(super) fn read_json_package_file(
     let raw = read_package_file(package_root, relative_path)?;
     serde_json::from_str(&raw)
         .map_err(|e| format!("Package JSON file '{relative_path}' is invalid: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_package_file_path_stays_inside_package_root() {
+        let package_root = std::env::temp_dir().join("brl-package-file-resolve");
+        let asset_path = package_root.join("assets").join("logo.svg");
+        let _ = std::fs::remove_dir_all(&package_root);
+        std::fs::create_dir_all(asset_path.parent().unwrap()).unwrap();
+        std::fs::write(&asset_path, "<svg/>").unwrap();
+
+        let resolved =
+            resolve_package_file_path(&package_root, Path::new("assets/logo.svg")).unwrap();
+
+        assert_eq!(resolved, asset_path.canonicalize().unwrap());
+        let _ = std::fs::remove_dir_all(&package_root);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn resolve_package_file_path_rejects_symlink_escape() {
+        let package_root = std::env::temp_dir().join("brl-package-file-symlink");
+        let outside_root = std::env::temp_dir().join("brl-package-file-outside");
+        let _ = std::fs::remove_dir_all(&package_root);
+        let _ = std::fs::remove_dir_all(&outside_root);
+        std::fs::create_dir_all(&package_root).unwrap();
+        std::fs::create_dir_all(&outside_root).unwrap();
+        std::fs::write(outside_root.join("secret.txt"), "hidden").unwrap();
+        std::os::unix::fs::symlink(&outside_root, package_root.join("escape")).unwrap();
+
+        let error =
+            resolve_package_file_path(&package_root, Path::new("escape/secret.txt")).unwrap_err();
+
+        assert!(error.contains("escapes the package root"));
+        let _ = std::fs::remove_dir_all(&package_root);
+        let _ = std::fs::remove_dir_all(&outside_root);
+    }
 }
 
 pub(super) fn find_first_bundle(root: &Path) -> Result<PathBuf, String> {
