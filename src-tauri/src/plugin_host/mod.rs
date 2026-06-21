@@ -2747,6 +2747,27 @@ mod tests {
     }
 
     #[test]
+    fn package_webview_commands_require_exact_window_label() {
+        let label = package_webview_window_label("bakingrl.poc", "settings");
+
+        assert!(ensure_package_webview_window_label(
+            &label,
+            "bakingrl.poc",
+            "settings",
+            "read runtime descriptor"
+        )
+        .is_ok());
+        assert!(ensure_package_webview_window_label(
+            &label,
+            "bakingrl.poc",
+            "other",
+            "read runtime descriptor"
+        )
+        .unwrap_err()
+        .contains("cannot read runtime descriptor"));
+    }
+
+    #[test]
     fn plugin_namespaces_are_package_scoped_without_prefix_collisions() {
         assert!(key_is_in_plugin_namespace(
             "com.example.plugin",
@@ -2943,6 +2964,22 @@ fn ensure_admin_window_label(window_label: &str) -> Result<(), String> {
     } else {
         Err(format!(
             "Window '{window_label}' cannot call admin-only package APIs."
+        ))
+    }
+}
+
+fn ensure_package_webview_window_label(
+    window_label: &str,
+    package_id: &str,
+    webview_id: &str,
+    action: &str,
+) -> Result<(), String> {
+    let expected_label = package_webview_window_label(package_id, webview_id);
+    if window_label == expected_label {
+        Ok(())
+    } else {
+        Err(format!(
+            "Window '{window_label}' cannot {action} for webview '{package_id}/{webview_id}'."
         ))
     }
 }
@@ -3371,15 +3408,12 @@ pub fn read_package_webview_module_text(
     webview_id: String,
     relative_path: String,
 ) -> Result<String, String> {
-    let expected_label = package_webview_window_label(&package_id, &webview_id);
-    if window.label() != expected_label {
-        return Err(format!(
-            "Window '{}' cannot read module files for webview '{}/{}'.",
-            window.label(),
-            package_id,
-            webview_id
-        ));
-    }
+    ensure_package_webview_window_label(
+        window.label(),
+        &package_id,
+        &webview_id,
+        "read module files",
+    )?;
     host.read_package_webview_module_text(&package_id, &webview_id, &relative_path)
 }
 
@@ -3391,15 +3425,7 @@ pub fn read_package_webview_asset(
     webview_id: String,
     relative_path: String,
 ) -> Result<PackageWebviewAssetPayload, String> {
-    let expected_label = package_webview_window_label(&package_id, &webview_id);
-    if window.label() != expected_label {
-        return Err(format!(
-            "Window '{}' cannot read assets for webview '{}/{}'.",
-            window.label(),
-            package_id,
-            webview_id
-        ));
-    }
+    ensure_package_webview_window_label(window.label(), &package_id, &webview_id, "read assets")?;
     host.read_package_webview_asset(&package_id, &relative_path)
 }
 
@@ -3410,7 +3436,12 @@ pub fn get_package_webview_runtime_descriptor(
     package_id: String,
     webview_id: String,
 ) -> Result<PackageWebviewRuntimeDescriptor, String> {
-    ensure_window_label_can_access_package(host.inner().as_ref(), window.label(), &package_id)?;
+    ensure_package_webview_window_label(
+        window.label(),
+        &package_id,
+        &webview_id,
+        "read runtime descriptor",
+    )?;
     host.package_webview_runtime_descriptor(&package_id, &webview_id)
 }
 
@@ -3424,15 +3455,12 @@ pub fn push_package_webview_diagnostic(
     phase: Option<String>,
     message: String,
 ) -> Result<PluginDiagnosticEvent, String> {
-    let expected_label = package_webview_window_label(&package_id, &webview_id);
-    if window.label() != expected_label {
-        return Err(format!(
-            "Window '{}' cannot report diagnostics for webview '{}/{}'.",
-            window.label(),
-            package_id,
-            webview_id
-        ));
-    }
+    ensure_package_webview_window_label(
+        window.label(),
+        &package_id,
+        &webview_id,
+        "report diagnostics",
+    )?;
     host.push_package_webview_diagnostic(&package_id, &webview_id, severity, phase, message)
 }
 
@@ -3446,15 +3474,12 @@ pub fn emit_package_webview_event(
     event_name: String,
     payload: serde_json::Value,
 ) -> Result<(), String> {
-    let expected_label = package_webview_window_label(&package_id, &webview_id);
-    if window.label() != expected_label {
-        return Err(format!(
-            "Window '{}' cannot publish events for webview '{}/{}'.",
-            window.label(),
-            package_id,
-            webview_id
-        ));
-    }
+    ensure_package_webview_window_label(
+        window.label(),
+        &package_id,
+        &webview_id,
+        "publish events",
+    )?;
     host.can_package_write_event(&package_id, &event_name)?;
     bus.publish(BusEvent::PluginEvent(Arc::new(GameEvent {
         event: event_name,
