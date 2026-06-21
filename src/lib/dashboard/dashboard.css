@@ -1056,6 +1056,116 @@ pre {
   background: color-mix(in srgb, var(--danger) 10%, transparent);
 }
 
+.runtime-relation-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px;
+}
+
+.runtime-relation-card {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-dark) 28%, transparent);
+}
+
+.runtime-relation-head {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.runtime-relation-head h4 {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.runtime-relation-facts {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.runtime-relation-facts > div {
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+}
+
+.runtime-relation-facts dt,
+.runtime-relation-list span {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 750;
+  overflow-wrap: anywhere;
+}
+
+.runtime-relation-facts dt {
+  text-transform: uppercase;
+}
+
+.runtime-relation-facts dd {
+  margin: 4px 0 0;
+  color: var(--text-primary);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.runtime-relation-list {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.runtime-relation-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  gap: 8px;
+  min-width: 0;
+  align-items: start;
+  padding: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-panel-hover) 46%, transparent);
+}
+
+.runtime-relation-list strong {
+  display: block;
+  color: var(--text-secondary);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.runtime-relation-list span:not(.status-pill):not(.status-dot) {
+  display: block;
+  margin-top: 3px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.runtime-relation-error {
+  margin: 0;
+  padding: 9px;
+  border: 1px solid color-mix(in srgb, var(--danger) 42%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  color: var(--danger);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
 .package-detail-tabs {
   display: flex;
   flex-wrap: wrap;
@@ -2131,6 +2241,16 @@ code {
 
   .sidecar-runtime-head {
     align-items: stretch;
+    flex-direction: column;
+  }
+
+  .runtime-relation-head,
+  .runtime-relation-list li {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .runtime-relation-head {
     flex-direction: column;
   }
 

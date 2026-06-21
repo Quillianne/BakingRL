@@ -2,6 +2,8 @@
   import { invoke } from "@tauri-apps/api/core";
   import { getDashboardContext } from "$lib/dashboard/context";
   import type {
+    ExtensionHostRuntimeStatus,
+    PackageDependencyDescriptor,
     PackageDescriptor,
     PluginRuntimeSidecarDescriptor,
     SidecarRuntimeStatus
@@ -19,6 +21,15 @@
     title: string;
     count: number;
     rows: PackageContributionRow[];
+  };
+
+  type RelationStateClass = "connected" | "connecting" | "disconnected";
+
+  type PackageRelationRow = {
+    name: string;
+    meta?: string;
+    status: string;
+    statusClass: RelationStateClass;
   };
 
   let detailPackageId = $state<string | null>(null);
@@ -97,6 +108,110 @@
   function sidecarLastExitCode(status: SidecarRuntimeStatus | null) {
     if (!status || status.lastExitCode == null) return "n/a";
     return String(status.lastExitCode);
+  }
+
+  function extensionHostRuntimeStatus(pkg: PackageDescriptor): ExtensionHostRuntimeStatus | null {
+    return pkg.extensionHostStatus ?? null;
+  }
+
+  function extensionHostRuntimeClass(status: ExtensionHostRuntimeStatus | null): RelationStateClass {
+    if (!status) return "connecting";
+    if (status.running && status.state === "running") return "connected";
+    if (status.state === "crashed" || status.crashCount > 0 || status.lastError) return "disconnected";
+    return "connecting";
+  }
+
+  function extensionHostRuntimeLabel(status: ExtensionHostRuntimeStatus | null) {
+    if (!status) return dashboard.t("packages.extensionHostNotObserved");
+    if (status.running && status.state === "running") return dashboard.t("common.running");
+    if (status.state === "crashed" || status.crashCount > 0) return dashboard.t("packages.extensionHostCrashed");
+    if (status.state === "starting") return dashboard.t("common.connecting");
+    if (status.state === "stopping") return dashboard.t("packages.runtimeStopping");
+    return dashboard.t("common.stopped");
+  }
+
+  function dependencyStatusClass(dependency: PackageDependencyDescriptor): RelationStateClass {
+    if (dependency.status === "satisfied") return "connected";
+    if (dependency.status === "pending" || dependency.status === "optional_missing") return "connecting";
+    return "disconnected";
+  }
+
+  function dependencyStatusLabel(dependency: PackageDependencyDescriptor) {
+    switch (dependency.status) {
+      case "satisfied":
+        return dashboard.t("packages.dependencySatisfied");
+      case "optional_missing":
+        return dashboard.t("packages.dependencyOptionalMissing");
+      case "missing":
+        return dashboard.t("packages.dependencyMissing");
+      case "disabled":
+        return dashboard.t("packages.dependencyDisabled");
+      case "incompatible":
+        return dashboard.t("packages.dependencyIncompatible");
+      case "version_mismatch":
+        return dashboard.t("packages.dependencyVersionMismatch");
+      default:
+        return dashboard.t("packages.dependencyPending");
+    }
+  }
+
+  function packageLabel(packageId: string) {
+    const pkg = dashboard.packages.find((candidate) => candidate.id === packageId);
+    return pkg ? `${pkg.name} · ${pkg.id}` : packageId;
+  }
+
+  function dependencyMeta(dependency: PackageDependencyDescriptor) {
+    const parts = [
+      dependency.version ?? dashboard.t("packages.anyVersion"),
+      dependency.optional ? dashboard.t("packages.optionalDependency") : dashboard.t("packages.requiredDependency")
+    ];
+    if (dependency.message) parts.push(dependency.message);
+    return parts.join(" · ");
+  }
+
+  function dependencyRows(pkg: PackageDescriptor): PackageRelationRow[] {
+    return pkg.dependencies.map((dependency) => ({
+      name: packageLabel(dependency.package_id),
+      meta: dependencyMeta(dependency),
+      status: dependencyStatusLabel(dependency),
+      statusClass: dependencyStatusClass(dependency)
+    }));
+  }
+
+  function dependentRows(pkg: PackageDescriptor): PackageRelationRow[] {
+    return dashboard.packages
+      .filter((candidate) => candidate.id !== pkg.id)
+      .flatMap((candidate) =>
+        candidate.dependencies
+          .filter((dependency) => dependency.package_id === pkg.id)
+          .map((dependency) => ({
+            name: `${candidate.name} · ${candidate.id}`,
+            meta: dependencyMeta(dependency),
+            status: dependencyStatusLabel(dependency),
+            statusClass: dependencyStatusClass(dependency)
+          }))
+      );
+  }
+
+  function targetPackageId(target: string) {
+    return target.split("/", 1)[0] ?? "";
+  }
+
+  function incomingContributionRows(pkg: PackageDescriptor): PackageRelationRow[] {
+    return dashboard.packages
+      .filter((candidate) => candidate.id !== pkg.id)
+      .flatMap((provider) =>
+        provider.contributions.contributions
+          .filter((contribution) => targetPackageId(contribution.target) === pkg.id)
+          .map((contribution) => ({
+            name: `${contribution.title ?? contribution.name} · ${provider.name}`,
+            meta: contribution.kind
+              ? `${contribution.target} · ${contribution.kind}`
+              : contribution.target,
+            status: dashboard.packageDisplayStateLabel(provider),
+            statusClass: dashboard.packageDisplayStateClass(provider) as RelationStateClass
+          }))
+      );
   }
 
   async function openPackageWebview(pkg: PackageDescriptor, webviewId: string) {
@@ -424,6 +539,122 @@
           <span>{dashboard.t("packages.compatibility")}</span>
         </div>
       </div>
+
+      <section class="package-detail-section">
+        <div class="package-detail-section-head">
+          <h3>{dashboard.t("packages.runtimeRelationsTitle")}</h3>
+          <span class="section-count">
+            {dependencyRows(detailPackage).length + dependentRows(detailPackage).length + incomingContributionRows(detailPackage).length}
+          </span>
+        </div>
+        <div class="runtime-relation-grid">
+          <article class="runtime-relation-card">
+            <div class="runtime-relation-head">
+              <h4>{dashboard.t("packages.nodeRuntimeTitle")}</h4>
+              <span class="status-pill runtime-mini {extensionHostRuntimeClass(extensionHostRuntimeStatus(detailPackage))}">
+                <span class="status-dot"></span>
+                {extensionHostRuntimeLabel(extensionHostRuntimeStatus(detailPackage))}
+              </span>
+            </div>
+            {#if detailPackage.runtime?.node}
+              <dl class="runtime-relation-facts">
+                <div>
+                  <dt>{dashboard.t("packages.nodeRuntimeEntry")}</dt>
+                  <dd>{detailPackage.runtime.node.entry}</dd>
+                </div>
+                <div>
+                  <dt>{dashboard.t("packages.sidecarRestarts")}</dt>
+                  <dd>{extensionHostRuntimeStatus(detailPackage)?.restartCount ?? 0}</dd>
+                </div>
+                <div>
+                  <dt>{dashboard.t("packages.sidecarCrashes")}</dt>
+                  <dd>{extensionHostRuntimeStatus(detailPackage)?.crashCount ?? 0}</dd>
+                </div>
+              </dl>
+              {#if extensionHostRuntimeStatus(detailPackage)?.lastError}
+                <p class="runtime-relation-error">{extensionHostRuntimeStatus(detailPackage)?.lastError}</p>
+              {/if}
+            {:else}
+              <p class="empty-note">{dashboard.t("packages.nodeRuntimeNotDeclared")}</p>
+            {/if}
+          </article>
+
+          <article class="runtime-relation-card">
+            <div class="runtime-relation-head">
+              <h4>{dashboard.t("packages.dependenciesTitle")}</h4>
+              <span class="section-count">{dependencyRows(detailPackage).length}</span>
+            </div>
+            {#if dependencyRows(detailPackage).length}
+              <ul class="runtime-relation-list">
+                {#each dependencyRows(detailPackage) as row}
+                  <li>
+                    <div>
+                      <strong>{row.name}</strong>
+                      {#if row.meta}<span>{row.meta}</span>{/if}
+                    </div>
+                    <span class="status-pill runtime-mini {row.statusClass}">
+                      <span class="status-dot"></span>
+                      {row.status}
+                    </span>
+                  </li>
+                {/each}
+              </ul>
+            {:else}
+              <p class="empty-note">{dashboard.t("packages.noDependencies")}</p>
+            {/if}
+          </article>
+
+          <article class="runtime-relation-card">
+            <div class="runtime-relation-head">
+              <h4>{dashboard.t("packages.dependentsTitle")}</h4>
+              <span class="section-count">{dependentRows(detailPackage).length}</span>
+            </div>
+            {#if dependentRows(detailPackage).length}
+              <ul class="runtime-relation-list">
+                {#each dependentRows(detailPackage) as row}
+                  <li>
+                    <div>
+                      <strong>{row.name}</strong>
+                      {#if row.meta}<span>{row.meta}</span>{/if}
+                    </div>
+                    <span class="status-pill runtime-mini {row.statusClass}">
+                      <span class="status-dot"></span>
+                      {row.status}
+                    </span>
+                  </li>
+                {/each}
+              </ul>
+            {:else}
+              <p class="empty-note">{dashboard.t("packages.noDependents")}</p>
+            {/if}
+          </article>
+
+          <article class="runtime-relation-card">
+            <div class="runtime-relation-head">
+              <h4>{dashboard.t("packages.incomingContributionsTitle")}</h4>
+              <span class="section-count">{incomingContributionRows(detailPackage).length}</span>
+            </div>
+            {#if incomingContributionRows(detailPackage).length}
+              <ul class="runtime-relation-list">
+                {#each incomingContributionRows(detailPackage) as row}
+                  <li>
+                    <div>
+                      <strong>{row.name}</strong>
+                      {#if row.meta}<span>{row.meta}</span>{/if}
+                    </div>
+                    <span class="status-pill runtime-mini {row.statusClass}">
+                      <span class="status-dot"></span>
+                      {row.status}
+                    </span>
+                  </li>
+                {/each}
+              </ul>
+            {:else}
+              <p class="empty-note">{dashboard.t("packages.noIncomingContributions")}</p>
+            {/if}
+          </article>
+        </div>
+      </section>
 
       {#if packageSidecars(detailPackage).length}
         <section class="package-detail-section">
