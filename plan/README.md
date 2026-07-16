@@ -113,6 +113,9 @@ Le modele suit celui des extensions VS Code:
 
 ## Plateforme et SDK
 
+Le contrat normatif partage entre les quatre depots est decrit dans
+[`runtime-api-2.3.md`](runtime-api-2.3.md).
+
 - Faire evoluer la Runtime API de `2.2` vers `2.3`.
 - Ajouter un type de webview `surface` avec taille, position, ecran,
   transparence, always-on-top, click-through et redimensionnement.
