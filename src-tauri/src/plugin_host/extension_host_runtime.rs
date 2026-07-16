@@ -810,15 +810,25 @@ fn resolve_node_path(
         return Ok(path);
     }
 
-    let binary_name = format!("node-{}{}", target_triple(), exe_suffix());
     let mut candidates = Vec::new();
     if let Ok(resource_dir) = app_handle.path().resource_dir() {
-        candidates.push(resource_dir.join("bin").join(&binary_name));
-        candidates.push(resource_dir.join(&binary_name));
+        candidates.extend(bundled_node_candidates(
+            &resource_dir,
+            target_triple(),
+            exe_suffix(),
+        ));
     }
     if let Ok(current_dir) = std::env::current_dir() {
-        candidates.push(current_dir.join("src-tauri").join("bin").join(&binary_name));
-        candidates.push(current_dir.join("bin").join(&binary_name));
+        candidates.extend(bundled_node_candidates(
+            &current_dir.join("src-tauri"),
+            target_triple(),
+            exe_suffix(),
+        ));
+        candidates.extend(bundled_node_candidates(
+            &current_dir,
+            target_triple(),
+            exe_suffix(),
+        ));
     }
     for candidate in candidates {
         if candidate.exists() {
@@ -827,6 +837,17 @@ fn resolve_node_path(
     }
 
     which::which("node").map_err(|_| ExtensionHostRuntimeError::NodeNotFound)
+}
+
+fn bundled_node_candidates(root: &Path, triple: &str, suffix: &str) -> Vec<PathBuf> {
+    let installed_name = format!("node{suffix}");
+    let prepared_name = format!("node-{triple}{suffix}");
+    vec![
+        root.join("bin").join(&installed_name),
+        root.join(&installed_name),
+        root.join("bin").join(&prepared_name),
+        root.join(&prepared_name),
+    ]
 }
 
 fn resolve_bootstrap_path(app_handle: &AppHandle) -> Result<PathBuf, ExtensionHostRuntimeError> {
@@ -899,6 +920,25 @@ fn exe_suffix() -> &'static str {
         ".exe"
     } else {
         ""
+    }
+}
+
+#[cfg(test)]
+mod node_path_tests {
+    use super::bundled_node_candidates;
+    use std::path::Path;
+
+    #[test]
+    fn checks_tauri_installed_node_name_before_prepared_target_name() {
+        let candidates =
+            bundled_node_candidates(Path::new("resources"), "x86_64-pc-windows-msvc", ".exe");
+
+        assert_eq!(candidates[0], Path::new("resources/bin/node.exe"));
+        assert_eq!(candidates[1], Path::new("resources/node.exe"));
+        assert_eq!(
+            candidates[2],
+            Path::new("resources/bin/node-x86_64-pc-windows-msvc.exe")
+        );
     }
 }
 

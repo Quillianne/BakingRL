@@ -958,26 +958,24 @@ fn validate_manifest_runtime(
             resolved.package.id
         ));
     }
-    let mut manifest_sidecars = runtime
+    let manifest_sidecars = runtime
         .into_iter()
         .flat_map(|runtime| &runtime.sidecars)
         .map(|sidecar| (sidecar.id.clone(), sidecar.platforms.clone()))
         .collect::<Vec<_>>();
-    let mut catalogue_sidecars = resolved
+    let catalogue_sidecars = resolved
         .version
         .runtime
         .sidecars
         .iter()
         .map(|sidecar| (sidecar.id.clone(), sidecar.platforms.clone()))
         .collect::<Vec<_>>();
-    manifest_sidecars.sort();
-    catalogue_sidecars.sort();
-    if manifest_sidecars != catalogue_sidecars {
-        return Err(format!(
-            "Bundle sidecars do not match Marketplace for '{}'",
-            resolved.package.id
-        ));
-    }
+    validate_sidecar_runtime_concordance(
+        &resolved.package.id,
+        &resolved.artifact.platform,
+        &manifest_sidecars,
+        &catalogue_sidecars,
+    )?;
     let mut manifest_webviews = inspection
         .manifest
         .contributes_v4()
@@ -1000,6 +998,57 @@ fn validate_manifest_runtime(
             resolved.package.id
         ));
     }
+    Ok(())
+}
+
+fn validate_sidecar_runtime_concordance(
+    package_id: &str,
+    artifact_platform: &str,
+    manifest_sidecars: &[(String, Vec<String>)],
+    catalogue_sidecars: &[(String, Vec<String>)],
+) -> Result<(), String> {
+    let manifest_by_id = manifest_sidecars
+        .iter()
+        .map(|(id, platforms)| (id.as_str(), platforms))
+        .collect::<HashMap<_, _>>();
+    let catalogue_by_id = catalogue_sidecars
+        .iter()
+        .map(|(id, platforms)| (id.as_str(), platforms))
+        .collect::<HashMap<_, _>>();
+
+    if manifest_by_id.len() != catalogue_by_id.len()
+        || manifest_by_id
+            .keys()
+            .any(|id| !catalogue_by_id.contains_key(id))
+    {
+        return Err(format!(
+            "Bundle sidecars do not match Marketplace for '{package_id}'"
+        ));
+    }
+
+    for (id, manifest_platforms) in manifest_by_id {
+        let catalogue_platforms = catalogue_by_id[id];
+        let catalogue_supports_artifact = catalogue_platforms
+            .iter()
+            .any(|platform| platform == artifact_platform);
+        let manifest_supports_artifact = manifest_platforms.is_empty()
+            || manifest_platforms
+                .iter()
+                .any(|platform| platform == artifact_platform);
+        let manifest_only_declares_catalogue_platforms = manifest_platforms
+            .iter()
+            .all(|platform| catalogue_platforms.contains(platform));
+
+        if !catalogue_supports_artifact
+            || !manifest_supports_artifact
+            || !manifest_only_declares_catalogue_platforms
+        {
+            return Err(format!(
+                "Bundle sidecars do not match Marketplace for '{package_id}'"
+            ));
+        }
+    }
+
     Ok(())
 }
 
@@ -1397,6 +1446,44 @@ mod tests {
         for invalid in ["bakingrl", "a.-b", "a-.b", "a..b", "a--b", ".a", "a."] {
             assert!(validate_package_id(invalid).is_err(), "accepted {invalid}");
         }
+    }
+
+    #[test]
+    fn accepts_artifact_scoped_sidecar_against_multiplatform_catalogue() {
+        let manifest = vec![("gateway".to_string(), Vec::new())];
+        let catalogue = vec![(
+            "gateway".to_string(),
+            vec![
+                "darwin-arm64".to_string(),
+                "darwin-x64".to_string(),
+                "linux-x64".to_string(),
+                "windows-x64".to_string(),
+            ],
+        )];
+
+        assert!(validate_sidecar_runtime_concordance(
+            "bakingrl.obs-gateway",
+            "windows-x64",
+            &manifest,
+            &catalogue,
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn rejects_sidecar_when_catalogue_does_not_cover_selected_artifact() {
+        let manifest = vec![("gateway".to_string(), Vec::new())];
+        let catalogue = vec![("gateway".to_string(), vec!["linux-x64".to_string()])];
+
+        let error = validate_sidecar_runtime_concordance(
+            "bakingrl.obs-gateway",
+            "windows-x64",
+            &manifest,
+            &catalogue,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("Bundle sidecars do not match Marketplace"));
     }
 
     #[test]
