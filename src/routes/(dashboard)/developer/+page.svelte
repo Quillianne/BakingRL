@@ -259,11 +259,12 @@
 </script>
 
 <div class="developer-page">
-  <div class="page-title">
+  <header class="page-title control-page-title">
     <div>
+      <span class="page-index">03 / BakingRL</span>
       <h1>{dashboard.t("nav.developer")}</h1>
     </div>
-  </div>
+  </header>
 
   <div class="developer-layout">
     <div class="developer-column developer-tools-column">

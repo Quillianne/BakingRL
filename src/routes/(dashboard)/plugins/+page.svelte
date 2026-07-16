@@ -1,5 +1,18 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
+  import {
+    ExternalLink,
+    FolderOpen,
+    LockKeyhole,
+    MonitorUp,
+    Power,
+    RefreshCw,
+    ScanSearch,
+    Search,
+    Settings2,
+    Trash2,
+    X
+  } from "@lucide/svelte";
   import { getDashboardContext } from "$lib/dashboard/context";
   import type {
     ExtensionHostRuntimeStatus,
@@ -378,27 +391,24 @@
   }
 </script>
 
-<div class="page-title">
+<header class="page-title control-page-title">
   <div>
+    <span class="page-index">02 / BakingRL</span>
     <h1>{dashboard.t("marketplace.pluginsTitle")}</h1>
   </div>
   <button
-    class="btn-secondary"
+    class="icon-button"
     onclick={() =>
       void (pluginView === "installed"
         ? dashboard.reloadPackages()
         : dashboard.refreshMarketplace(true, true))}
     disabled={dashboard.busy || dashboard.marketplaceLoading}
+    aria-label={pluginView === "installed" ? dashboard.t("common.reload") : dashboard.t("marketplace.refresh")}
+    title={pluginView === "installed" ? dashboard.t("common.reload") : dashboard.t("marketplace.refresh")}
   >
-    <svg class="reload-icon" class:spinning={dashboard.packagesReloading || dashboard.marketplaceLoading} viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
-      <path d="M21 12a9 9 0 0 1-15.5 6"></path>
-      <path d="M3 12a9 9 0 0 1 15.5-6"></path>
-      <path d="M18 3v6h-6"></path>
-      <path d="M6 21v-6h6"></path>
-    </svg>
-    {pluginView === "installed" ? dashboard.t("common.reload") : dashboard.t("marketplace.refresh")}
+    <RefreshCw size={16} strokeWidth={1.8} class={dashboard.packagesReloading || dashboard.marketplaceLoading ? "spinning" : ""} />
   </button>
-</div>
+</header>
 
 <div class="plugin-view-tabs" role="tablist" aria-label={dashboard.t("marketplace.pluginsTitle")}>
   <button
@@ -418,7 +428,7 @@
     onclick={() => (pluginView = "installed")}
   >
     {dashboard.t("marketplace.tabInstalled")}
-    <span>{dashboard.packages.length}</span>
+    <small>{dashboard.packages.length}</small>
   </button>
   <button
     type="button"
@@ -428,17 +438,14 @@
     onclick={() => (pluginView = "updates")}
   >
     {dashboard.t("marketplace.tabUpdates")}
-    {#if marketplaceUpdates.length}<span>{marketplaceUpdates.length}</span>{/if}
+    {#if marketplaceUpdates.length}<small>{marketplaceUpdates.length}</small>{/if}
   </button>
 </div>
 
 {#if pluginView === "marketplace" || pluginView === "updates"}
   <div class="marketplace-toolbar">
     <label class="marketplace-search">
-      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-        <circle cx="11" cy="11" r="7"></circle>
-        <path d="m20 20-3.5-3.5"></path>
-      </svg>
+      <Search size={16} strokeWidth={1.8} aria-hidden="true" />
       <input
         bind:value={marketplaceQuery}
         aria-label={dashboard.t("marketplace.searchPlaceholder")}
@@ -468,7 +475,7 @@
   {#if dashboard.marketplaceLoading && !dashboard.marketplaceSnapshot}
     <div class="empty-state"><p>{dashboard.t("common.loading")}</p></div>
   {:else if displayedMarketplacePackages.length}
-    <div class="marketplace-grid">
+    <div class="marketplace-list">
       {#each displayedMarketplacePackages as pkg (pkg.id)}
         {@const listing = pkg.listing.snapshot}
         {@const latest = latestMarketplaceVersion(pkg)}
@@ -478,30 +485,25 @@
             {#if listing.media.icon}
               <img src={listing.media.icon.url} alt="" />
             {:else}
-              <span>{listing.displayName.slice(0, 1).toLocaleUpperCase()}</span>
+              <span>{listing.displayName.slice(0, 2).toLocaleUpperCase()}</span>
             {/if}
           </div>
           <div class="marketplace-item-main">
             <div class="marketplace-item-heading">
-              <div>
-                <h2>{listing.displayName}</h2>
-                <p>{developer?.name ?? pkg.developerId} · {marketplaceVerificationLabel(pkg)}</p>
-              </div>
-              <span class="version">{latest ? `v${latest.version}` : "n/a"}</span>
+              <h2>{listing.displayName}</h2>
+              <span class="marketplace-flags">
+                {#if dashboard.marketplaceSnapshot?.catalogue.sections.recommended.includes(pkg.id)}
+                  {dashboard.t("marketplace.recommended")}
+                {/if}
+                {#if dashboard.marketplaceSnapshot?.catalogue.sections.new.includes(pkg.id)}
+                  {dashboard.t("marketplace.new")}
+                {/if}
+              </span>
             </div>
             <p class="marketplace-description">{listing.shortDescription}</p>
-            <div class="marketplace-tag-row">
-              {#if dashboard.marketplaceSnapshot?.catalogue.sections.recommended.includes(pkg.id)}
-                <span class="badge success">{dashboard.t("marketplace.recommended")}</span>
-              {/if}
-              {#if dashboard.marketplaceSnapshot?.catalogue.sections.new.includes(pkg.id)}
-                <span class="badge route">{dashboard.t("marketplace.new")}</span>
-              {/if}
-              {#each listing.tags.slice(0, 3) as tag}
-                <span class="marketplace-tag">{tag}</span>
-              {/each}
-            </div>
+            <p class="marketplace-publisher">{developer?.name ?? pkg.developerId} / {marketplaceVerificationLabel(pkg)}</p>
           </div>
+          <span class="marketplace-version">{latest ? `v${latest.version}` : "n/a"}</span>
           <button
             class={isMarketplaceUpdate(pkg) ? "btn-primary" : "btn-secondary"}
             onclick={() => void dashboard.prepareMarketplaceInstall([pkg.id])}
@@ -518,122 +520,63 @@
     </div>
   {/if}
 {:else}
-<div class="studio-grid two-col">
-  <section>
+<div class="installed-workspace">
+  <section class="installed-registry">
+    <header class="installed-registry-head">
+      <span>{dashboard.t("packages.installedTitle")}</span>
+      <strong>{dashboard.packages.length}</strong>
+    </header>
     {#if dashboard.packages.length}
-      <div class="card-grid">
-        {#each dashboard.packages as pkg (pkg.id)}
+      <div class="package-registry-list">
+        {#each dashboard.packages as pkg, index (pkg.id)}
           <article
-            class="studio-card package-card"
+            class="package-registry-row"
             class:disabled={!dashboard.isPackageEnabled(pkg)}
             title={`${dashboard.contributionCount(pkg)} ${dashboard.t("packages.elements")}`}
           >
-            <div class="package-head">
-              <div class="package-meta">
-                <div class="package-title-row">
-                  <h3>{pkg.name}</h3>
-                  <span class="status-pill {dashboard.packageDisplayStateClass(pkg)}" title={dashboard.packageDisplayStateTitle(pkg)}>
-                    <span class="status-dot"></span>
-                    {dashboard.packageDisplayStateLabel(pkg)}
-                  </span>
-                  <div class="package-card-tools">
-                    {#if pkg.contributions.webviews.length}
-                      <button
-                        class="icon-button"
-                        onclick={() => void openPrimaryPackageWebview(pkg)}
-                        disabled={!dashboard.isPackageEnabled(pkg) || !dashboard.isPackageCompatible(pkg)}
-                        title={dashboard.t("packages.openWebview")}
-                        aria-label={dashboard.t("packages.openWebview")}
-                      >
-                        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                          <rect x="3" y="4" width="18" height="14" rx="2"></rect>
-                          <path d="M8 20h8"></path>
-                          <path d="M12 18v2"></path>
-                        </svg>
-                      </button>
-                    {/if}
-                    {#if pkg.has_public_settings}
-                      <button
-                        class="icon-button"
-                        onclick={() => openPackageConfiguration(pkg)}
-                        disabled={dashboard.isPackageDeleting(pkg)}
-                        title={dashboard.t("packages.configuration")}
-                        aria-label={dashboard.t("packages.configuration")}
-                      >
-                        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                          <path d="M9.67 4.14a2.34 2.34 0 0 1 4.66 0 2.34 2.34 0 0 0 3.32 1.91 2.34 2.34 0 0 1 2.33 4.03 2.34 2.34 0 0 0 0 3.84 2.34 2.34 0 0 1-2.33 4.03 2.34 2.34 0 0 0-3.32 1.91 2.34 2.34 0 0 1-4.66 0 2.34 2.34 0 0 0-3.32-1.91 2.34 2.34 0 0 1-2.33-4.03 2.34 2.34 0 0 0 0-3.84 2.34 2.34 0 0 1 2.33-4.03 2.34 2.34 0 0 0 3.32-1.91Z"></path>
-                          <circle cx="12" cy="12" r="3"></circle>
-                        </svg>
-                      </button>
-                    {/if}
-                    {#if pkg.has_secrets}
-                      <button
-                        class="icon-button secret"
-                        onclick={() => openPackageSecrets(pkg)}
-                        disabled={dashboard.isPackageDeleting(pkg)}
-                        title={dashboard.t("packages.secrets")}
-                        aria-label={dashboard.t("packages.secrets")}
-                      >
-                        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                          <rect x="5" y="10" width="14" height="10" rx="2"></rect>
-                          <path d="M8 10V7a4 4 0 0 1 8 0v3"></path>
-                          <path d="M12 14v2"></path>
-                        </svg>
-                      </button>
-                    {/if}
-                    <button
-                      class="icon-button danger"
-                      onclick={() => dashboard.removePackage(pkg)}
-                      disabled={dashboard.isPackageActionDisabled(pkg)}
-                      title={dashboard.t("common.remove")}
-                      aria-label={dashboard.t("common.remove")}
-                    >
-                      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M3 6h18"></path>
-                        <path d="M8 6V4h8v2"></path>
-                        <path d="M19 6l-1 14H6L5 6"></path>
-                        <path d="M10 11v5"></path>
-                        <path d="M14 11v5"></path>
-                      </svg>
-                    </button>
-                  </div>
-                </div>
-                <p>{dashboard.t("packages.by")} {pkg.author ?? dashboard.t("packages.unknownAuthor")} · v{pkg.version}</p>
-              </div>
+            <span class="package-row-index">{String(index + 1).padStart(2, "0")}</span>
+            <i class={dashboard.packageDisplayStateClass(pkg)} aria-hidden="true"></i>
+
+            <div class="package-row-identity">
+              <h3>{pkg.name}</h3>
+              <p>{pkg.id} / v{pkg.version} / {pkg.author ?? dashboard.t("packages.unknownAuthor")}</p>
+              {#if pkg.error}<small class="package-row-error">{pkg.error}</small>{/if}
             </div>
 
-            {#if pkg.error}
-              <div class="callout">
-                <strong>{dashboard.t("common.error")}</strong>
-                <span>{pkg.error}</span>
-              </div>
-            {/if}
+            <div class="package-row-runtime">
+              {#if pkg.runtime?.node}<span>Node</span>{/if}
+              {#if packageSidecars(pkg).length}<span>{packageSidecars(pkg).length} sidecar</span>{/if}
+              {#if pkg.contributions.webviews.length}<span>{pkg.contributions.webviews.length} webview</span>{/if}
+            </div>
 
-            {#if packageSidecars(pkg).length}
-              <div class="package-runtime-strip" aria-label={dashboard.t("packages.sidecarRuntimeTitle")}>
-                {#each packageSidecars(pkg) as sidecar}
-                  {@const status = sidecarStatus(pkg, sidecar.id)}
-                  <span
-                    class="status-pill runtime-mini {sidecarRuntimeClass(status)}"
-                    title={sidecarRuntimeTitle(sidecar, status)}
-                  >
-                    <span class="status-dot"></span>
-                    {sidecar.id}
-                  </span>
-                {/each}
-              </div>
-            {/if}
+            <span class="package-row-state" title={dashboard.packageDisplayStateTitle(pkg)}>
+              {dashboard.packageDisplayStateLabel(pkg)}
+            </span>
 
-            <div class="card-actions package-actions">
-              <button class="btn-outline" onclick={() => openPackageDetails(pkg)}>
-                {dashboard.t("packages.details")}
+            <div class="package-card-tools">
+              <button class="icon-button" onclick={() => openPackageDetails(pkg)} title={dashboard.t("packages.details")} aria-label={dashboard.t("packages.details")}>
+                <ScanSearch size={15} strokeWidth={1.8} />
               </button>
-              <button
-                class={dashboard.isPackageToggleButtonEnabled(pkg) ? "btn-secondary" : "btn-primary"}
-                onclick={() => void dashboard.togglePackage(pkg)}
-                disabled={dashboard.isPackageToggleDisabled(pkg) || dashboard.isPackageTogglePending(pkg)}
-              >
-                {dashboard.isPackageToggleButtonEnabled(pkg) ? dashboard.t("common.disable") : dashboard.t("common.enable")}
+              {#if pkg.contributions.webviews.length}
+                <button class="icon-button" onclick={() => void openPrimaryPackageWebview(pkg)} disabled={!dashboard.isPackageEnabled(pkg) || !dashboard.isPackageCompatible(pkg)} title={dashboard.t("packages.openWebview")} aria-label={dashboard.t("packages.openWebview")}>
+                  <MonitorUp size={15} strokeWidth={1.8} />
+                </button>
+              {/if}
+              {#if pkg.has_public_settings}
+                <button class="icon-button" onclick={() => openPackageConfiguration(pkg)} disabled={dashboard.isPackageDeleting(pkg)} title={dashboard.t("packages.configuration")} aria-label={dashboard.t("packages.configuration")}>
+                  <Settings2 size={15} strokeWidth={1.8} />
+                </button>
+              {/if}
+              {#if pkg.has_secrets}
+                <button class="icon-button secret" onclick={() => openPackageSecrets(pkg)} disabled={dashboard.isPackageDeleting(pkg)} title={dashboard.t("packages.secrets")} aria-label={dashboard.t("packages.secrets")}>
+                  <LockKeyhole size={15} strokeWidth={1.8} />
+                </button>
+              {/if}
+              <button class="icon-button danger" onclick={() => dashboard.removePackage(pkg)} disabled={dashboard.isPackageActionDisabled(pkg)} title={dashboard.t("common.remove")} aria-label={dashboard.t("common.remove")}>
+                <Trash2 size={15} strokeWidth={1.8} />
+              </button>
+              <button class="icon-button package-power" onclick={() => void dashboard.togglePackage(pkg)} disabled={dashboard.isPackageToggleDisabled(pkg) || dashboard.isPackageTogglePending(pkg)} title={dashboard.isPackageToggleButtonEnabled(pkg) ? dashboard.t("common.disable") : dashboard.t("common.enable")} aria-label={dashboard.isPackageToggleButtonEnabled(pkg) ? dashboard.t("common.disable") : dashboard.t("common.enable")}>
+                <Power size={15} strokeWidth={1.9} />
               </button>
             </div>
           </article>
@@ -646,15 +589,14 @@
     {/if}
   </section>
 
-  <aside class="studio-panel install-panel">
-    <div class="panel-heading">
-      <div>
-        <h2>{dashboard.t("packages.installTitle")}</h2>
-      </div>
-    </div>
+  <aside class="install-console">
+    <header class="installed-registry-head">
+      <span>{dashboard.t("packages.installTitle")}</span>
+      <FolderOpen size={15} strokeWidth={1.8} />
+    </header>
 
-    <div class="section-stack">
-      <div class="input-group">
+    <div class="install-source-list">
+      <section class="install-source">
         <label for="bundlePath">{dashboard.t("packages.localFile")}</label>
         <div class="form-row">
           <input
@@ -665,35 +607,37 @@
             onclick={() => void dashboard.chooseInstallFile()}
             disabled={dashboard.busy}
           />
-          <button class="btn-secondary" onclick={() => void dashboard.chooseInstallFile()} disabled={dashboard.busy}>
-            {dashboard.t("common.browse")}
+          <button class="icon-button" onclick={() => void dashboard.chooseInstallFile()} disabled={dashboard.busy} title={dashboard.t("common.browse")} aria-label={dashboard.t("common.browse")}>
+            <FolderOpen size={15} strokeWidth={1.8} />
           </button>
           <button class="btn-primary" onclick={() => void dashboard.inspectInstallFile()} disabled={dashboard.busy || !dashboard.bundlePath.trim()}>
+            <ScanSearch size={15} strokeWidth={1.8} />
             {dashboard.t("common.inspect")}
           </button>
         </div>
-      </div>
+      </section>
 
-      <div class="input-group">
+      <section class="install-source">
         <label for="bundleUrl">{dashboard.t("packages.directUrl")}</label>
         <div class="form-row">
           <input id="bundleUrl" bind:value={dashboard.bundleUrl} placeholder="https://example.com/plugin.brlp" disabled={dashboard.busy} />
-          <button class="btn-primary" onclick={() => void dashboard.installFromUrl()} disabled={dashboard.busy || !dashboard.bundleUrl.trim()}>
-            {dashboard.t("common.inspect")}
+          <button class="icon-button" onclick={() => void dashboard.installFromUrl()} disabled={dashboard.busy || !dashboard.bundleUrl.trim()} title={dashboard.t("common.inspect")} aria-label={dashboard.t("common.inspect")}>
+            <ExternalLink size={15} strokeWidth={1.8} />
           </button>
         </div>
-      </div>
+      </section>
 
-      <div class="input-group">
+      <section class="install-source">
         <label for="gitRepo">{dashboard.t("packages.gitRepo")}</label>
         <input id="gitRepo" bind:value={dashboard.gitRepo} placeholder="https://github.com/user/repo" disabled={dashboard.busy} />
         <div class="form-row">
           <input bind:value={dashboard.gitRev} placeholder={dashboard.t("packages.gitRevPlaceholder")} disabled={dashboard.busy} />
           <button class="btn-primary" onclick={() => void dashboard.installFromGit()} disabled={dashboard.busy || !dashboard.gitRepo.trim()}>
+            <ScanSearch size={15} strokeWidth={1.8} />
             {dashboard.t("common.inspect")}
           </button>
         </div>
-      </div>
+      </section>
     </div>
   </aside>
 </div>
@@ -726,10 +670,7 @@
           <p>v{detailPackage.version} · {dashboard.t("packages.by")} {detailPackage.author ?? dashboard.t("packages.unknownAuthor")}</p>
         </div>
         <button type="button" class="icon-button package-detail-close" aria-label={dashboard.t("common.cancel")} onclick={closePackageDetails}>
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M18 6 6 18"></path>
-            <path d="m6 6 12 12"></path>
-          </svg>
+          <X size={16} strokeWidth={1.8} />
         </button>
       </div>
 

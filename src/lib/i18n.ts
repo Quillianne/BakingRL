@@ -18,6 +18,8 @@ const en = {
   "shell.packagesDirLoading": "Loading package directory...",
   "shell.systemVitals": "System Vitals",
   "shell.workspaceName": "Broadcast workspace",
+  "shell.telemetry": "RL Telemetry",
+  "shell.runtimeApi": "Runtime API",
 
   "home.title": "Home",
   "home.desc": "Runtime, telemetry, packages, and diagnostics.",
@@ -248,6 +250,7 @@ const en = {
   "developer.frameJson": "Frame JSON",
   "developer.sendFrame": "Send Frame",
   "developer.runtimeApiVersion": "Runtime API version",
+  "developer.supportedRuntimeApi": "Supported range",
 
   "settings.appearance": "Appearance",
   "settings.appearanceDesc": "Theme, language and interface style",
@@ -322,6 +325,8 @@ const fr: Record<TranslationKey, string> = {
   "shell.packagesDirLoading": "Chargement du dossier packages...",
   "shell.systemVitals": "Vitals système",
   "shell.workspaceName": "Espace de diffusion",
+  "shell.telemetry": "RL Telemetry",
+  "shell.runtimeApi": "Runtime API",
 
   "home.title": "Accueil",
   "home.desc": "Runtime, telemetry, packages et diagnostics.",
@@ -552,6 +557,7 @@ const fr: Record<TranslationKey, string> = {
   "developer.frameJson": "Frame JSON",
   "developer.sendFrame": "Envoyer la frame",
   "developer.runtimeApiVersion": "Version runtime API",
+  "developer.supportedRuntimeApi": "Plage supportée",
 
   "settings.appearance": "Apparence",
   "settings.appearanceDesc": "Thème, langue et style d'interface",

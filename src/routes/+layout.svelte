@@ -4,6 +4,7 @@
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { Minus, Square, X } from "@lucide/svelte";
   import { applyTheme, getStoredTheme } from "$lib/themes";
 
   let { children } = $props();
@@ -88,19 +89,13 @@
   <div class="app-window-frame" role="presentation" onpointerdown={startWindowDrag}>
     <div class="app-window-controls">
       <button type="button" class="app-window-control" aria-label="Réduire" title="Réduire" onclick={minimizeWindow}>
-        <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
-          <path d="M2 6h8" />
-        </svg>
+        <Minus size={13} strokeWidth={1.8} aria-hidden="true" />
       </button>
       <button type="button" class="app-window-control" aria-label="Agrandir" title="Agrandir" onclick={toggleMaximizeWindow}>
-        <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
-          <rect x="3" y="3" width="6" height="6" rx="1" />
-        </svg>
+        <Square size={11} strokeWidth={1.8} aria-hidden="true" />
       </button>
       <button type="button" class="app-window-control close" aria-label="Fermer" title="Fermer" onclick={closeWindow}>
-        <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
-          <path d="m3 3 6 6M9 3 3 9" />
-        </svg>
+        <X size={13} strokeWidth={1.8} aria-hidden="true" />
       </button>
     </div>
     {@render children()}
@@ -128,24 +123,25 @@
   .app-window-controls {
     position: fixed;
     z-index: 10001;
-    top: 6px;
-    right: 6px;
+    top: 0;
+    right: 0;
     display: flex;
-    gap: 2px;
+    gap: 0;
     align-items: center;
   }
 
   .app-window-control {
     display: grid;
     place-items: center;
-    width: 28px;
-    height: 24px;
+    width: 36px;
+    height: 32px;
     border: 0;
-    border-radius: var(--radius-sm);
+    border-left: 1px solid var(--border-color);
+    border-radius: 0;
     background: transparent;
     color: var(--text-muted);
     cursor: pointer;
-    opacity: 0.7;
+    opacity: 0.82;
   }
 
   .app-window-control:hover {
@@ -159,11 +155,4 @@
     color: var(--danger);
   }
 
-  .app-window-control svg {
-    fill: none;
-    stroke: currentColor;
-    stroke-width: 1.8;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-  }
 </style>
