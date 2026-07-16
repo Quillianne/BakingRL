@@ -3,6 +3,8 @@
   import { getDashboardContext } from "$lib/dashboard/context";
   import type {
     ExtensionHostRuntimeStatus,
+    MarketplacePackage,
+    MarketplacePackageVersion,
     PackageDependencyDescriptor,
     PackageDescriptor,
     PluginRuntimeSidecarDescriptor,
@@ -24,6 +26,7 @@
   };
 
   type RelationStateClass = "connected" | "connecting" | "disconnected";
+  type PluginView = "marketplace" | "installed" | "updates";
 
   type PackageRelationRow = {
     name: string;
@@ -33,7 +36,102 @@
   };
 
   let detailPackageId = $state<string | null>(null);
+  let pluginView = $state<PluginView>("marketplace");
+  let marketplaceQuery = $state("");
   const detailPackage = $derived(dashboard.packages.find((pkg) => pkg.id === detailPackageId) ?? null);
+  const filteredMarketplacePackages = $derived(
+    (dashboard.marketplaceSnapshot?.catalogue.packages ?? []).filter((pkg) =>
+      marketplacePackageMatches(pkg, marketplaceQuery)
+    )
+  );
+  const marketplaceUpdates = $derived(
+    filteredMarketplacePackages.filter((pkg) => isMarketplaceUpdate(pkg))
+  );
+  const displayedMarketplacePackages = $derived(
+    pluginView === "updates" ? marketplaceUpdates : filteredMarketplacePackages
+  );
+
+  function versionParts(value: string) {
+    const match = /^(\d+)\.(\d+)\.(\d+)/.exec(value);
+    return match ? match.slice(1).map(Number) : [0, 0, 0];
+  }
+
+  function compareVersions(left: string, right: string) {
+    const leftParts = versionParts(left);
+    const rightParts = versionParts(right);
+    for (let index = 0; index < 3; index += 1) {
+      const difference = (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
+      if (difference !== 0) return difference;
+    }
+    return left.localeCompare(right);
+  }
+
+  function latestMarketplaceVersion(pkg: MarketplacePackage): MarketplacePackageVersion | null {
+    return (
+      [...pkg.versions]
+        .filter(
+          (version) =>
+            version.status === "active" &&
+            version.channel === "stable" &&
+            version.runtimeApi.startsWith("2.3.")
+        )
+        .sort((left, right) => compareVersions(right.version, left.version))[0] ?? null
+    );
+  }
+
+  function installedMarketplacePackage(pkg: MarketplacePackage) {
+    return dashboard.packages.find((installed) => installed.id === pkg.id) ?? null;
+  }
+
+  function isMarketplaceUpdate(pkg: MarketplacePackage) {
+    const installed = installedMarketplacePackage(pkg);
+    const latest = latestMarketplaceVersion(pkg);
+    return Boolean(installed && latest && compareVersions(latest.version, installed.version) > 0);
+  }
+
+  function marketplacePackageMatches(pkg: MarketplacePackage, query: string) {
+    const normalized = query.trim().toLocaleLowerCase();
+    if (!normalized) return true;
+    const listing = pkg.listing.snapshot;
+    return [listing.displayName, listing.shortDescription, pkg.id, ...listing.tags]
+      .join(" ")
+      .toLocaleLowerCase()
+      .includes(normalized);
+  }
+
+  function marketplaceDeveloper(pkg: MarketplacePackage) {
+    return dashboard.marketplaceSnapshot?.catalogue.developers.find(
+      (developer) => developer.id === pkg.developerId
+    );
+  }
+
+  function marketplaceVerificationLabel(pkg: MarketplacePackage) {
+    const verification = marketplaceDeveloper(pkg)?.verification ?? "unverified";
+    if (verification === "official") return dashboard.t("marketplace.official");
+    if (verification === "verified") return dashboard.t("marketplace.verified");
+    return dashboard.t("marketplace.unverified");
+  }
+
+  function marketplaceActionLabel(pkg: MarketplacePackage) {
+    const latest = latestMarketplaceVersion(pkg);
+    const installed = installedMarketplacePackage(pkg);
+    if (!latest || pkg.status !== "active") return dashboard.t("marketplace.unavailable");
+    if (!installed) return dashboard.t("marketplace.install");
+    if (compareVersions(latest.version, installed.version) > 0) return dashboard.t("marketplace.update");
+    return dashboard.t("marketplace.installed");
+  }
+
+  function marketplaceActionDisabled(pkg: MarketplacePackage) {
+    const latest = latestMarketplaceVersion(pkg);
+    const installed = installedMarketplacePackage(pkg);
+    return (
+      dashboard.busy ||
+      !dashboard.marketplaceSnapshot?.installable ||
+      pkg.status !== "active" ||
+      !latest ||
+      Boolean(installed && compareVersions(latest.version, installed.version) <= 0)
+    );
+  }
 
   function openPackageDetails(pkg: PackageDescriptor) {
     detailPackageId = pkg.id;
@@ -282,19 +380,144 @@
 
 <div class="page-title">
   <div>
-    <h1>{dashboard.t("packages.installedTitle")}</h1>
+    <h1>{dashboard.t("marketplace.pluginsTitle")}</h1>
   </div>
-  <button class="btn-secondary" onclick={() => void dashboard.reloadPackages()} disabled={dashboard.busy}>
-    <svg class="reload-icon" class:spinning={dashboard.packagesReloading} viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
+  <button
+    class="btn-secondary"
+    onclick={() =>
+      void (pluginView === "installed"
+        ? dashboard.reloadPackages()
+        : dashboard.refreshMarketplace(true, true))}
+    disabled={dashboard.busy || dashboard.marketplaceLoading}
+  >
+    <svg class="reload-icon" class:spinning={dashboard.packagesReloading || dashboard.marketplaceLoading} viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
       <path d="M21 12a9 9 0 0 1-15.5 6"></path>
       <path d="M3 12a9 9 0 0 1 15.5-6"></path>
       <path d="M18 3v6h-6"></path>
       <path d="M6 21v-6h6"></path>
     </svg>
-    {dashboard.t("common.reload")}
+    {pluginView === "installed" ? dashboard.t("common.reload") : dashboard.t("marketplace.refresh")}
   </button>
 </div>
 
+<div class="plugin-view-tabs" role="tablist" aria-label={dashboard.t("marketplace.pluginsTitle")}>
+  <button
+    type="button"
+    role="tab"
+    aria-selected={pluginView === "marketplace"}
+    class:active={pluginView === "marketplace"}
+    onclick={() => (pluginView = "marketplace")}
+  >
+    {dashboard.t("marketplace.tabMarketplace")}
+  </button>
+  <button
+    type="button"
+    role="tab"
+    aria-selected={pluginView === "installed"}
+    class:active={pluginView === "installed"}
+    onclick={() => (pluginView = "installed")}
+  >
+    {dashboard.t("marketplace.tabInstalled")}
+    <span>{dashboard.packages.length}</span>
+  </button>
+  <button
+    type="button"
+    role="tab"
+    aria-selected={pluginView === "updates"}
+    class:active={pluginView === "updates"}
+    onclick={() => (pluginView = "updates")}
+  >
+    {dashboard.t("marketplace.tabUpdates")}
+    {#if marketplaceUpdates.length}<span>{marketplaceUpdates.length}</span>{/if}
+  </button>
+</div>
+
+{#if pluginView === "marketplace" || pluginView === "updates"}
+  <div class="marketplace-toolbar">
+    <label class="marketplace-search">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <circle cx="11" cy="11" r="7"></circle>
+        <path d="m20 20-3.5-3.5"></path>
+      </svg>
+      <input
+        bind:value={marketplaceQuery}
+        aria-label={dashboard.t("marketplace.searchPlaceholder")}
+        placeholder={dashboard.t("marketplace.searchPlaceholder")}
+      />
+    </label>
+    {#if dashboard.marketplaceSnapshot?.source === "cache"}
+      <span class="marketplace-source">{dashboard.t("marketplace.cachedCatalogue")}</span>
+    {/if}
+  </div>
+
+  {#if dashboard.marketplaceError}
+    <div class="callout marketplace-status-callout">
+      <strong>{dashboard.t("marketplace.catalogueUnavailable")}</strong>
+      <span>{dashboard.marketplaceError}</span>
+    </div>
+  {:else if dashboard.marketplaceSnapshot?.expired}
+    <div class="callout marketplace-status-callout warning">
+      <strong>{dashboard.t("marketplace.catalogueExpired")}</strong>
+    </div>
+  {:else if dashboard.marketplaceSnapshot?.warning}
+    <div class="callout marketplace-status-callout warning">
+      <span>{dashboard.marketplaceSnapshot.warning}</span>
+    </div>
+  {/if}
+
+  {#if dashboard.marketplaceLoading && !dashboard.marketplaceSnapshot}
+    <div class="empty-state"><p>{dashboard.t("common.loading")}</p></div>
+  {:else if displayedMarketplacePackages.length}
+    <div class="marketplace-grid">
+      {#each displayedMarketplacePackages as pkg (pkg.id)}
+        {@const listing = pkg.listing.snapshot}
+        {@const latest = latestMarketplaceVersion(pkg)}
+        {@const developer = marketplaceDeveloper(pkg)}
+        <article class="marketplace-item">
+          <div class="marketplace-item-icon" aria-hidden="true">
+            {#if listing.media.icon}
+              <img src={listing.media.icon.url} alt="" />
+            {:else}
+              <span>{listing.displayName.slice(0, 1).toLocaleUpperCase()}</span>
+            {/if}
+          </div>
+          <div class="marketplace-item-main">
+            <div class="marketplace-item-heading">
+              <div>
+                <h2>{listing.displayName}</h2>
+                <p>{developer?.name ?? pkg.developerId} · {marketplaceVerificationLabel(pkg)}</p>
+              </div>
+              <span class="version">{latest ? `v${latest.version}` : "n/a"}</span>
+            </div>
+            <p class="marketplace-description">{listing.shortDescription}</p>
+            <div class="marketplace-tag-row">
+              {#if dashboard.marketplaceSnapshot?.catalogue.sections.recommended.includes(pkg.id)}
+                <span class="badge success">{dashboard.t("marketplace.recommended")}</span>
+              {/if}
+              {#if dashboard.marketplaceSnapshot?.catalogue.sections.new.includes(pkg.id)}
+                <span class="badge route">{dashboard.t("marketplace.new")}</span>
+              {/if}
+              {#each listing.tags.slice(0, 3) as tag}
+                <span class="marketplace-tag">{tag}</span>
+              {/each}
+            </div>
+          </div>
+          <button
+            class={isMarketplaceUpdate(pkg) ? "btn-primary" : "btn-secondary"}
+            onclick={() => void dashboard.prepareMarketplaceInstall([pkg.id])}
+            disabled={marketplaceActionDisabled(pkg)}
+          >
+            {marketplaceActionLabel(pkg)}
+          </button>
+        </article>
+      {/each}
+    </div>
+  {:else}
+    <div class="empty-state">
+      <p>{pluginView === "updates" ? dashboard.t("marketplace.noUpdates") : dashboard.t("marketplace.noPackages")}</p>
+    </div>
+  {/if}
+{:else}
 <div class="studio-grid two-col">
   <section>
     {#if dashboard.packages.length}
@@ -474,6 +697,7 @@
     </div>
   </aside>
 </div>
+{/if}
 
 {#if detailPackage}
   <div class="modal-layer">

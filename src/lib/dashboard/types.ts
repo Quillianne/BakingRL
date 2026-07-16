@@ -243,6 +243,141 @@ export type RuntimeInfo = {
   supportedRuntimeApi: string;
 };
 
+export type MarketplaceStatus = "active" | "yanked" | "revoked";
+export type MarketplaceChannel = "stable" | "beta" | "nightly";
+export type MarketplaceDeveloperKind = "individual" | "organization";
+export type MarketplaceDeveloperVerification = "unverified" | "verified" | "official";
+
+export type MarketplacePermissions = {
+  bus: { read: string[]; publish: string[] };
+  registry: { read: string[]; write: string[] };
+  network: {
+    http: unknown[];
+    websocket: unknown[];
+    listen: unknown[];
+  };
+  storage: { read: string[]; write: string[] };
+};
+
+export type MarketplaceNativeCapabilities = {
+  node: { platforms: string[] } | null;
+  sidecars: { id: string; platforms: string[] }[];
+  surfaces: { id: string; platforms: string[] }[];
+};
+
+export type MarketplacePackageVersion = {
+  version: string;
+  status: MarketplaceStatus;
+  channel: MarketplaceChannel;
+  runtimeApi: string;
+  minBakingrlVersion?: string | null;
+  runtime: {
+    node: boolean;
+    sidecars: { id: string; platforms: string[] }[];
+    webviews: { id: string; kind: string }[];
+  };
+  dependencies: { packageId: string; version: string; optional: boolean }[];
+  permissions: MarketplacePermissions;
+  nativeCapabilities: MarketplaceNativeCapabilities;
+  artifacts: {
+    platform: string;
+    bundleUrl: string;
+    bundleSha256: string;
+    signingKeyId: string;
+  }[];
+  reviewedAt: string;
+};
+
+export type MarketplacePackage = {
+  id: string;
+  developerId: string;
+  status: MarketplaceStatus;
+  repo: string;
+  listing: {
+    snapshot: {
+      packageId: string;
+      displayName: string;
+      shortDescription: string;
+      longDescription: string;
+      tags: string[];
+      repo: string;
+      media: {
+        icon: { url: string; sha256: string } | null;
+        banner: { url: string; sha256: string } | null;
+        screenshots: { url: string; sha256: string; caption?: string | null }[];
+      };
+      links: { docs: string; support: string };
+    };
+  };
+  versions: MarketplacePackageVersion[];
+};
+
+export type MarketplaceDeveloper = {
+  id: string;
+  name: string;
+  kind: MarketplaceDeveloperKind;
+  verification: MarketplaceDeveloperVerification;
+};
+
+export type MarketplaceSnapshot = {
+  catalogue: {
+    sequence: number;
+    generatedAt: string;
+    expiresAt: string;
+    sections: {
+      recommended: string[];
+      new: string[];
+      firstRun: string[];
+    };
+    developers: MarketplaceDeveloper[];
+    packages: MarketplacePackage[];
+  };
+  source: "network" | "cache";
+  expired: boolean;
+  installable: boolean;
+  firstRunPending: boolean;
+  warning: string | null;
+};
+
+export type MarketplaceInstallOperation = "install" | "update" | "downgrade" | "reinstall";
+
+export type MarketplaceInstallPlan = {
+  transactionId: string;
+  catalogueSequence: number;
+  packages: {
+    packageId: string;
+    displayName: string;
+    version: string;
+    operation: MarketplaceInstallOperation;
+    requested: boolean;
+    developerId: string;
+    dependencies: string[];
+    permissions: MarketplacePermissions;
+    nativeCapabilities: MarketplaceNativeCapabilities;
+  }[];
+  publishers: {
+    trustId: string;
+    developerId: string;
+    name: string;
+    kind: MarketplaceDeveloperKind;
+    verification: MarketplaceDeveloperVerification;
+    signingKeyId: string;
+    keyFingerprint: string;
+    trusted: boolean;
+  }[];
+};
+
+export type MarketplaceInstallResult = {
+  transactionId: string;
+  receipts: {
+    package_id: string;
+    version: string;
+    source: string;
+    bundle_sha256: string;
+    installed_at_ms: number;
+  }[];
+};
+
 export type PreparedPackageInstall = {
   path: string;
   source: string;

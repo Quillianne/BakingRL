@@ -28,6 +28,9 @@ import type {
   DeveloperTelemetryGroup,
   DeveloperTelemetrySort,
   ExtensionHostRuntimeStatusEvent,
+  MarketplaceInstallPlan,
+  MarketplaceInstallResult,
+  MarketplaceSnapshot,
   PackageDescriptor,
   PendingInstall,
   PreparedPackageInstall,
@@ -108,6 +111,14 @@ export class DashboardState {
   developerTelemetrySort = $state<DeveloperTelemetrySort>("arrival");
   developerFrameTemplate = $state<DeveloperFrameTemplate>("UpdateState");
   developerFrameJson = $state(telemetryFrameTemplateJson("UpdateState"));
+  marketplaceSnapshot = $state<MarketplaceSnapshot | null>(null);
+  marketplaceLoading = $state(false);
+  marketplaceError = $state<string | null>(null);
+  marketplacePlan = $state<MarketplaceInstallPlan | null>(null);
+  marketplaceAcceptedPublishers = $state<string[]>([]);
+  marketplaceFirstRunOpen = $state(false);
+  marketplaceFirstRunSelection = $state<string[]>([]);
+  marketplacePlanFromFirstRun = false;
   toasts = $state<ToastMessage[]>([]);
 
   get telemetryConnected() {
@@ -134,6 +145,22 @@ export class DashboardState {
 
   get packageErrorCount() {
     return this.packages.filter((pkg) => pkg.error).length;
+  }
+
+  get marketplaceFirstRunPackages() {
+    const snapshot = this.marketplaceSnapshot;
+    if (!snapshot) return [];
+    const selected = new Set(snapshot.catalogue.sections.firstRun);
+    return snapshot.catalogue.packages.filter((pkg) => selected.has(pkg.id));
+  }
+
+  get marketplaceConsentComplete() {
+    const accepted = new Set(this.marketplaceAcceptedPublishers);
+    return (
+      this.marketplacePlan?.publishers.every(
+        (publisher) => publisher.trusted || accepted.has(publisher.trustId)
+      ) ?? false
+    );
   }
 
   get sortedDeveloperTelemetryGroups() {
@@ -253,6 +280,112 @@ export class DashboardState {
     const telemetrySnapshot = await invoke<GameEventFrame | null>("get_telemetry_snapshot");
     if (telemetrySnapshot) this.recordTelemetryFrame(telemetrySnapshot);
     this.registryEntries = await invoke<RegistryEntry[]>("registry_entries");
+  }
+
+  async refreshMarketplace(refresh = false, announceErrors = false) {
+    this.marketplaceLoading = true;
+    try {
+      const snapshot = await invoke<MarketplaceSnapshot>("get_marketplace_snapshot", { refresh });
+      this.marketplaceSnapshot = snapshot;
+      this.marketplaceError = null;
+      if (snapshot.firstRunPending && snapshot.catalogue.sections.firstRun.length > 0) {
+        this.marketplaceFirstRunSelection = snapshot.catalogue.sections.firstRun.filter((packageId) =>
+          snapshot.catalogue.packages.some((pkg) => pkg.id === packageId)
+        );
+        this.marketplaceFirstRunOpen = true;
+      }
+    } catch (error) {
+      this.marketplaceError = this.errorMessage(error);
+      if (announceErrors) this.notifyError(error);
+    } finally {
+      this.marketplaceLoading = false;
+    }
+  }
+
+  toggleMarketplaceFirstRunPackage(packageId: string) {
+    const selection = new Set(this.marketplaceFirstRunSelection);
+    if (selection.has(packageId)) selection.delete(packageId);
+    else selection.add(packageId);
+    this.marketplaceFirstRunSelection = [...selection];
+  }
+
+  toggleMarketplacePublisher(trustId: string) {
+    const accepted = new Set(this.marketplaceAcceptedPublishers);
+    if (accepted.has(trustId)) accepted.delete(trustId);
+    else accepted.add(trustId);
+    this.marketplaceAcceptedPublishers = [...accepted];
+  }
+
+  async prepareMarketplaceInstall(packageIds: string[], fromFirstRun = false) {
+    if (!packageIds.length) return;
+    this.busy = true;
+    try {
+      const plan = await invoke<MarketplaceInstallPlan>("prepare_marketplace_install", {
+        packageIds
+      });
+      this.marketplacePlan = plan;
+      this.marketplacePlanFromFirstRun = fromFirstRun;
+      this.marketplaceAcceptedPublishers = plan.publishers
+        .filter((publisher) => publisher.trusted)
+        .map((publisher) => publisher.trustId);
+      if (fromFirstRun) this.marketplaceFirstRunOpen = false;
+    } catch (error) {
+      this.notifyError(error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  async commitMarketplaceInstall() {
+    const plan = this.marketplacePlan;
+    if (!plan || !this.marketplaceConsentComplete) return;
+    this.busy = true;
+    try {
+      await invoke<MarketplaceInstallResult>("commit_marketplace_install", {
+        transactionId: plan.transactionId,
+        acceptedPublishers: this.marketplaceAcceptedPublishers
+      });
+      const completeFirstRun = this.marketplacePlanFromFirstRun;
+      this.marketplacePlan = null;
+      this.marketplacePlanFromFirstRun = false;
+      this.marketplaceAcceptedPublishers = [];
+      if (completeFirstRun) {
+        await this.completeMarketplaceFirstRun();
+      }
+      this.setPackagesFromBackend(await invoke<PackageDescriptor[]>("list_packages"));
+      this.notify(this.t("msg.marketplaceInstalled"), "success");
+    } catch (error) {
+      this.notifyError(error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  async cancelMarketplaceInstall() {
+    const plan = this.marketplacePlan;
+    const reopenFirstRun = this.marketplacePlanFromFirstRun;
+    this.marketplacePlan = null;
+    this.marketplacePlanFromFirstRun = false;
+    this.marketplaceAcceptedPublishers = [];
+    if (reopenFirstRun) this.marketplaceFirstRunOpen = true;
+    if (!plan) return;
+    try {
+      await invoke("discard_marketplace_install", { transactionId: plan.transactionId });
+    } catch {
+      // Prepared transaction cleanup is best effort.
+    }
+  }
+
+  async completeMarketplaceFirstRun() {
+    try {
+      await invoke("complete_marketplace_first_run");
+      this.marketplaceFirstRunOpen = false;
+      if (this.marketplaceSnapshot) {
+        this.marketplaceSnapshot = { ...this.marketplaceSnapshot, firstRunPending: false };
+      }
+    } catch (error) {
+      this.notifyError(error);
+    }
   }
 
   async reloadPackages() {
@@ -873,11 +1006,18 @@ export class DashboardState {
   start() {
     this.locale = getInitialLocale();
     this.currentTheme = applyTheme(getStoredTheme());
+    if (!isTauriRuntime()) {
+      return () => {
+        this.clearPackageToggleTimers();
+        this.clearDeveloperTelemetryFlushTimer();
+      };
+    }
     if (!this.telemetryHelpDismissed() && !this.telemetryHelpShownThisLaunch()) {
       this.markTelemetryHelpShownThisLaunch();
       this.openTelemetryHelp(false);
     }
     void this.refresh().catch((error) => this.notifyError(error));
+    void this.refreshMarketplace(true);
 
     let unlistenPackages: (() => void) | undefined;
     let unlistenDeepLinks: (() => void) | undefined;

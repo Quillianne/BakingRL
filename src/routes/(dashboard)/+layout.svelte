@@ -4,6 +4,7 @@
   import ConfirmDialog from "$lib/ConfirmDialog.svelte";
   import "$lib/dashboard/dashboard.css";
   import InstallConfirmationModal from "$lib/dashboard/InstallConfirmationModal.svelte";
+  import MarketplaceDialogs from "$lib/dashboard/MarketplaceDialogs.svelte";
   import TelemetryHelpDialog from "$lib/dashboard/TelemetryHelpDialog.svelte";
   import ToastViewport from "$lib/dashboard/ToastViewport.svelte";
   import { setDashboardContext } from "$lib/dashboard/context";
@@ -123,4 +124,5 @@
 
 <TelemetryHelpDialog {state} />
 <InstallConfirmationModal {state} />
+<MarketplaceDialogs {state} />
 <ToastViewport toasts={state.toasts} ondismiss={(id) => state.dismissToast(id)} />
