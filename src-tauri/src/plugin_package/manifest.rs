@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use std::path::{Component, Path};
 
 pub const PLUGIN_SCHEMA_V4: &str = "bakingrl.plugin/4";
-pub const HOST_RUNTIME_API_VERSION: &str = "2.2.0";
-pub const MIN_SUPPORTED_RUNTIME_API_VERSION: &str = "2.2.0";
+pub const HOST_RUNTIME_API_VERSION: &str = "2.3.0";
+pub const MIN_SUPPORTED_RUNTIME_API_VERSION: &str = "2.3.0";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PluginPackageManifest {
@@ -30,9 +30,10 @@ impl PluginPackageManifest {
             .ok_or_else(|| "plugin manifest must be a JSON object".to_string())?;
         reject_legacy_manifest_fields(raw)?;
 
-        let v4: PluginPackageManifestV4 = serde_json::from_value(value)
+        let mut v4: PluginPackageManifestV4 = serde_json::from_value(value)
             .map_err(|error| format!("plugin manifest {PLUGIN_SCHEMA_V4} is invalid: {error}"))?;
 
+        v4.normalize()?;
         v4.validate()?;
         let compatibility = PluginCompatibility {
             runtime_api: Some(v4.bakingrl_api.clone()),
@@ -105,6 +106,10 @@ impl PluginPackageManifest {
         &self.v4.contributes
     }
 
+    pub fn permissions_v4(&self) -> Option<&PluginPermissionsV4> {
+        self.v4.permissions.as_ref()
+    }
+
     pub fn contributes_value(&self) -> Option<serde_json::Value> {
         serde_json::to_value(&self.v4.contributes).ok()
     }
@@ -126,6 +131,8 @@ pub struct PluginPackageManifestV4 {
     pub dependencies: Vec<PluginDependencyV4>,
     #[serde(default)]
     pub runtime: Option<PluginRuntimeV4>,
+    #[serde(default)]
+    pub permissions: Option<PluginPermissionsV4>,
     #[serde(default)]
     pub contributes: PluginContributesV4,
 }
@@ -167,6 +174,13 @@ fn reject_legacy_manifest_fields(
 }
 
 impl PluginPackageManifestV4 {
+    fn normalize(&mut self) -> Result<(), String> {
+        if let Some(permissions) = &mut self.permissions {
+            permissions.normalize()?;
+        }
+        Ok(())
+    }
+
     fn validate(&self) -> Result<(), String> {
         if self.schema_version != PLUGIN_SCHEMA_V4 {
             return Err(format!(
@@ -186,12 +200,316 @@ impl PluginPackageManifestV4 {
         for dependency in &self.dependencies {
             dependency.validate(&self.id)?;
         }
-        self.contributes.validate()?;
         validate_package_id(&self.id)?;
         validate_non_empty("name", &self.name)?;
         validate_non_empty("version", &self.version)?;
         validate_semver("bakingrlApi", &self.bakingrl_api)?;
+        if let Some(permissions) = &self.permissions {
+            permissions.validate()?;
+        }
+        self.contributes.validate()?;
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub struct PluginPermissionsV4 {
+    #[serde(default)]
+    pub bus: PluginBusPermissionsV4,
+    #[serde(default)]
+    pub registry: PluginRegistryPermissionsV4,
+    #[serde(default)]
+    pub network: PluginNetworkPermissionsV4,
+    #[serde(default)]
+    pub storage: PluginStoragePermissionsV4,
+}
+
+impl PluginPermissionsV4 {
+    fn normalize(&mut self) -> Result<(), String> {
+        for pattern in self
+            .storage
+            .read
+            .iter_mut()
+            .chain(self.storage.write.iter_mut())
+        {
+            *pattern = normalize_storage_permission_pattern(pattern)?;
+        }
+        self.network.normalize()
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        validate_permission_patterns("permissions.bus.read", &self.bus.read)?;
+        validate_permission_patterns("permissions.bus.publish", &self.bus.publish)?;
+        validate_permission_patterns("permissions.registry.read", &self.registry.read)?;
+        validate_permission_patterns("permissions.registry.write", &self.registry.write)?;
+        validate_permission_patterns("permissions.storage.read", &self.storage.read)?;
+        validate_permission_patterns("permissions.storage.write", &self.storage.write)?;
+        self.network.validate()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub struct PluginBusPermissionsV4 {
+    #[serde(default)]
+    pub read: Vec<String>,
+    #[serde(default)]
+    pub publish: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub struct PluginRegistryPermissionsV4 {
+    #[serde(default)]
+    pub read: Vec<String>,
+    #[serde(default)]
+    pub write: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub struct PluginStoragePermissionsV4 {
+    #[serde(default)]
+    pub read: Vec<String>,
+    #[serde(default)]
+    pub write: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub struct PluginNetworkPermissionsV4 {
+    #[serde(default)]
+    pub http: Vec<PluginNetworkEndpointV4>,
+    #[serde(default)]
+    pub websocket: Vec<PluginNetworkEndpointV4>,
+    #[serde(default)]
+    pub listen: Vec<PluginListenEndpointV4>,
+}
+
+impl PluginNetworkPermissionsV4 {
+    fn normalize(&mut self) -> Result<(), String> {
+        for endpoint in self.http.iter_mut().chain(self.websocket.iter_mut()) {
+            endpoint.normalize()?;
+        }
+        for endpoint in &mut self.listen {
+            endpoint.normalize()?;
+        }
+        Ok(())
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        for endpoint in &self.http {
+            endpoint.validate("permissions.network.http", &["http", "https"])?;
+        }
+        for endpoint in &self.websocket {
+            endpoint.validate("permissions.network.websocket", &["ws", "wss"])?;
+        }
+        for endpoint in &self.listen {
+            endpoint.validate()?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub struct PluginNetworkEndpointV4 {
+    pub scheme: String,
+    pub host: String,
+    pub ports: PluginNetworkPortsV4,
+    #[serde(default, rename = "pathPrefixes")]
+    pub path_prefixes: Vec<String>,
+}
+
+impl PluginNetworkEndpointV4 {
+    fn normalize(&mut self) -> Result<(), String> {
+        self.scheme = self.scheme.to_ascii_lowercase();
+        self.host = normalize_network_host(&self.host)?;
+        self.ports.normalize();
+        for prefix in &mut self.path_prefixes {
+            *prefix = normalize_network_path_prefix(prefix)?;
+        }
+        Ok(())
+    }
+
+    fn validate(&self, field: &str, schemes: &[&str]) -> Result<(), String> {
+        if !schemes.contains(&self.scheme.as_str()) {
+            return Err(format!(
+                "{field}.scheme must be one of {}",
+                schemes.join(", ")
+            ));
+        }
+        validate_non_empty(&format!("{field}.host"), &self.host)?;
+        self.ports.validate(&format!("{field}.ports"))?;
+        for prefix in &self.path_prefixes {
+            if !prefix.starts_with('/') {
+                return Err(format!("{field}.pathPrefixes must start with '/'"));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub struct PluginListenEndpointV4 {
+    pub transport: String,
+    pub host: String,
+    pub ports: PluginNetworkPortsV4,
+}
+
+impl PluginListenEndpointV4 {
+    fn normalize(&mut self) -> Result<(), String> {
+        self.transport = self.transport.to_ascii_lowercase();
+        self.host = normalize_network_host(&self.host)?;
+        self.ports.normalize();
+        Ok(())
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if !matches!(
+            self.transport.as_str(),
+            "http" | "https" | "ws" | "wss" | "tcp"
+        ) {
+            return Err(
+                "permissions.network.listen.transport must be http, https, ws, wss, or tcp"
+                    .to_string(),
+            );
+        }
+        validate_non_empty("permissions.network.listen.host", &self.host)?;
+        self.ports.validate("permissions.network.listen.ports")
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum PluginNetworkPortsV4 {
+    Any(String),
+    Ports(Vec<u16>),
+}
+
+impl PluginNetworkPortsV4 {
+    fn normalize(&mut self) {
+        if let Self::Ports(ports) = self {
+            ports.sort_unstable();
+            ports.dedup();
+        }
+    }
+
+    fn validate(&self, field: &str) -> Result<(), String> {
+        match self {
+            Self::Any(value) if value == "*" => Ok(()),
+            Self::Any(_) => Err(format!("{field} must be '*' or an array of ports")),
+            Self::Ports(ports) if ports.is_empty() => {
+                Err(format!("{field} must contain at least one port"))
+            }
+            Self::Ports(ports) if ports.contains(&0) => {
+                Err(format!("{field} cannot contain port 0"))
+            }
+            Self::Ports(_) => Ok(()),
+        }
+    }
+}
+
+fn normalize_network_host(host: &str) -> Result<String, String> {
+    let host = host.trim().to_ascii_lowercase();
+    validate_non_empty("permissions.network host", &host)?;
+    url::Host::parse(&host)
+        .map(|host| host.to_string())
+        .map_err(|error| format!("permissions.network host '{host}' is invalid: {error}"))
+}
+
+fn normalize_network_path_prefix(prefix: &str) -> Result<String, String> {
+    if !prefix.starts_with('/') || prefix.contains('?') || prefix.contains('#') {
+        return Err(format!(
+            "permissions.network path prefix '{prefix}' must be an absolute URL path without query or fragment"
+        ));
+    }
+    let url = url::Url::parse(&format!("https://permission.invalid{prefix}")).map_err(|error| {
+        format!("permissions.network path prefix '{prefix}' is invalid: {error}")
+    })?;
+    Ok(url.path().to_string())
+}
+
+fn validate_permission_patterns(field: &str, patterns: &[String]) -> Result<(), String> {
+    for pattern in patterns {
+        validate_permission_pattern(field, pattern)?;
+    }
+    Ok(())
+}
+
+fn validate_permission_pattern(field: &str, pattern: &str) -> Result<(), String> {
+    validate_non_empty(field, pattern)?;
+    let wildcard_count = pattern.bytes().filter(|byte| *byte == b'*').count();
+    if wildcard_count > 1 || (wildcard_count == 1 && !pattern.ends_with('*')) {
+        return Err(format!(
+            "{field} pattern '{pattern}' may contain only one terminal '*'"
+        ));
+    }
+    Ok(())
+}
+
+fn normalize_storage_permission_pattern(pattern: &str) -> Result<String, String> {
+    validate_permission_pattern("permissions.storage", pattern)?;
+    if pattern == "*" {
+        return Ok(pattern.to_string());
+    }
+    let has_wildcard = pattern.ends_with('*');
+    let path = pattern.strip_suffix('*').unwrap_or(pattern);
+    if path.starts_with('/') || path.contains('\\') {
+        return Err(format!(
+            "permissions.storage pattern '{pattern}' must be a relative '/' path"
+        ));
+    }
+    let mut normalized = Vec::new();
+    for component in path.split('/') {
+        match component {
+            "" | "." => {}
+            ".." => {
+                return Err(format!(
+                    "permissions.storage pattern '{pattern}' cannot contain '..'"
+                ))
+            }
+            component => normalized.push(component),
+        }
+    }
+    let normalized = normalized.join("/");
+    if normalized.is_empty() {
+        return Err(format!(
+            "permissions.storage pattern '{pattern}' must name a path"
+        ));
+    }
+    Ok(if has_wildcard {
+        format!("{normalized}*")
+    } else {
+        normalized
+    })
+}
+
+pub fn permission_pattern_matches(pattern: &str, value: &str) -> bool {
+    pattern == "*"
+        || pattern == value
+        || pattern
+            .strip_suffix('*')
+            .is_some_and(|prefix| value.starts_with(prefix))
+}
+
+pub fn permission_pattern_covers(pattern: &str, requested: &str) -> bool {
+    if requested.ends_with('*') {
+        pattern == "*"
+            || pattern
+                .strip_suffix('*')
+                .is_some_and(|prefix| requested.starts_with(prefix))
+    } else {
+        permission_pattern_matches(pattern, requested)
     }
 }
 
@@ -569,6 +887,7 @@ pub struct PluginWebviewContributionV4 {
     pub kind: Option<String>,
     #[serde(rename = "defaultSize")]
     pub default_size: Option<[f64; 2]>,
+    pub surface: Option<PluginSurfaceOptionsV4>,
 }
 
 impl PluginWebviewContributionV4 {
@@ -579,9 +898,10 @@ impl PluginWebviewContributionV4 {
             validate_non_empty("contributes.webviews.title", title)?;
         }
         if let Some(kind) = &self.kind {
-            if !matches!(kind.as_str(), "tool" | "settings" | "panel") {
+            if !matches!(kind.as_str(), "tool" | "settings" | "panel" | "surface") {
                 return Err(
-                    "contributes.webviews.kind must be tool, settings, or panel".to_string()
+                    "contributes.webviews.kind must be tool, settings, panel, or surface"
+                        .to_string(),
                 );
             }
         }
@@ -592,8 +912,63 @@ impl PluginWebviewContributionV4 {
                 );
             }
         }
+        let is_surface = self.kind.as_deref() == Some("surface");
+        if is_surface {
+            if self.default_size.is_none() {
+                return Err(
+                    "contributes.webviews.defaultSize is required for kind 'surface'".to_string(),
+                );
+            }
+            self.surface.as_ref().ok_or_else(|| {
+                "contributes.webviews.surface is required for kind 'surface'".to_string()
+            })?;
+        } else if self.surface.is_some() {
+            return Err(
+                "contributes.webviews.surface is only valid for kind 'surface'".to_string(),
+            );
+        }
+        if let Some(surface) = &self.surface {
+            surface.validate()?;
+        }
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub struct PluginSurfaceOptionsV4 {
+    pub default_position: Option<[f64; 2]>,
+    pub default_screen: Option<String>,
+    #[serde(default)]
+    pub transparent: bool,
+    #[serde(default)]
+    pub always_on_top: bool,
+    #[serde(default)]
+    pub click_through: bool,
+    #[serde(default = "default_surface_resizable")]
+    pub resizable: bool,
+}
+
+impl PluginSurfaceOptionsV4 {
+    fn validate(&self) -> Result<(), String> {
+        if let Some(position) = self.default_position {
+            if !position.iter().all(|value| value.is_finite()) {
+                return Err(
+                    "contributes.webviews.surface.defaultPosition must contain finite coordinates"
+                        .to_string(),
+                );
+            }
+        }
+        if let Some(screen) = &self.default_screen {
+            validate_non_empty("contributes.webviews.surface.defaultScreen", screen)?;
+        }
+        Ok(())
+    }
+}
+
+fn default_surface_resizable() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -886,7 +1261,7 @@ mod tests {
             "id": "com.example.v4",
             "name": "V4 Metadata",
             "version": "1.2.3",
-            "bakingrlApi": "2.2.0",
+            "bakingrlApi": "2.3.0",
             "runtime": {
                 "node": {
                     "entry": "dist/extension-host.js"
@@ -939,7 +1314,7 @@ mod tests {
             manifest
                 .compatibility()
                 .and_then(|c| c.runtime_api.as_deref()),
-            Some("2.2.0")
+            Some("2.3.0")
         );
         assert_eq!(
             manifest
@@ -960,7 +1335,7 @@ mod tests {
             "id": "com.example.platform-extension",
             "name": "Platform Extension",
             "version": "1.0.0",
-            "bakingrlApi": "2.2.0",
+            "bakingrlApi": "2.3.0",
             "dependencies": [
                 {
                     "packageId": "bakingrl.overlay-studio",
@@ -1077,7 +1452,7 @@ mod tests {
             "id": "com.example.self",
             "name": "Self Dependency",
             "version": "1.0.0",
-            "bakingrlApi": "2.2.0",
+            "bakingrlApi": "2.3.0",
             "dependencies": [
                 {
                     "packageId": "com.example.self"
@@ -1097,7 +1472,7 @@ mod tests {
             "id": "com.example.settings-ui",
             "name": "Settings UI",
             "version": "1.0.0",
-            "bakingrlApi": "2.2.0",
+            "bakingrlApi": "2.3.0",
             "contributes": {
                 "webviews": [
                     {
@@ -1124,7 +1499,7 @@ mod tests {
             "id": "com.example.settings-ui",
             "name": "Settings UI",
             "version": "1.0.0",
-            "bakingrlApi": "2.2.0",
+            "bakingrlApi": "2.3.0",
             "contributes": {
                 "webviews": [
                     {
@@ -1151,7 +1526,7 @@ mod tests {
             "id": "com.example.runtime-legacy",
             "name": "Legacy Extension Host",
             "version": "1.0.0",
-            "bakingrlApi": "2.2.0",
+            "bakingrlApi": "2.3.0",
             "runtime": {
                 "extensionHost": {
                     "entry": "dist/extension-host.js"
@@ -1172,7 +1547,7 @@ mod tests {
             "id": "com.example.external-missing-runtime",
             "name": "External Surface Missing Runtime",
             "version": "1.0.0",
-            "bakingrlApi": "2.2.0",
+            "bakingrlApi": "2.3.0",
             "externalSurfaces": {
                 "broadcast": {}
             }
@@ -1198,7 +1573,7 @@ mod tests {
                 "id": "com.example.legacy",
                 "name": "Legacy",
                 "version": "1.0.0",
-                "bakingrlApi": "2.2.0",
+                "bakingrlApi": "2.3.0",
                 "contributes": {}
             });
             let mut raw = raw;
@@ -1223,7 +1598,7 @@ mod tests {
                 "id": "com.example.legacy",
                 "name": "Legacy",
                 "version": "1.0.0",
-                "bakingrlApi": "2.2.0",
+                "bakingrlApi": "2.3.0",
                 "contributes": contributes
             })
             .to_string();
@@ -1244,7 +1619,7 @@ mod tests {
             "id": "com.example.dual",
             "name": "Dual Schema",
             "version": "1.0.0",
-            "bakingrlApi": "2.2.0",
+            "bakingrlApi": "2.3.0",
             "contributes": {}
         })
         .to_string();
@@ -1260,7 +1635,7 @@ mod tests {
             "id": "com.example.duplicate",
             "name": "Duplicate",
             "version": "1.0.0",
-            "bakingrlApi": "2.2.0",
+            "bakingrlApi": "2.3.0",
             "runtime": {
                 "sidecars": [
                     {
@@ -1302,7 +1677,7 @@ mod tests {
             "id": "com.example.entries",
             "name": "Entries",
             "version": "1.0.0",
-            "bakingrlApi": "2.2.0",
+            "bakingrlApi": "2.3.0",
             "runtime": {
                 "node": {
                     "entry": "dist/extension-host.ts"
@@ -1324,7 +1699,7 @@ mod tests {
                 "id": id,
                 "name": "Bad",
                 "version": "1.0.0",
-                "bakingrlApi": "2.2.0",
+                "bakingrlApi": "2.3.0",
                 "contributes": {}
             })
             .to_string();

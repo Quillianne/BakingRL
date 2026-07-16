@@ -452,7 +452,7 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn default_capability_covers_plugin_webview_windows() {
+    fn default_capability_covers_plugin_webview_and_surface_windows() {
         let capability: serde_json::Value =
             serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
         let windows = capability
@@ -467,6 +467,7 @@ mod tests {
         assert!(labels.contains(&"main"));
         assert!(labels.contains(&"page-*"));
         assert!(labels.contains(&"plugin-webview-*"));
+        assert!(labels.contains(&"plugin-surface-*"));
     }
 
     #[test]

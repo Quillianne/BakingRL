@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
@@ -11,23 +11,30 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager};
 use thiserror::Error;
 use tokio::sync::broadcast::error::TryRecvError;
 use tokio::sync::mpsc as tokio_mpsc;
 use tracing::{error, info, warn};
 
 use super::diagnostics::{PluginDiagnosticInput, PluginDiagnosticSeverity, PluginDiagnosticsStore};
+use super::plugin_storage::{normalize_storage_path, PluginStorage};
 use super::service_registry::{
     CommandCallClient, CommandCallRequest, CommandCallRouter, ServiceCallClient,
     ServiceCallRequest, ServiceCallRouter,
 };
 use super::settings_contract::{read_package_secret, read_package_secret_configured};
 use super::sidecar_runtime::{SidecarRuntimeController, SidecarRuntimeSpec};
+use super::surface_runtime::{
+    close_package_surfaces, close_surface, open_surface, SurfaceOpenOptions, SurfaceOpenRequest,
+};
 use super::PluginHost;
 use crate::bus::{BusEvent, EventBus};
 use crate::models::GameEvent;
-use crate::plugin_package::manifest::PluginRuntimeSidecarActivationV4;
+use crate::plugin_package::manifest::{
+    permission_pattern_covers, permission_pattern_matches, PluginPermissionsV4,
+    PluginRuntimeSidecarActivationV4, PluginSurfaceOptionsV4,
+};
 use crate::registry::Registry;
 
 const MAX_CRASHES_IN_WINDOW: usize = 3;
@@ -111,6 +118,9 @@ pub struct ExtensionHostWebviewSpec {
     pub entry: Option<String>,
     pub path: Option<String>,
     pub route: Option<String>,
+    pub kind: Option<String>,
+    pub default_size: [f64; 2],
+    pub surface: Option<PluginSurfaceOptionsV4>,
 }
 
 #[derive(Debug, Clone)]
@@ -119,7 +129,8 @@ pub struct ExtensionHostRuntimeSpec {
     pub runtime_api: Option<semver::VersionReq>,
     pub package_root: PathBuf,
     pub entry_path: PathBuf,
-    pub storage_root: PathBuf,
+    pub storage: PluginStorage,
+    pub permissions: PluginPermissionsV4,
     pub package_settings_path: PathBuf,
     pub secret_keys: HashSet<String>,
     pub service_imports: Vec<String>,
@@ -350,7 +361,8 @@ impl Drop for ExtensionHostRuntimeManager {
 struct ExtensionHostContext {
     package_id: String,
     runtime_api: Option<semver::VersionReq>,
-    storage_root: PathBuf,
+    storage: PluginStorage,
+    permissions: PluginPermissionsV4,
     package_settings_path: PathBuf,
     secret_keys: HashSet<String>,
     service_imports: Vec<String>,
@@ -501,7 +513,6 @@ struct ExtensionHostBootstrapSpec {
     package_root: String,
     entry_url: String,
     runtime_api: Option<String>,
-    storage_root: String,
     settings: serde_json::Value,
     service_imports: Vec<String>,
     service_methods: HashMap<String, Vec<String>>,
@@ -537,8 +548,8 @@ fn spawn_extension_host_runtime(
             ),
         })?
         .to_string();
-    fs::create_dir_all(&spec.storage_root).map_err(|source| ExtensionHostRuntimeError::Entry {
-        path: spec.storage_root.clone(),
+    fs::create_dir_all(spec.storage.root()).map_err(|source| ExtensionHostRuntimeError::Entry {
+        path: spec.storage.root().to_path_buf(),
         source,
     })?;
 
@@ -571,7 +582,6 @@ fn spawn_extension_host_runtime(
             .runtime_api
             .as_ref()
             .map(std::string::ToString::to_string),
-        storage_root: spec.storage_root.to_string_lossy().to_string(),
         settings: spec.settings.clone(),
         service_imports: spec.service_imports.clone(),
         service_methods: spec.service_methods.clone(),
@@ -595,7 +605,8 @@ fn spawn_extension_host_runtime(
     let context = ExtensionHostContext {
         package_id: spec.package_id,
         runtime_api: spec.runtime_api.clone(),
-        storage_root: spec.storage_root,
+        storage: spec.storage,
+        permissions: spec.permissions,
         package_settings_path: spec.package_settings_path,
         secret_keys: spec.secret_keys,
         service_imports: spec.service_imports,
@@ -1242,11 +1253,24 @@ fn supervise_child_once(
     for service_ref in context.registered_services.lock().unwrap().drain() {
         context.service_router.remove(&service_ref);
     }
+    close_context_surfaces(context);
     context.rpc.set_stdin(None);
     context
         .rpc
         .reject_pending("Extension host process stopped before answering.");
     outcome
+}
+
+fn close_context_surfaces(context: &ExtensionHostContext) {
+    close_package_surfaces(
+        &context.app_handle,
+        &context.package_id,
+        context
+            .webviews
+            .iter()
+            .filter(|(_, webview)| webview.kind.as_deref() == Some("surface"))
+            .map(|(id, _)| id.as_str()),
+    );
 }
 
 fn spawn_bus_forwarder(
@@ -1300,13 +1324,11 @@ fn spawn_bus_forwarder(
 }
 
 fn is_bus_subscribed(subscriptions: &Arc<Mutex<HashSet<String>>>, event_name: &str) -> bool {
-    subscriptions.lock().unwrap().iter().any(|pattern| {
-        pattern == "*"
-            || pattern == event_name
-            || pattern
-                .strip_suffix(".*")
-                .is_some_and(|prefix| event_name.starts_with(prefix))
-    })
+    subscriptions
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|pattern| permission_pattern_matches(pattern, event_name))
 }
 
 fn spawn_rpc_reader<R>(
@@ -1407,6 +1429,11 @@ fn handle_host_request(
         "registry/entries" => registry_entries(context),
         "storage/readText" => storage_read_text(context, params),
         "storage/writeText" => storage_write_text(context, params),
+        "storage/readJson" => storage_read_json(context, params),
+        "storage/writeJson" => storage_write_json(context, params),
+        "storage/list" => storage_list(context, params),
+        "storage/delete" => storage_delete(context, params),
+        "storage/usage" => storage_usage(context),
         "secrets/get" => secrets_get(context, params),
         "secrets/configured" => secrets_configured(context, params),
         "diagnostics/log" => diagnostics_log(context, params),
@@ -1423,6 +1450,48 @@ fn handle_host_request(
         _ => Err(format!(
             "Extension host JSON-RPC method '{method}' is not supported."
         )),
+    }
+}
+
+fn ensure_permission_matches(
+    package_id: &str,
+    capability: &str,
+    patterns: &[String],
+    value: &str,
+) -> Result<(), String> {
+    if patterns
+        .iter()
+        .any(|pattern| permission_pattern_matches(pattern, value))
+    {
+        Ok(())
+    } else {
+        Err(format!(
+            "Package '{package_id}' has no {capability} permission for '{value}'."
+        ))
+    }
+}
+
+fn ensure_permission_covers(
+    package_id: &str,
+    capability: &str,
+    patterns: &[String],
+    requested: &str,
+) -> Result<(), String> {
+    let wildcard_count = requested.bytes().filter(|byte| *byte == b'*').count();
+    if wildcard_count > 1 || (wildcard_count == 1 && !requested.ends_with('*')) {
+        return Err(format!(
+            "Requested {capability} pattern '{requested}' may contain only one terminal '*'."
+        ));
+    }
+    if patterns
+        .iter()
+        .any(|pattern| permission_pattern_covers(pattern, requested))
+    {
+        Ok(())
+    } else {
+        Err(format!(
+            "Package '{package_id}' has no {capability} permission covering '{requested}'."
+        ))
     }
 }
 
@@ -1636,6 +1705,12 @@ fn bus_subscribe(
     params: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let event_name = required_string(&params, "eventName")?;
+    ensure_permission_covers(
+        &context.package_id,
+        "bus.read",
+        &context.permissions.bus.read,
+        &event_name,
+    )?;
     context.bus_subscriptions.lock().unwrap().insert(event_name);
     Ok(serde_json::json!({ "ok": true }))
 }
@@ -1658,6 +1733,12 @@ fn bus_emit(
     params: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let event_name = required_string(&params, "eventName")?;
+    ensure_permission_matches(
+        &context.package_id,
+        "bus.publish",
+        &context.permissions.bus.publish,
+        &event_name,
+    )?;
     let payload = params
         .get("payload")
         .cloned()
@@ -1677,6 +1758,12 @@ fn telemetry_hub_publish(
     params: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let event_name = required_string(&params, "eventName")?;
+    ensure_permission_matches(
+        &context.package_id,
+        "bus.publish",
+        &context.permissions.bus.publish,
+        &event_name,
+    )?;
     let payload = params
         .get("payload")
         .cloned()
@@ -1692,10 +1779,30 @@ fn telemetry_hub_publish(
 }
 
 fn telemetry_hub_snapshot(context: &ExtensionHostContext) -> Result<serde_json::Value, String> {
-    Ok(telemetry_snapshot_value(
-        context.bus.as_ref(),
-        context.latest_telemetry.as_ref(),
-    ))
+    let snapshot =
+        telemetry_snapshot_value(context.bus.as_ref(), context.latest_telemetry.as_ref());
+    ensure_telemetry_snapshot_permission(
+        &context.package_id,
+        &context.permissions.bus.read,
+        &snapshot,
+    )?;
+    Ok(snapshot)
+}
+
+fn ensure_telemetry_snapshot_permission(
+    package_id: &str,
+    patterns: &[String],
+    snapshot: &serde_json::Value,
+) -> Result<(), String> {
+    if snapshot.is_null() {
+        return Ok(());
+    }
+    let event_name = snapshot
+        .get("Event")
+        .or_else(|| snapshot.get("event"))
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "Telemetry snapshot does not contain an event name.".to_string())?;
+    ensure_permission_matches(package_id, "bus.read", patterns, event_name)
 }
 
 fn telemetry_snapshot_value(
@@ -1742,6 +1849,12 @@ fn registry_get(
     params: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let key = required_string(&params, "key")?;
+    ensure_permission_matches(
+        &context.package_id,
+        "registry.read",
+        &context.permissions.registry.read,
+        &key,
+    )?;
     plugin_host(context)?.can_package_read_registry(&context.package_id, &key)?;
     Ok(context
         .registry
@@ -1754,6 +1867,12 @@ fn registry_set(
     params: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let key = required_string(&params, "key")?;
+    ensure_permission_matches(
+        &context.package_id,
+        "registry.write",
+        &context.permissions.registry.write,
+        &key,
+    )?;
     let value = params
         .get("value")
         .cloned()
@@ -1766,6 +1885,17 @@ fn registry_set(
 fn registry_entries(context: &ExtensionHostContext) -> Result<serde_json::Value, String> {
     let entries =
         plugin_host(context)?.readable_registry_entries(&context.package_id, &context.registry)?;
+    let entries = entries
+        .into_iter()
+        .filter(|entry| {
+            context
+                .permissions
+                .registry
+                .read
+                .iter()
+                .any(|pattern| permission_pattern_matches(pattern, &entry.key))
+        })
+        .collect::<Vec<_>>();
     serde_json::to_value(entries).map_err(|err| err.to_string())
 }
 
@@ -1773,35 +1903,143 @@ fn storage_read_text(
     context: &ExtensionHostContext,
     params: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let uri = required_string(&params, "uri")?;
-    let path = resolve_storage_uri(&context.storage_root, &uri)?;
-    fs::read_to_string(path)
+    let path = storage_path_param(&params, "path", false)?;
+    ensure_storage_permission(
+        context,
+        "storage.read",
+        &context.permissions.storage.read,
+        &path,
+    )?;
+    context
+        .storage
+        .read_text(&path)
         .map(serde_json::Value::String)
-        .map_err(|err| err.to_string())
 }
 
 fn storage_write_text(
     context: &ExtensionHostContext,
     params: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let uri = required_string(&params, "uri")?;
+    let path = storage_path_param(&params, "path", false)?;
+    ensure_storage_permission(
+        context,
+        "storage.write",
+        &context.permissions.storage.write,
+        &path,
+    )?;
     let contents = params
         .get("contents")
         .and_then(serde_json::Value::as_str)
         .unwrap_or("")
         .to_string();
-    let path = resolve_storage_uri(&context.storage_root, &uri)?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|err| err.to_string())?;
-    }
-    fs::write(path, contents).map_err(|err| err.to_string())?;
+    context.storage.write_text(&path, &contents)?;
     Ok(serde_json::json!({ "ok": true }))
+}
+
+fn storage_read_json(
+    context: &ExtensionHostContext,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let path = storage_path_param(&params, "path", false)?;
+    ensure_storage_permission(
+        context,
+        "storage.read",
+        &context.permissions.storage.read,
+        &path,
+    )?;
+    context.storage.read_json(&path)
+}
+
+fn storage_write_json(
+    context: &ExtensionHostContext,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let path = storage_path_param(&params, "path", false)?;
+    ensure_storage_permission(
+        context,
+        "storage.write",
+        &context.permissions.storage.write,
+        &path,
+    )?;
+    let value = params
+        .get("value")
+        .cloned()
+        .ok_or_else(|| "Missing required JSON parameter 'value'.".to_string())?;
+    context.storage.write_json(&path, &value)?;
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+fn storage_list(
+    context: &ExtensionHostContext,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let prefix = params
+        .get("prefix")
+        .and_then(serde_json::Value::as_str)
+        .map(|prefix| normalize_storage_path(prefix, true))
+        .transpose()?;
+    let files = context
+        .storage
+        .list(prefix.as_deref())?
+        .into_iter()
+        .filter(|path| {
+            context
+                .permissions
+                .storage
+                .read
+                .iter()
+                .any(|pattern| permission_pattern_matches(pattern, path))
+        })
+        .collect::<Vec<_>>();
+    serde_json::to_value(files).map_err(|error| error.to_string())
+}
+
+fn storage_delete(
+    context: &ExtensionHostContext,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let path = storage_path_param(&params, "path", false)?;
+    ensure_storage_permission(
+        context,
+        "storage.write",
+        &context.permissions.storage.write,
+        &path,
+    )?;
+    context.storage.delete(&path).map(serde_json::Value::Bool)
+}
+
+fn storage_usage(context: &ExtensionHostContext) -> Result<serde_json::Value, String> {
+    if context.permissions.storage.read.is_empty() && context.permissions.storage.write.is_empty() {
+        return Err(format!(
+            "Package '{}' has no declared storage permission.",
+            context.package_id
+        ));
+    }
+    serde_json::to_value(context.storage.usage()?).map_err(|error| error.to_string())
+}
+
+fn storage_path_param(
+    params: &serde_json::Value,
+    key: &str,
+    allow_empty: bool,
+) -> Result<String, String> {
+    let path = required_string(params, key)?;
+    normalize_storage_path(&path, allow_empty)
+}
+
+fn ensure_storage_permission(
+    context: &ExtensionHostContext,
+    capability: &str,
+    patterns: &[String],
+    path: &str,
+) -> Result<(), String> {
+    ensure_permission_matches(&context.package_id, capability, patterns, path)
 }
 
 fn read_state_hub(
     context: &ExtensionHostContext,
 ) -> Result<serde_json::Map<String, serde_json::Value>, String> {
-    let path = state_hub_path(&context.storage_root);
+    let path = state_hub_path(context.storage.root());
     match fs::read_to_string(path.clone()) {
         Ok(raw) if raw.trim().is_empty() => Ok(serde_json::Map::new()),
         Ok(raw) => {
@@ -1832,7 +2070,7 @@ fn write_state_hub(
     context: &ExtensionHostContext,
     state: serde_json::Map<String, serde_json::Value>,
 ) -> Result<(), String> {
-    let path = state_hub_path(&context.storage_root);
+    let path = state_hub_path(context.storage.root());
     let payload = serde_json::Value::Object(state);
     let raw = serde_json::to_string_pretty(&payload).map_err(|err| {
         format!(
@@ -1881,24 +2119,6 @@ fn state_hub_write(
 
 fn state_hub_snapshot(context: &ExtensionHostContext) -> Result<serde_json::Value, String> {
     Ok(serde_json::Value::Object(read_state_hub(context)?))
-}
-
-fn resolve_storage_uri(storage_root: &Path, uri: &str) -> Result<PathBuf, String> {
-    let relative = uri
-        .strip_prefix("plugin://self/")
-        .ok_or_else(|| format!("Storage URI '{uri}' must start with plugin://self/."))?;
-    let relative_path = Path::new(relative);
-    if relative_path.is_absolute()
-        || relative_path.components().any(|component| {
-            matches!(
-                component,
-                Component::ParentDir | Component::RootDir | Component::Prefix(_)
-            )
-        })
-    {
-        return Err(format!("Storage URI '{uri}' escapes plugin storage."));
-    }
-    Ok(storage_root.join(relative_path))
 }
 
 fn secrets_get(
@@ -2063,14 +2283,62 @@ fn webview_open(
         .get("options")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
+
+    if webview.kind.as_deref() != Some("surface") {
+        let has_options = match &options {
+            serde_json::Value::Null => false,
+            serde_json::Value::Object(values) => !values.is_empty(),
+            _ => true,
+        };
+        if has_options {
+            return Err(format!(
+                "Plugin '{}' webview '{id}' accepts placement options only when declared with kind 'surface'.",
+                context.package_id
+            ));
+        }
+        plugin_host(context)?.open_package_webview(context.package_id.clone(), id.clone())?;
+        emit_runtime_log(
+            &context.app_handle,
+            "extensionHost",
+            runtime_key,
+            "webview",
+            &format!("open {id}"),
+        );
+        return Ok(serde_json::json!({ "opened": true }));
+    }
+
+    let declaration = webview.surface.as_ref().ok_or_else(|| {
+        format!(
+            "Plugin '{}' surface '{id}' is missing its manifest options.",
+            context.package_id
+        )
+    })?;
     let path = webview_route(&context.package_id, &id, webview)?;
-    let label = webview_window_label(&context.package_id, &id);
-    let title = webview_option_string(&options, "title")
-        .or_else(|| webview.title.clone())
+    let title = webview
+        .title
+        .clone()
         .unwrap_or_else(|| format!("{} - {id}", context.package_id));
-    let width = webview_option_number(&options, "width", 960.0);
-    let height = webview_option_number(&options, "height", 640.0);
-    open_webview_window(&context.app_handle, &label, &path, &title, width, height)?;
+    let result = open_surface(
+        &context.app_handle,
+        SurfaceOpenRequest {
+            package_id: &context.package_id,
+            surface_id: &id,
+            route: &path,
+            title: &title,
+            default_size: webview.default_size,
+            declaration,
+            options: SurfaceOpenOptions::parse(options.clone())?,
+        },
+    )?;
+    if let Some(message) = result.diagnostic {
+        push_diagnostic(
+            context,
+            PluginDiagnosticSeverity::Warning,
+            "surface",
+            message,
+            None,
+        );
+    }
     let payload = serde_json::json!({
         "packageId": context.package_id,
         "id": id,
@@ -2087,7 +2355,7 @@ fn webview_open(
         "webview",
         &format!("open {id}"),
     );
-    Ok(serde_json::json!({ "ok": true }))
+    serde_json::to_value(result.state).map_err(|error| error.to_string())
 }
 
 fn webview_close(
@@ -2096,10 +2364,17 @@ fn webview_close(
     params: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let id = required_string(&params, "id")?;
-    let label = webview_window_label(&context.package_id, &id);
-    if let Some(window) = context.app_handle.get_webview_window(&label) {
-        window.close().map_err(|err| err.to_string())?;
-    }
+    let webview = context.webviews.get(&id).ok_or_else(|| {
+        format!(
+            "Plugin '{}' does not declare webview '{id}'.",
+            context.package_id
+        )
+    })?;
+    let closed = if webview.kind.as_deref() == Some("surface") {
+        close_surface(&context.app_handle, &context.package_id, &id)?
+    } else {
+        plugin_host(context)?.close_package_webview(&context.package_id, &id)?
+    };
     let payload = serde_json::json!({
         "packageId": context.package_id,
         "id": id,
@@ -2115,7 +2390,7 @@ fn webview_close(
         "webview",
         &format!("close {id}"),
     );
-    Ok(serde_json::json!({ "ok": true }))
+    Ok(serde_json::json!({ "closed": closed }))
 }
 
 fn webview_route(
@@ -2142,70 +2417,8 @@ fn webview_route(
     ))
 }
 
-fn open_webview_window(
-    app_handle: &AppHandle,
-    label: &str,
-    path: &str,
-    title: &str,
-    width: f64,
-    height: f64,
-) -> Result<(), String> {
-    let js_path = serde_json::to_string(path).map_err(|err| err.to_string())?;
-    if let Some(window) = app_handle.get_webview_window(label) {
-        window
-            .eval(format!("window.location.href = {js_path};"))
-            .map_err(|err| err.to_string())?;
-        let _ = window.show();
-        let _ = window.set_focus();
-        return Ok(());
-    }
-
-    let window = WebviewWindowBuilder::new(app_handle, label, WebviewUrl::App(PathBuf::from(path)))
-        .title(title)
-        .inner_size(width.max(480.0), height.max(320.0))
-        .min_inner_size(480.0, 320.0)
-        .decorations(false)
-        .resizable(true)
-        .visible(true)
-        .build()
-        .map_err(|err| err.to_string())?;
-    let _ = window.set_focus();
-    Ok(())
-}
-
-fn webview_window_label(package_id: &str, id: &str) -> String {
-    let safe: String = format!("{package_id}-{id}")
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
-                ch
-            } else {
-                '-'
-            }
-        })
-        .collect();
-    format!("plugin-webview-{safe}")
-}
-
 fn encode_path_segment(value: &str) -> String {
     url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
-}
-
-fn webview_option_number(options: &serde_json::Value, key: &str, fallback: f64) -> f64 {
-    options
-        .get(key)
-        .and_then(serde_json::Value::as_f64)
-        .filter(|value| *value > 0.0)
-        .unwrap_or(fallback)
-}
-
-fn webview_option_string(options: &serde_json::Value, key: &str) -> Option<String> {
-    options
-        .get(key)
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
 }
 
 fn sidecar_name(params: &serde_json::Value) -> Result<String, String> {
@@ -2519,6 +2732,28 @@ mod tests {
 
         let snapshot = telemetry_snapshot_value(&bus, &latest_telemetry);
         assert_eq!(snapshot, serde_json::Value::Null);
+    }
+
+    #[test]
+    fn telemetry_snapshot_requires_read_permission_for_its_event() {
+        let snapshot = serde_json::json!({
+            "Event": "UpdateState",
+            "Data": { "MatchGuid": "permission-check" }
+        });
+
+        assert!(ensure_telemetry_snapshot_permission(
+            "bakingrl.allowed",
+            &["Update*".to_string()],
+            &snapshot,
+        )
+        .is_ok());
+        let error = ensure_telemetry_snapshot_permission(
+            "bakingrl.denied",
+            &["BallHit".to_string()],
+            &snapshot,
+        )
+        .unwrap_err();
+        assert!(error.contains("has no bus.read permission for 'UpdateState'"));
     }
 
     #[test]

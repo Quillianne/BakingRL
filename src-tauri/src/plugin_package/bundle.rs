@@ -398,7 +398,7 @@ mod tests {
             "id": "com.example.bundle",
             "name": "Bundle",
             "version": "1.0.0",
-            "bakingrlApi": "2.2.0",
+            "bakingrlApi": "2.3.0",
             "runtime": {
                 "node": {
                     "entry": "dist/extension-host.js"
@@ -568,7 +568,7 @@ mod tests {
             "id": "com.example.sidecar",
             "name": "Sidecar",
             "version": "1.0.0",
-            "bakingrlApi": "2.2.0",
+            "bakingrlApi": "2.3.0",
             "runtime": {
                 "sidecars": [
                     {
@@ -592,7 +592,7 @@ mod tests {
             "id": "com.example.sidecar",
             "name": "Sidecar",
             "version": "1.0.0",
-            "bakingrlApi": "2.2.0",
+            "bakingrlApi": "2.3.0",
             "runtime": {
                 "sidecars": [
                     {

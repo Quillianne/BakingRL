@@ -3,10 +3,12 @@ mod diagnostics;
 pub(crate) mod extension_host_runtime;
 mod json_store;
 mod package_files;
+mod plugin_storage;
 mod runtime_specs;
 mod service_registry;
 mod settings_contract;
 pub(crate) mod sidecar_runtime;
+mod surface_runtime;
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -57,6 +59,10 @@ use settings_contract::{
 };
 pub use settings_contract::{PackageConfigurationState, PackageSecretDescriptor};
 use sidecar_runtime::{SidecarRuntimeManager, SidecarRuntimeSpec, SidecarRuntimeStatus};
+use surface_runtime::{
+    close_package_surfaces, open_surface, surface_window_label, SurfaceOpenOptions,
+    SurfaceOpenRequest,
+};
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -105,6 +111,7 @@ pub struct PluginHost {
     bus: Arc<EventBus>,
     registry: Arc<Registry>,
     packages_dir: PathBuf,
+    plugin_storage_dir: PathBuf,
     state_path: PathBuf,
     app_settings_path: PathBuf,
     package_settings_path: PathBuf,
@@ -136,12 +143,16 @@ impl PluginHost {
         let packages_dir = app_data.join("packages");
         fs::create_dir_all(&packages_dir)
             .map_err(|e| format!("Unable to create package directory: {e}"))?;
+        let plugin_storage_dir = app_data.join("plugin-storage");
+        fs::create_dir_all(&plugin_storage_dir)
+            .map_err(|e| format!("Unable to create plugin storage directory: {e}"))?;
 
         Ok(Self {
             app_handle,
             bus,
             registry,
             packages_dir,
+            plugin_storage_dir,
             state_path: app_data.join("package_state.json"),
             app_settings_path: app_data.join("app_settings.json"),
             package_settings_path: app_data.join("package_settings.json"),
@@ -218,6 +229,7 @@ impl PluginHost {
 
     pub fn reload_packages(&self) -> Vec<PackageDescriptor> {
         info!("Reloading plugin packages from {:?}", self.packages_dir);
+        self.close_all_package_surfaces();
         let state = self.load_state();
         let mut records = HashMap::new();
 
@@ -263,6 +275,7 @@ impl PluginHost {
             &records,
             &package_settings,
             &self.package_settings_path,
+            &self.plugin_storage_dir,
         );
         let sidecar_specs = sidecar_specs_for_records(&records);
         let sidecar_service_specs = sidecar_service_specs_for_records(&records);
@@ -278,6 +291,35 @@ impl PluginHost {
         packages
     }
 
+    fn close_all_package_surfaces(&self) {
+        let surfaces = {
+            let records = self.records.lock().unwrap();
+            records
+                .values()
+                .map(|record| {
+                    (
+                        record.manifest.id().to_string(),
+                        record
+                            .manifest
+                            .contributes_v4()
+                            .webviews
+                            .iter()
+                            .filter(|webview| webview.kind.as_deref() == Some("surface"))
+                            .map(|webview| webview.id.clone())
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        for (package_id, surface_ids) in surfaces {
+            close_package_surfaces(
+                &self.app_handle,
+                &package_id,
+                surface_ids.iter().map(String::as_str),
+            );
+        }
+    }
+
     fn reload_runtimes_from_current_records(&self) {
         let settings = self.load_app_settings();
         let package_settings = self.load_package_settings();
@@ -288,6 +330,7 @@ impl PluginHost {
                     &records,
                     &package_settings,
                     &self.package_settings_path,
+                    &self.plugin_storage_dir,
                 ),
                 sidecar_specs_for_records(&records),
                 sidecar_service_specs_for_records(&records),
@@ -1381,7 +1424,7 @@ impl PluginHost {
         package_id: String,
         webview_id: String,
     ) -> Result<(), String> {
-        let (label, path, title, width, height) = {
+        let (label, path, title, width, height, surface) = {
             let records = self.records.lock().unwrap();
             let record = self.require_enabled_record(&records, &package_id)?;
             let webview = record
@@ -1403,10 +1446,66 @@ impl PluginHost {
                     .unwrap_or_else(|| format!("{} - {}", record.descriptor.name, webview.id)),
                 width,
                 height,
+                webview.surface.clone(),
             )
         };
 
+        if let Some(surface) = surface {
+            let result = open_surface(
+                &self.app_handle,
+                SurfaceOpenRequest {
+                    package_id: &package_id,
+                    surface_id: &webview_id,
+                    route: &path,
+                    title: &title,
+                    default_size: [width, height],
+                    declaration: &surface,
+                    options: SurfaceOpenOptions::default(),
+                },
+            )?;
+            if let Some(message) = result.diagnostic {
+                self.push_host_diagnostic(
+                    Some(&package_id),
+                    "surface",
+                    PluginDiagnosticSeverity::Warning,
+                    message,
+                );
+            }
+            return Ok(());
+        }
+
         self.open_standalone_page_window(label, path, title, width, height)
+    }
+
+    pub fn close_package_webview(
+        &self,
+        package_id: &str,
+        webview_id: &str,
+    ) -> Result<bool, String> {
+        let is_surface = {
+            let records = self.records.lock().unwrap();
+            let record = self.require_enabled_record(&records, package_id)?;
+            let webview = record
+                .manifest
+                .contributes_v4()
+                .webviews
+                .iter()
+                .find(|webview| webview.id == webview_id)
+                .ok_or_else(|| {
+                    format!("Package '{package_id}' does not declare webview '{webview_id}'.")
+                })?;
+            webview.surface.is_some()
+        };
+
+        if is_surface {
+            return surface_runtime::close_surface(&self.app_handle, package_id, webview_id);
+        }
+        let label = package_webview_window_label(package_id, webview_id);
+        let Some(window) = self.app_handle.get_webview_window(&label) else {
+            return Ok(false);
+        };
+        window.close().map_err(|error| error.to_string())?;
+        Ok(true)
     }
 
     pub fn open_package_configuration(&self, package_id: String) -> Result<(), String> {
@@ -1928,7 +2027,7 @@ mod tests {
                 "id": "bakingrl.sidecar",
                 "name": "Sidecar",
                 "version": "1.0.0",
-                "bakingrlApi": "2.2.0",
+                "bakingrlApi": "2.3.0",
                 "runtime": {
                     "sidecars": [
                         {
@@ -1987,7 +2086,7 @@ mod tests {
                 "id": "bakingrl.node",
                 "name": "Node",
                 "version": "1.0.0",
-                "bakingrlApi": "2.2.0",
+                "bakingrlApi": "2.3.0",
                 "runtime": {
                     "node": {
                         "entry": "dist/extension/index.js"
@@ -2001,7 +2100,7 @@ mod tests {
                 "id": "bakingrl.content",
                 "name": "Content",
                 "version": "1.0.0",
-                "bakingrlApi": "2.2.0",
+                "bakingrlApi": "2.3.0",
                 "contributes": {}
             }))
             .descriptor,
@@ -2046,7 +2145,7 @@ mod tests {
             "id": "bakingrl.consumer",
             "name": "Consumer",
             "version": "1.0.0",
-            "bakingrlApi": "2.2.0",
+            "bakingrlApi": "2.3.0",
             "dependencies": [
                 {
                     "packageId": "bakingrl.provider"
@@ -2066,7 +2165,7 @@ mod tests {
             "id": "bakingrl.consumer",
             "name": "Consumer",
             "version": "1.0.0",
-            "bakingrlApi": "2.2.0",
+            "bakingrlApi": "2.3.0",
             "dependencies": [
                 {
                     "packageId": "bakingrl.provider"
@@ -2079,7 +2178,7 @@ mod tests {
             "id": "bakingrl.provider",
             "name": "Provider",
             "version": "1.0.0",
-            "bakingrlApi": "2.2.0",
+            "bakingrlApi": "2.3.0",
             "runtime": {
                 "node": {
                     "entry": "dist/extension/index.js"
@@ -2201,7 +2300,7 @@ mod tests {
             "id": "bakingrl.provider",
             "name": "Provider",
             "version": "1.0.0",
-            "bakingrlApi": "2.2.0",
+            "bakingrlApi": "2.3.0",
             "contributes": {
                 "commands": [
                     {
@@ -2216,7 +2315,7 @@ mod tests {
             "id": "bakingrl.consumer",
             "name": "Consumer",
             "version": "1.0.0",
-            "bakingrlApi": "2.2.0",
+            "bakingrlApi": "2.3.0",
             "dependencies": [
                 {
                     "packageId": "bakingrl.provider"
@@ -2229,7 +2328,7 @@ mod tests {
             "id": "bakingrl.other",
             "name": "Other",
             "version": "1.0.0",
-            "bakingrlApi": "2.2.0",
+            "bakingrlApi": "2.3.0",
             "contributes": {}
         }));
 
@@ -2273,7 +2372,7 @@ mod tests {
             "id": "bakingrl.provider",
             "name": "Provider",
             "version": "1.0.0",
-            "bakingrlApi": "2.2.0",
+            "bakingrlApi": "2.3.0",
             "contributes": {
                 "extensionPoints": [
                     {
@@ -2288,7 +2387,7 @@ mod tests {
             "id": "bakingrl.consumer",
             "name": "Consumer",
             "version": "1.0.0",
-            "bakingrlApi": "2.2.0",
+            "bakingrlApi": "2.3.0",
             "dependencies": [
                 {
                     "packageId": "bakingrl.provider"
@@ -2363,7 +2462,7 @@ mod tests {
             "id": "bakingrl.consumer",
             "name": "Consumer",
             "version": "1.0.0",
-            "bakingrlApi": "2.2.0",
+            "bakingrlApi": "2.3.0",
             "contributes": {
                 "resources": [
                     {
@@ -2380,7 +2479,7 @@ mod tests {
             "id": "bakingrl.provider",
             "name": "Provider",
             "version": "1.0.0",
-            "bakingrlApi": "2.2.0",
+            "bakingrlApi": "2.3.0",
             "contributes": {
                 "resources": [
                     {
@@ -2452,7 +2551,7 @@ mod tests {
             "id": "bakingrl.webviews",
             "name": "Webviews",
             "version": "1.0.0",
-            "bakingrlApi": "2.2.0",
+            "bakingrlApi": "2.3.0",
             "runtime": {
                 "node": {
                     "entry": "dist/extension/index.js"
@@ -2502,7 +2601,7 @@ mod tests {
             "id": "bakingrl.webviews",
             "name": "Webviews",
             "version": "1.0.0",
-            "bakingrlApi": "2.2.0",
+            "bakingrlApi": "2.3.0",
             "contributes": {
                 "webviews": [
                     {
@@ -2522,7 +2621,7 @@ mod tests {
         assert_eq!(descriptor.webview_id, "settings");
         assert_eq!(descriptor.entry, "dist/webviews/settings.js");
         assert_eq!(descriptor.kind.as_deref(), Some("settings"));
-        assert_eq!(descriptor.runtime_api, "2.2.0");
+        assert_eq!(descriptor.runtime_api, "2.3.0");
     }
 
     #[test]
@@ -2532,7 +2631,7 @@ mod tests {
             "id": "bakingrl.webviews",
             "name": "Webviews",
             "version": "1.0.0",
-            "bakingrlApi": "2.2.0",
+            "bakingrlApi": "2.3.0",
             "contributes": {
                 "webviews": [
                     {
@@ -2557,7 +2656,7 @@ mod tests {
             "id": "bakingrl.webviews",
             "name": "Webviews",
             "version": "1.0.0",
-            "bakingrlApi": "2.2.0",
+            "bakingrlApi": "2.3.0",
             "contributes": {
                 "webviews": [
                     {
@@ -2593,7 +2692,7 @@ mod tests {
             "id": "bakingrl.webviews",
             "name": "Webviews",
             "version": "1.0.0",
-            "bakingrlApi": "2.2.0",
+            "bakingrlApi": "2.3.0",
             "contributes": {
                 "webviews": [
                     {
@@ -2649,7 +2748,7 @@ mod tests {
             "id": "bakingrl.webviews",
             "name": "Webviews",
             "version": "1.0.0",
-            "bakingrlApi": "2.2.0",
+            "bakingrlApi": "2.3.0",
             "contributes": {
                 "webviews": [
                     {
@@ -2700,7 +2799,7 @@ mod tests {
             "id": "bakingrl.webviews",
             "name": "Webviews",
             "version": "1.0.0",
-            "bakingrlApi": "2.2.0",
+            "bakingrlApi": "2.3.0",
             "contributes": {
                 "webviews": [
                     {
@@ -2801,7 +2900,7 @@ mod tests {
             "id": "com.example.provider",
             "name": "Provider",
             "version": "1.0.0",
-            "bakingrlApi": "2.2.0",
+            "bakingrlApi": "2.3.0",
             "contributes": {}
         }));
         let other = package_record(serde_json::json!({
@@ -2809,7 +2908,7 @@ mod tests {
             "id": "com.example.provider-extra",
             "name": "Provider Extra",
             "version": "1.0.0",
-            "bakingrlApi": "2.2.0",
+            "bakingrlApi": "2.3.0",
             "contributes": {}
         }));
         let records = HashMap::from([
@@ -2835,7 +2934,7 @@ mod tests {
             "id": "com.example.consumer",
             "name": "Consumer",
             "version": "1.0.0",
-            "bakingrlApi": "2.2.0",
+            "bakingrlApi": "2.3.0",
             "dependencies": [
                 {
                     "packageId": "com.example.provider",
@@ -2975,7 +3074,8 @@ fn ensure_package_webview_window_label(
     action: &str,
 ) -> Result<(), String> {
     let expected_label = package_webview_window_label(package_id, webview_id);
-    if window_label == expected_label {
+    let expected_surface_label = surface_window_label(package_id, webview_id);
+    if window_label == expected_label || window_label == expected_surface_label {
         Ok(())
     } else {
         Err(format!(
@@ -3021,7 +3121,11 @@ fn window_label_can_access_package_record(
         .contributes_v4()
         .webviews
         .iter()
-        .any(|webview| window_label == package_webview_window_label(package_id, &webview.id))
+        .any(|webview| {
+            window_label == package_webview_window_label(package_id, &webview.id)
+                || (webview.kind.as_deref() == Some("surface")
+                    && window_label == surface_window_label(package_id, &webview.id))
+        })
 }
 
 fn settings_webview_label_can_access_package_record(

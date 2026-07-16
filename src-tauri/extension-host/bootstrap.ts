@@ -10,7 +10,6 @@ interface HostSpec {
   packageRoot: string;
   entryUrl: string;
   runtimeApi: string | null;
-  storageRoot: string;
   settings: unknown;
   serviceImports: string[];
   serviceMethods: Record<string, string[]>;
@@ -20,6 +19,16 @@ interface HostSpec {
     entry?: string;
     path?: string;
     route?: string;
+    kind?: string;
+    defaultSize: [number, number];
+    surface?: {
+      defaultPosition?: [number, number];
+      defaultScreen?: string;
+      transparent: boolean;
+      alwaysOnTop: boolean;
+      clickThrough: boolean;
+      resizable: boolean;
+    };
   }>;
 }
 
@@ -298,7 +307,6 @@ function createContext() {
     id: spec.packageId,
     packageId: spec.packageId,
     extensionPath: spec.packageRoot,
-    storagePath: spec.storageRoot,
     settings,
     subscriptions,
     logger,
@@ -415,9 +423,16 @@ function createContext() {
       entries: () => rpc.request("registry/entries", {})
     },
     storage: {
-      readText: (uri: string) => rpc.request("storage/readText", { uri }),
-      writeText: (uri: string, contents: unknown) =>
-        rpc.request("storage/writeText", { uri, contents: String(contents ?? "") })
+      readText: (path: string) => rpc.request("storage/readText", { path }),
+      writeText: (path: string, contents: unknown) =>
+        rpc.request("storage/writeText", { path, contents: String(contents ?? "") }),
+      readJson<T = unknown>(path: string): Promise<T> {
+        return rpc.request("storage/readJson", { path }) as Promise<T>;
+      },
+      writeJson: (path: string, value: unknown) => rpc.request("storage/writeJson", { path, value }),
+      list: (prefix?: string) => rpc.request("storage/list", { prefix: prefix ?? null }),
+      delete: (path: string) => rpc.request("storage/delete", { path }),
+      usage: () => rpc.request("storage/usage", {})
     },
     secrets: {
       get: async (key: string) => (await rpc.request("secrets/get", { key })) ?? undefined,
@@ -455,7 +470,10 @@ function createContext() {
     },
     webviews: {
       declared: spec.webviews,
-      open: (id: string, options?: unknown) => rpc.request("webviews/open", { id, options }),
+      open: (
+        id: string,
+        options?: { position?: [number, number]; size?: [number, number]; screen?: string }
+      ) => rpc.request("webviews/open", { id, options }),
       close: (id: string) => rpc.request("webviews/close", { id })
     }
   };

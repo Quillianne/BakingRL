@@ -437,7 +437,7 @@ mod tests {
             "id": "com.example.settings",
             "name": "Settings",
             "version": "1.0.0",
-            "bakingrlApi": "2.2.0",
+            "bakingrlApi": "2.3.0",
             "contributes": {
                 "settings": {
                     "schema": "schemas/plugin-settings.json"
@@ -612,7 +612,7 @@ mod tests {
             "id": "com.example.invalid-settings",
             "name": "Invalid Settings",
             "version": "1.0.0",
-            "bakingrlApi": "2.2.0",
+            "bakingrlApi": "2.3.0",
             "contributes": {
                 "settings": {
                     "schema": "schemas/plugin-settings.json"

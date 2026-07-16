@@ -10,6 +10,7 @@ use crate::plugin_package::manifest::{
 use super::extension_host_runtime::ExtensionHostRuntimeSpec;
 use super::extension_host_runtime::ExtensionHostWebviewSpec;
 use super::package_files::read_json_package_file;
+use super::plugin_storage::PluginStorage;
 use super::settings_contract::secret_key_set;
 use super::sidecar_runtime::{SidecarProtocol, SidecarRuntimeSpec};
 use super::{merge_settings, PackageRecord};
@@ -89,6 +90,7 @@ pub(super) fn extension_host_specs_for_records(
     records: &HashMap<String, PackageRecord>,
     package_settings: &PackageSettingsFile,
     package_settings_path: &Path,
+    storage_base: &Path,
 ) -> Vec<ExtensionHostRuntimeSpec> {
     let service_methods = service_methods_for_records(records);
     records
@@ -98,7 +100,6 @@ pub(super) fn extension_host_specs_for_records(
             let runtime = record.manifest.runtime_v4()?;
             let node = runtime.node.as_ref()?;
             let package_root = Path::new(&record.descriptor.path);
-            let storage_root = package_root.join(".bakingrl").join("storage");
             let settings = merge_settings(
                 record.descriptor.settings.as_deref(),
                 package_root,
@@ -120,7 +121,12 @@ pub(super) fn extension_host_specs_for_records(
                 runtime_api: runtime_api_req(&record.manifest),
                 package_root: package_root.to_path_buf(),
                 entry_path: package_root.join(&node.entry),
-                storage_root,
+                storage: PluginStorage::new(storage_base.join(record.manifest.id())),
+                permissions: record
+                    .manifest
+                    .permissions_v4()
+                    .cloned()
+                    .unwrap_or_default(),
                 package_settings_path: package_settings_path.to_path_buf(),
                 secret_keys: secret_keys_for_package_settings(
                     record.descriptor.settings.as_deref(),
@@ -237,6 +243,9 @@ fn webview_specs_for_manifest(
                     entry: Some(webview.entry.clone()),
                     path: None,
                     route: None,
+                    kind: webview.kind.clone(),
+                    default_size: webview.default_size.unwrap_or([960.0, 640.0]),
+                    surface: webview.surface.clone(),
                 },
             )
         })
@@ -330,7 +339,7 @@ mod tests {
             "id": "com.example.sidecar-only",
             "name": "Sidecar Only",
             "version": "1.0.0",
-            "bakingrlApi": "2.2.0",
+            "bakingrlApi": "2.3.0",
             "runtime": {
                 "sidecars": [
                     {
@@ -370,7 +379,7 @@ mod tests {
             "id": "com.example.sidecar-only",
             "name": "Sidecar Only",
             "version": "1.0.0",
-            "bakingrlApi": "2.2.0",
+            "bakingrlApi": "2.3.0",
             "runtime": {
                 "sidecars": [
                     {
@@ -400,7 +409,7 @@ mod tests {
             "id": "com.example.with-node",
             "name": "With Node",
             "version": "1.0.0",
-            "bakingrlApi": "2.2.0",
+            "bakingrlApi": "2.3.0",
             "runtime": {
                 "node": {"entry": "dist/extension-host.js"},
                 "sidecars": [
@@ -486,7 +495,7 @@ mod tests {
                 "id": "com.example.secrets",
                 "name": "Secrets",
                 "version": "1.0.0",
-                "bakingrlApi": "2.2.0",
+                "bakingrlApi": "2.3.0",
                 "runtime": {
                     "node": {
                         "entry": "dist/extension-host.js"
@@ -514,6 +523,7 @@ mod tests {
             &HashMap::from([("com.example.secrets".to_string(), record)]),
             &PackageSettingsFile::default(),
             &package_root.join("package_settings.json"),
+            &package_root.join("plugin-storage"),
         );
 
         assert_eq!(specs.len(), 1);

@@ -646,7 +646,7 @@ mod tests {
                     "id": "bakingrl.poc-overlay-studio",
                     "name": "POC Overlay Studio",
                     "version": "1.0.0",
-                    "bakingrlApi": "2.2.0",
+                    "bakingrlApi": "2.3.0",
                     "contributes": {
                         "services": [
                             {
@@ -671,7 +671,7 @@ mod tests {
                     "id": "bakingrl.poc-visual-pack",
                     "name": "POC Visual Pack",
                     "version": "1.0.0",
-                    "bakingrlApi": "2.2.0",
+                    "bakingrlApi": "2.3.0",
                     "dependencies": [
                         {
                             "packageId": "bakingrl.poc-overlay-studio"
@@ -726,7 +726,7 @@ mod tests {
                     "id": "bakingrl.poc-content-pack",
                     "name": "POC Content Pack",
                     "version": "1.0.0",
-                    "bakingrlApi": "2.2.0",
+                    "bakingrlApi": "2.3.0",
                     "dependencies": [
                         {
                             "packageId": "bakingrl.poc-visual-pack"
@@ -757,7 +757,7 @@ mod tests {
 
     #[test]
     fn compatibility_accepts_supported_runtime_api_range() {
-        for bakingrl_api in ["2.2.0", "2.2.9"] {
+        for bakingrl_api in ["2.3.0", "2.3.9"] {
             let manifest = v4_manifest(serde_json::json!({
                 "schemaVersion": "bakingrl.plugin/4",
                 "id": "com.example.compat",
@@ -784,7 +784,7 @@ mod tests {
             "id": "com.example.legacy",
             "name": "Legacy",
             "version": "1.0.0",
-            "bakingrlApi": "1.9.9",
+            "bakingrlApi": "2.2.9",
             "contributes": {}
         }));
         let newer = v4_manifest(serde_json::json!({
@@ -792,7 +792,7 @@ mod tests {
             "id": "com.example.newer",
             "name": "Newer",
             "version": "1.0.0",
-            "bakingrlApi": "2.3.0",
+            "bakingrlApi": "2.4.0",
             "contributes": {}
         }));
 
@@ -813,7 +813,7 @@ mod tests {
             "id": "com.example.catalog",
             "name": "Catalog",
             "version": "1.0.0",
-            "bakingrlApi": "2.2.0",
+            "bakingrlApi": "2.3.0",
             "runtime": {
                 "node": {
                     "entry": "dist/runtime.js"
@@ -897,7 +897,7 @@ mod tests {
         );
         assert_eq!(
             descriptor.compatibility.bakingrl_api.as_deref(),
-            Some("2.2.0")
+            Some("2.3.0")
         );
         assert_eq!(
             descriptor
@@ -961,7 +961,7 @@ mod tests {
                     "id": "bakingrl.provider",
                     "name": "Provider",
                     "version": "1.2.3",
-                    "bakingrlApi": "2.2.0",
+                    "bakingrlApi": "2.3.0",
                     "contributes": {
                         "extensionPoints": [
                             {
@@ -979,7 +979,7 @@ mod tests {
                     "id": "bakingrl.consumer",
                     "name": "Consumer",
                     "version": "1.0.0",
-                    "bakingrlApi": "2.2.0",
+                    "bakingrlApi": "2.3.0",
                     "dependencies": [
                         {
                             "packageId": "bakingrl.provider",
@@ -1020,7 +1020,7 @@ mod tests {
                     "id": "bakingrl.provider",
                     "name": "Provider",
                     "version": "1.2.3",
-                    "bakingrlApi": "2.2.0",
+                    "bakingrlApi": "2.3.0",
                     "contributes": {}
                 }),
                 true,
@@ -1031,7 +1031,7 @@ mod tests {
                     "id": "bakingrl.consumer",
                     "name": "Consumer",
                     "version": "1.0.0",
-                    "bakingrlApi": "2.2.0",
+                    "bakingrlApi": "2.3.0",
                     "dependencies": [
                         {
                             "packageId": "bakingrl.provider",
@@ -1067,7 +1067,7 @@ mod tests {
                     "id": "bakingrl.provider",
                     "name": "Provider",
                     "version": "1.0.0",
-                    "bakingrlApi": "2.2.0",
+                    "bakingrlApi": "2.3.0",
                     "contributes": {
                         "extensionPoints": [
                             {
@@ -1084,7 +1084,7 @@ mod tests {
                     "id": "bakingrl.consumer",
                     "name": "Consumer",
                     "version": "1.0.0",
-                    "bakingrlApi": "2.2.0",
+                    "bakingrlApi": "2.3.0",
                     "contributes": {
                         "contributions": [
                             {
@@ -1206,7 +1206,7 @@ mod tests {
             "id": "com.example.catalog",
             "name": "Catalog",
             "version": "1.0.0",
-            "bakingrlApi": "2.2.0",
+            "bakingrlApi": "2.3.0",
             "contributes": {
                 "settings": {
                     "schema": "schemas/plugin-settings.json"
