@@ -1781,28 +1781,40 @@ fn telemetry_hub_publish(
 fn telemetry_hub_snapshot(context: &ExtensionHostContext) -> Result<serde_json::Value, String> {
     let snapshot =
         telemetry_snapshot_value(context.bus.as_ref(), context.latest_telemetry.as_ref());
-    ensure_telemetry_snapshot_permission(
+    if !telemetry_snapshot_is_readable(
         &context.package_id,
         &context.permissions.bus.read,
         &snapshot,
-    )?;
+    )? {
+        return Ok(serde_json::Value::Null);
+    }
     Ok(snapshot)
 }
 
-fn ensure_telemetry_snapshot_permission(
+fn telemetry_snapshot_is_readable(
     package_id: &str,
     patterns: &[String],
     snapshot: &serde_json::Value,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     if snapshot.is_null() {
-        return Ok(());
+        return Ok(true);
     }
     let event_name = snapshot
         .get("Event")
         .or_else(|| snapshot.get("event"))
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| "Telemetry snapshot does not contain an event name.".to_string())?;
-    ensure_permission_matches(package_id, "bus.read", patterns, event_name)
+    let readable = patterns
+        .iter()
+        .any(|pattern| permission_pattern_matches(pattern, event_name));
+    if !readable {
+        tracing::debug!(
+            package_id,
+            event_name,
+            "Telemetry snapshot hidden because bus.read permission is missing"
+        );
+    }
+    Ok(readable)
 }
 
 fn telemetry_snapshot_value(
@@ -2039,64 +2051,39 @@ fn ensure_storage_permission(
 fn read_state_hub(
     context: &ExtensionHostContext,
 ) -> Result<serde_json::Map<String, serde_json::Value>, String> {
-    let path = state_hub_path(context.storage.root());
-    match fs::read_to_string(path.clone()) {
-        Ok(raw) if raw.trim().is_empty() => Ok(serde_json::Map::new()),
-        Ok(raw) => {
-            let value = serde_json::from_str::<serde_json::Value>(&raw).map_err(|err| {
-                format!(
-                    "Unable to read state hub JSON from '{}': {}",
-                    path.display(),
-                    err
-                )
-            })?;
-            value.as_object().cloned().ok_or_else(|| {
-                format!(
-                    "State hub file '{}' must contain a JSON object.",
-                    path.display()
-                )
-            })
-        }
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(serde_json::Map::new()),
-        Err(err) => Err(format!(
-            "Unable to read state hub file '{}': {}",
-            path.display(),
-            err
-        )),
+    if !context
+        .storage
+        .list(Some(STATE_HUB_FILE))?
+        .iter()
+        .any(|path| path == STATE_HUB_FILE)
+    {
+        return Ok(serde_json::Map::new());
     }
+    let value = context.storage.read_json(STATE_HUB_FILE)?;
+    value
+        .as_object()
+        .cloned()
+        .ok_or_else(|| format!("State hub file '{STATE_HUB_FILE}' must contain a JSON object."))
 }
 
 fn write_state_hub(
     context: &ExtensionHostContext,
     state: serde_json::Map<String, serde_json::Value>,
 ) -> Result<(), String> {
-    let path = state_hub_path(context.storage.root());
     let payload = serde_json::Value::Object(state);
-    let raw = serde_json::to_string_pretty(&payload).map_err(|err| {
-        format!(
-            "Unable to serialize state hub file '{}': {}",
-            path.display(),
-            err
-        )
-    })?;
-    fs::write(&path, raw).map_err(|err| {
-        format!(
-            "Unable to write state hub file '{}': {}",
-            path.display(),
-            err
-        )
-    })?;
-    Ok(())
-}
-
-fn state_hub_path(storage_root: &Path) -> PathBuf {
-    storage_root.join(STATE_HUB_FILE)
+    context.storage.write_json(STATE_HUB_FILE, &payload)
 }
 
 fn state_hub_read(
     context: &ExtensionHostContext,
     params: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
+    ensure_storage_permission(
+        context,
+        "storage.read",
+        &context.permissions.storage.read,
+        STATE_HUB_FILE,
+    )?;
     let key = required_string(&params, "key")?;
     let state = read_state_hub(context)?;
     Ok(state.get(&key).cloned().unwrap_or(serde_json::Value::Null))
@@ -2106,6 +2093,18 @@ fn state_hub_write(
     context: &ExtensionHostContext,
     params: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
+    ensure_storage_permission(
+        context,
+        "storage.read",
+        &context.permissions.storage.read,
+        STATE_HUB_FILE,
+    )?;
+    ensure_storage_permission(
+        context,
+        "storage.write",
+        &context.permissions.storage.write,
+        STATE_HUB_FILE,
+    )?;
     let key = required_string(&params, "key")?;
     let value = params
         .get("value")
@@ -2118,6 +2117,12 @@ fn state_hub_write(
 }
 
 fn state_hub_snapshot(context: &ExtensionHostContext) -> Result<serde_json::Value, String> {
+    ensure_storage_permission(
+        context,
+        "storage.read",
+        &context.permissions.storage.read,
+        STATE_HUB_FILE,
+    )?;
     Ok(serde_json::Value::Object(read_state_hub(context)?))
 }
 
@@ -2741,19 +2746,18 @@ mod tests {
             "Data": { "MatchGuid": "permission-check" }
         });
 
-        assert!(ensure_telemetry_snapshot_permission(
+        assert!(telemetry_snapshot_is_readable(
             "bakingrl.allowed",
             &["Update*".to_string()],
             &snapshot,
         )
-        .is_ok());
-        let error = ensure_telemetry_snapshot_permission(
+        .unwrap());
+        assert!(!telemetry_snapshot_is_readable(
             "bakingrl.denied",
             &["BallHit".to_string()],
             &snapshot,
         )
-        .unwrap_err();
-        assert!(error.contains("has no bus.read permission for 'UpdateState'"));
+        .unwrap());
     }
 
     #[test]
