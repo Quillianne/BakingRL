@@ -436,8 +436,45 @@ impl MarketplaceService {
 
     pub fn complete_first_run(&self) -> Result<(), String> {
         let mut state = self.state.lock().unwrap();
-        state.first_run_completed = true;
-        write_local_state(&self.state_path, &state)
+        let mut next_state = state.clone();
+        next_state.first_run_completed = true;
+        write_local_state(&self.state_path, &next_state)?;
+        *state = next_state;
+        Ok(())
+    }
+
+    pub(super) fn trusted_publisher_ids(&self) -> HashSet<String> {
+        self.state
+            .lock()
+            .unwrap()
+            .trusted_publishers
+            .iter()
+            .map(|publisher| format!("{}:{}", publisher.developer_id, publisher.key_fingerprint))
+            .collect()
+    }
+
+    pub(super) fn trust_publishers(&self, publishers: &[(String, String)]) -> Result<(), String> {
+        let mut state = self.state.lock().unwrap();
+        let mut next_state = state.clone();
+        for (developer_id, key_fingerprint) in publishers {
+            if !next_state.trusted_publishers.iter().any(|publisher| {
+                publisher.developer_id == *developer_id
+                    && publisher.key_fingerprint == *key_fingerprint
+            }) {
+                next_state.trusted_publishers.push(TrustedPublisher {
+                    developer_id: developer_id.clone(),
+                    key_fingerprint: key_fingerprint.clone(),
+                });
+            }
+        }
+        next_state.trusted_publishers.sort_by(|left, right| {
+            left.developer_id
+                .cmp(&right.developer_id)
+                .then_with(|| left.key_fingerprint.cmp(&right.key_fingerprint))
+        });
+        write_local_state(&self.state_path, &next_state)?;
+        *state = next_state;
+        Ok(())
     }
 
     async fn fetch_network(&self) -> Result<MarketplaceSnapshot, String> {
@@ -501,8 +538,10 @@ impl MarketplaceService {
     fn accept_sequence(&self, sequence: u64) -> Result<(), String> {
         let mut state = self.state.lock().unwrap();
         if sequence > state.max_sequence {
-            state.max_sequence = sequence;
-            write_local_state(&self.state_path, &state)?;
+            let mut next_state = state.clone();
+            next_state.max_sequence = sequence;
+            write_local_state(&self.state_path, &next_state)?;
+            *state = next_state;
         }
         Ok(())
     }
@@ -1167,7 +1206,7 @@ fn write_local_state(path: &Path, state: &MarketplaceLocalState) -> Result<(), S
     atomic_write(path, &raw)
 }
 
-fn atomic_write(path: &Path, contents: &[u8]) -> Result<(), String> {
+pub(super) fn atomic_write(path: &Path, contents: &[u8]) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or_else(|| "Marketplace file has no parent directory".to_string())?;
@@ -1211,7 +1250,7 @@ fn atomic_write(path: &Path, contents: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-fn read_atomic_file(path: &Path) -> Result<Vec<u8>, String> {
+pub(super) fn read_atomic_file(path: &Path) -> Result<Vec<u8>, String> {
     recover_atomic_file(path)?;
     fs::read(path).map_err(|error| format!("Unable to read Marketplace file: {error}"))
 }

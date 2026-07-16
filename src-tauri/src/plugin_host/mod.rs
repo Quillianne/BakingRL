@@ -3,6 +3,7 @@ mod diagnostics;
 pub(crate) mod extension_host_runtime;
 mod json_store;
 mod marketplace;
+mod marketplace_transaction;
 mod package_files;
 mod plugin_storage;
 mod runtime_specs;
@@ -45,6 +46,8 @@ use extension_host_runtime::{ExtensionHostRuntimeManager, ExtensionHostRuntimeSp
 use json_store::{read_json_or_default, write_json};
 use marketplace::MarketplaceService;
 pub use marketplace::MarketplaceSnapshot;
+use marketplace_transaction::MarketplaceInstaller;
+pub use marketplace_transaction::{MarketplaceInstallPlan, MarketplaceInstallResult};
 use package_files::{
     find_first_bundle, format_command_error, is_remote_package_source, parse_export_ref,
     read_binary_package_file, safe_installed_package_dir, safe_package_relative_path,
@@ -119,6 +122,8 @@ pub struct PluginHost {
     app_settings_path: PathBuf,
     package_settings_path: PathBuf,
     marketplace: MarketplaceService,
+    marketplace_installer: MarketplaceInstaller,
+    package_install_lock: Mutex<()>,
     records: Mutex<HashMap<String, PackageRecord>>,
     deleting_packages: Mutex<HashMap<String, PendingPackageDeletion>>,
     diagnostics: PluginDiagnosticsStore,
@@ -150,7 +155,10 @@ impl PluginHost {
         let plugin_storage_dir = app_data.join("plugin-storage");
         fs::create_dir_all(&plugin_storage_dir)
             .map_err(|e| format!("Unable to create plugin storage directory: {e}"))?;
+        let state_path = app_data.join("package_state.json");
         let marketplace = MarketplaceService::new(&app_data)?;
+        let marketplace_installer =
+            MarketplaceInstaller::new(&app_data, &packages_dir, &state_path)?;
 
         Ok(Self {
             app_handle,
@@ -158,10 +166,12 @@ impl PluginHost {
             registry,
             packages_dir,
             plugin_storage_dir,
-            state_path: app_data.join("package_state.json"),
+            state_path,
             app_settings_path: app_data.join("app_settings.json"),
             package_settings_path: app_data.join("package_settings.json"),
             marketplace,
+            marketplace_installer,
+            package_install_lock: Mutex::new(()),
             records: Mutex::new(HashMap::new()),
             deleting_packages: Mutex::new(HashMap::new()),
             diagnostics: PluginDiagnosticsStore::default(),
@@ -187,6 +197,116 @@ impl PluginHost {
 
     pub fn complete_marketplace_first_run(&self) -> Result<(), String> {
         self.marketplace.complete_first_run()
+    }
+
+    pub async fn prepare_marketplace_install(
+        &self,
+        package_ids: Vec<String>,
+    ) -> Result<MarketplaceInstallPlan, String> {
+        let snapshot = self.marketplace.snapshot(true).await?;
+        if !snapshot.installable {
+            return Err(
+                "The verified Marketplace catalogue is expired and cannot be used for installation."
+                    .to_string(),
+            );
+        }
+        let installed_versions = self
+            .records
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(package_id, record)| (package_id.clone(), record.descriptor.version.clone()))
+            .collect::<HashMap<_, _>>();
+        self.marketplace_installer
+            .prepare(
+                snapshot.catalogue,
+                package_ids,
+                &installed_versions,
+                &self.marketplace.trusted_publisher_ids(),
+                env!("CARGO_PKG_VERSION"),
+            )
+            .await
+    }
+
+    pub fn commit_marketplace_install(
+        &self,
+        transaction_id: String,
+        accepted_publishers: Vec<String>,
+    ) -> Result<MarketplaceInstallResult, String> {
+        let _install_guard = self.package_install_lock.lock().unwrap();
+        let transaction = self
+            .marketplace_installer
+            .transaction_for_commit(&transaction_id, &accepted_publishers)?;
+        let previous_state = self.load_state();
+        self.marketplace_installer
+            .begin_commit(&transaction, &previous_state)?;
+        let mut stopped_state = previous_state.clone();
+        for package in &transaction.packages {
+            stopped_state
+                .enabled
+                .insert(package.package_id().to_string(), false);
+        }
+        if let Err(error) = self
+            .marketplace_installer
+            .write_package_state(&stopped_state)
+        {
+            let rollback = self.marketplace_installer.abort_commit(&transaction_id);
+            self.reload_packages();
+            return Err(combine_rollback_error(error, rollback));
+        }
+        self.reload_packages();
+
+        let receipts = match self.marketplace_installer.swap_packages(&transaction) {
+            Ok(receipts) => receipts,
+            Err(error) => {
+                let rollback = self.marketplace_installer.abort_commit(&transaction_id);
+                self.reload_packages();
+                return Err(combine_rollback_error(error, rollback));
+            }
+        };
+
+        let trust_pairs = transaction
+            .publishers
+            .iter()
+            .map(|publisher| {
+                (
+                    publisher.developer_id.clone(),
+                    publisher.key_fingerprint.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        if let Err(error) = self.marketplace.trust_publishers(&trust_pairs) {
+            let rollback = self.marketplace_installer.abort_commit(&transaction_id);
+            self.reload_packages();
+            return Err(combine_rollback_error(error, rollback));
+        }
+
+        let mut next_state = previous_state;
+        for package in &transaction.packages {
+            next_state
+                .enabled
+                .insert(package.package_id().to_string(), true);
+        }
+        if let Err(error) = self.marketplace_installer.write_package_state(&next_state) {
+            let rollback = self.marketplace_installer.abort_commit(&transaction_id);
+            self.reload_packages();
+            return Err(combine_rollback_error(error, rollback));
+        }
+        if let Err(error) = self.marketplace_installer.finish_commit(&transaction_id) {
+            let rollback = self.marketplace_installer.abort_commit(&transaction_id);
+            self.reload_packages();
+            return Err(combine_rollback_error(error, rollback));
+        }
+        self.reload_packages();
+        Ok(MarketplaceInstallResult {
+            transaction_id,
+            receipts,
+        })
+    }
+
+    pub fn discard_marketplace_install(&self, transaction_id: String) -> Result<(), String> {
+        let _install_guard = self.package_install_lock.lock().unwrap();
+        self.marketplace_installer.discard(&transaction_id)
     }
 
     pub fn frontend_dist_dir(&self) -> PathBuf {
@@ -471,6 +591,7 @@ impl PluginHost {
     }
 
     pub fn install_package_from_file(&self, path: String) -> Result<InstallReceipt, String> {
+        let _install_guard = self.package_install_lock.lock().unwrap();
         let inspection = inspect_bundle_file(Path::new(&path))?;
         let should_enable = compatibility_for_manifest(&inspection.manifest).is_compatible();
         let receipt = install_bundle_from_file(
@@ -615,6 +736,7 @@ impl PluginHost {
         path: String,
         source: String,
     ) -> Result<InstallReceipt, String> {
+        let _install_guard = self.package_install_lock.lock().unwrap();
         let bundle_path = PathBuf::from(&path);
         self.validate_install_trust(&bundle_path, &source)?;
         let inspection = inspect_bundle_file(&bundle_path)?;
@@ -3319,6 +3441,13 @@ fn package_webview_module_relative_path(
     ))
 }
 
+fn combine_rollback_error(error: String, rollback: Result<(), String>) -> String {
+    match rollback {
+        Ok(()) => error,
+        Err(rollback_error) => format!("{error} Rollback also failed: {rollback_error}"),
+    }
+}
+
 fn package_webview_route(package_id: &str, webview_id: &str) -> String {
     format!(
         "/plugin-webview/{}/{}",
@@ -3379,6 +3508,38 @@ pub fn complete_marketplace_first_run(
 ) -> Result<(), String> {
     ensure_admin_window_label(window.label())?;
     host.complete_marketplace_first_run()
+}
+
+#[tauri::command]
+pub async fn prepare_marketplace_install(
+    window: Window,
+    host: State<'_, Arc<PluginHost>>,
+    package_ids: Vec<String>,
+) -> Result<MarketplaceInstallPlan, String> {
+    ensure_admin_window_label(window.label())?;
+    drop(window);
+    host.prepare_marketplace_install(package_ids).await
+}
+
+#[tauri::command]
+pub fn commit_marketplace_install(
+    window: Window,
+    host: State<'_, Arc<PluginHost>>,
+    transaction_id: String,
+    accepted_publishers: Vec<String>,
+) -> Result<MarketplaceInstallResult, String> {
+    ensure_admin_window_label(window.label())?;
+    host.commit_marketplace_install(transaction_id, accepted_publishers)
+}
+
+#[tauri::command]
+pub fn discard_marketplace_install(
+    window: Window,
+    host: State<'_, Arc<PluginHost>>,
+    transaction_id: String,
+) -> Result<(), String> {
+    ensure_admin_window_label(window.label())?;
+    host.discard_marketplace_install(transaction_id)
 }
 
 #[tauri::command]
