@@ -10,6 +10,7 @@
 
   let root = $state<HTMLElement | null>(null);
   let message = $state("");
+  let isSurface = $state(false);
 
   type TelemetryCallback = (event: GameEventFrame) => void | Promise<void>;
   type TelemetrySubscription = {
@@ -268,6 +269,7 @@
           webviewId: data.webviewId
         }
       );
+      isSurface = descriptor.kind === "surface";
       const settings = await packageSettings();
       const isSettingsWebview = descriptor.kind === "settings";
       const dimensions = {
@@ -384,7 +386,7 @@
   <title>{data.webviewId}</title>
 </svelte:head>
 
-<main class="plugin-webview-host" bind:this={root}>
+<main class="plugin-webview-host" class:surface={isSurface} bind:this={root}>
   {#if message}
     <div class="plugin-webview-error">{message}</div>
   {/if}
@@ -401,6 +403,11 @@
     background: var(--bg-primary);
     color: var(--text-primary);
     overflow: hidden;
+  }
+
+  .plugin-webview-host.surface {
+    min-height: 100vh;
+    background: transparent;
   }
 
   .plugin-webview-error {

@@ -11,7 +11,14 @@
 
   const dragZoneHeight = 96;
   const packageFileOpenedEvent = "bakingrl-package-files-opened";
-  const showWindowFrame = $derived(windowLabel !== null);
+  const isSurfaceWindow = $derived(windowLabel?.startsWith("plugin-surface-") ?? false);
+  const showWindowFrame = $derived(windowLabel !== null && !isSurfaceWindow);
+
+  $effect(() => {
+    if (typeof document === "undefined") return;
+    if (isSurfaceWindow) document.documentElement.dataset.bakingrlWindow = "surface";
+    else delete document.documentElement.dataset.bakingrlWindow;
+  });
 
   onMount(() => {
     applyTheme(getStoredTheme());
@@ -111,6 +118,11 @@
     min-height: 100vh;
     background: var(--bg-dark);
     color: var(--text-primary);
+  }
+
+  :global(html[data-bakingrl-window="surface"]),
+  :global(html[data-bakingrl-window="surface"] body) {
+    background: transparent !important;
   }
 
   .app-window-controls {
