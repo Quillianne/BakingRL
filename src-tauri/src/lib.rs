@@ -9,16 +9,16 @@ use crate::bus::{BusEvent, EventBus};
 use crate::ingestor::{start_tcp_ingestor, TelemetryStatusState};
 use crate::models::{GameEvent, TelemetryConnectionStatus};
 use crate::plugin_host::{
-    call_service_export, clear_plugin_diagnostics, delete_package_secret, discard_prepared_package,
-    emit_package_webview_event, get_app_settings, get_package_configuration_state,
-    get_package_settings, get_package_webview_runtime_descriptor, get_runtime_info,
-    inspect_package_bundle, install_package_from_file, install_package_from_url,
-    install_prepared_package, list_packages, list_plugin_diagnostics, open_package_configuration,
-    open_package_secrets, open_package_webview, packages_dir, plugin_registry_get,
-    prepare_package_from_deep_link, prepare_package_from_git, prepare_package_from_url,
-    push_package_webview_diagnostic, read_package_webview_asset, read_package_webview_module_text,
-    reload_packages, remove_package, save_app_settings, save_package_settings, set_package_enabled,
-    set_package_secret, PluginHost,
+    call_service_export, clear_plugin_diagnostics, complete_marketplace_first_run,
+    delete_package_secret, discard_prepared_package, emit_package_webview_event, get_app_settings,
+    get_marketplace_snapshot, get_package_configuration_state, get_package_settings,
+    get_package_webview_runtime_descriptor, get_runtime_info, inspect_package_bundle,
+    install_package_from_file, install_package_from_url, install_prepared_package, list_packages,
+    list_plugin_diagnostics, open_package_configuration, open_package_secrets,
+    open_package_webview, packages_dir, plugin_registry_get, prepare_package_from_deep_link,
+    prepare_package_from_git, prepare_package_from_url, push_package_webview_diagnostic,
+    read_package_webview_asset, read_package_webview_module_text, reload_packages, remove_package,
+    save_app_settings, save_package_settings, set_package_enabled, set_package_secret, PluginHost,
 };
 use crate::registry::{registry_entries, registry_get, Registry};
 use std::env;
@@ -386,6 +386,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             list_packages,
+            get_marketplace_snapshot,
+            complete_marketplace_first_run,
             inspect_package_bundle,
             install_package_from_file,
             install_package_from_url,

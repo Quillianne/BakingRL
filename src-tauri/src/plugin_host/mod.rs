@@ -2,6 +2,7 @@ mod descriptors;
 mod diagnostics;
 pub(crate) mod extension_host_runtime;
 mod json_store;
+mod marketplace;
 mod package_files;
 mod plugin_storage;
 mod runtime_specs;
@@ -42,6 +43,8 @@ pub use diagnostics::{
 };
 use extension_host_runtime::{ExtensionHostRuntimeManager, ExtensionHostRuntimeSpec};
 use json_store::{read_json_or_default, write_json};
+use marketplace::MarketplaceService;
+pub use marketplace::MarketplaceSnapshot;
 use package_files::{
     find_first_bundle, format_command_error, is_remote_package_source, parse_export_ref,
     read_binary_package_file, safe_installed_package_dir, safe_package_relative_path,
@@ -115,6 +118,7 @@ pub struct PluginHost {
     state_path: PathBuf,
     app_settings_path: PathBuf,
     package_settings_path: PathBuf,
+    marketplace: MarketplaceService,
     records: Mutex<HashMap<String, PackageRecord>>,
     deleting_packages: Mutex<HashMap<String, PendingPackageDeletion>>,
     diagnostics: PluginDiagnosticsStore,
@@ -146,6 +150,7 @@ impl PluginHost {
         let plugin_storage_dir = app_data.join("plugin-storage");
         fs::create_dir_all(&plugin_storage_dir)
             .map_err(|e| format!("Unable to create plugin storage directory: {e}"))?;
+        let marketplace = MarketplaceService::new(&app_data)?;
 
         Ok(Self {
             app_handle,
@@ -156,6 +161,7 @@ impl PluginHost {
             state_path: app_data.join("package_state.json"),
             app_settings_path: app_data.join("app_settings.json"),
             package_settings_path: app_data.join("package_settings.json"),
+            marketplace,
             records: Mutex::new(HashMap::new()),
             deleting_packages: Mutex::new(HashMap::new()),
             diagnostics: PluginDiagnosticsStore::default(),
@@ -173,6 +179,14 @@ impl PluginHost {
 
     pub fn packages_dir(&self) -> String {
         self.packages_dir.to_string_lossy().to_string()
+    }
+
+    pub async fn marketplace_snapshot(&self, refresh: bool) -> Result<MarketplaceSnapshot, String> {
+        self.marketplace.snapshot(refresh).await
+    }
+
+    pub fn complete_marketplace_first_run(&self) -> Result<(), String> {
+        self.marketplace.complete_first_run()
     }
 
     pub fn frontend_dist_dir(&self) -> PathBuf {
@@ -3345,6 +3359,26 @@ pub fn list_packages(
 ) -> Result<Vec<PackageDescriptor>, String> {
     ensure_admin_window_label(window.label())?;
     Ok(host.list_packages())
+}
+
+#[tauri::command]
+pub async fn get_marketplace_snapshot(
+    window: Window,
+    host: State<'_, Arc<PluginHost>>,
+    refresh: bool,
+) -> Result<MarketplaceSnapshot, String> {
+    ensure_admin_window_label(window.label())?;
+    drop(window);
+    host.marketplace_snapshot(refresh).await
+}
+
+#[tauri::command]
+pub fn complete_marketplace_first_run(
+    window: Window,
+    host: State<'_, Arc<PluginHost>>,
+) -> Result<(), String> {
+    ensure_admin_window_label(window.label())?;
+    host.complete_marketplace_first_run()
 }
 
 #[tauri::command]
