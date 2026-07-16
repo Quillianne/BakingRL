@@ -44,21 +44,22 @@
 <div class="studio-shell">
   <aside class="studio-rail" aria-label="BakingRL">
     <div class="rail-brand" aria-label="BakingRL">
-      <div>
+      <span class="rail-brand-mark" aria-hidden="true">BR</span>
+      <div class="rail-brand-copy">
         <h1>BakingRL</h1>
-        <p>Your RL Companion</p>
+        <p>{state.t("shell.workspaceName")}</p>
       </div>
     </div>
 
     <nav class="rail-nav" aria-label="Primary">
-      <a class="nav-link" class:active={$page.url.pathname === "/"} href="/">
+      <a class="nav-link" class:active={$page.url.pathname === "/"} href="/" aria-label={state.t("nav.home")} title={state.t("nav.home")}>
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
           <path d="m3 10 9-7 9 7"></path>
           <path d="M5 10v10h14V10"></path>
         </svg>
         <span>{state.t("nav.home")}</span>
       </a>
-      <a class="nav-link" class:active={$page.url.pathname.startsWith("/plugins")} href="/plugins">
+      <a class="nav-link" class:active={$page.url.pathname.startsWith("/plugins")} href="/plugins" aria-label={state.t("nav.packages")} title={state.t("nav.packages")}>
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M20 7h-9"></path>
           <path d="M14 17H5"></path>
@@ -70,7 +71,7 @@
           <span class="nav-badge">{state.packageErrorCount}</span>
         {/if}
       </a>
-      <a class="nav-link" class:active={$page.url.pathname.startsWith("/developer")} href="/developer">
+      <a class="nav-link" class:active={$page.url.pathname.startsWith("/developer")} href="/developer" aria-label={state.t("nav.developer")} title={state.t("nav.developer")}>
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
           <path d="m16 18 6-6-6-6"></path>
           <path d="m8 6-6 6 6 6"></path>
@@ -94,7 +95,7 @@
         </span>
       </button>
 
-      <a class="settings-link" class:active={$page.url.pathname.startsWith("/settings")} href="/settings">
+      <a class="settings-link" class:active={$page.url.pathname.startsWith("/settings")} href="/settings" aria-label={state.t("nav.settings")} title={state.t("nav.settings")}>
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="12" cy="12" r="3"></circle>
           <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.65 1.65 0 0 0 15 19.4a1.65 1.65 0 0 0-1 .6 1.65 1.65 0 0 0-.4 1.08V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 8.6 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-.6-1 1.65 1.65 0 0 0-1.08-.4H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 8.6a1.65 1.65 0 0 0-.33-1.82l-.06-.06A2 2 0 1 1 7.04 3.9l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-.6 1.65 1.65 0 0 0 .4-1.08V3a2 2 0 1 1 4 0v.09A1.65 1.65 0 0 0 15.4 4.6a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.14.31.36.58.6.8.28.24.64.4 1.08.4H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"></path>

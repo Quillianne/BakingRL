@@ -56,19 +56,19 @@
 
 {#if draftSettings}
   <div class="settings-layout">
-    <nav class="studio-panel settings-nav" aria-label={dashboard.t("nav.settings")}>
-      <button class="btn-outline" class:active={section === "general"} onclick={() => (section = "general")}>
+    <nav class="settings-nav" aria-label={dashboard.t("nav.settings")}>
+      <button type="button" class="btn-outline" class:active={section === "general"} onclick={() => (section = "general")}>
         {dashboard.t("settings.general")}
       </button>
-      <button class="btn-outline" class:active={section === "runtime"} onclick={() => (section = "runtime")}>
+      <button type="button" class="btn-outline" class:active={section === "runtime"} onclick={() => (section = "runtime")}>
         {dashboard.t("settings.runtime")}
       </button>
-      <button class="btn-outline" class:active={section === "advanced"} onclick={() => (section = "advanced")}>
+      <button type="button" class="btn-outline" class:active={section === "advanced"} onclick={() => (section = "advanced")}>
         {dashboard.t("settings.advanced")}
       </button>
     </nav>
 
-    <section class="studio-panel">
+    <section class="settings-content">
       {#if section === "general"}
         <div class="panel-heading">
           <div>

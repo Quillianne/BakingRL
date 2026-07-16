@@ -18,35 +18,34 @@
 <div class="page-title">
   <div>
     <h1>{state.t("home.title")}</h1>
-    <p>{state.t("home.desc")}</p>
   </div>
 </div>
 
 <div class="section-stack">
-  <section class="metric-grid home-runtime-grid" aria-label={state.t("home.runtimeStatus")}>
-    <button class="metric-cell" type="button" onclick={() => state.openTelemetryHelp()}>
+  <section class="home-status-band" aria-label={state.t("home.runtimeStatus")}>
+    <button class="home-status-item" type="button" onclick={() => state.openTelemetryHelp()}>
+      <span class="home-status-indicator" class:connected={state.telemetryStatus?.state === "connected"} class:connecting={state.telemetryStatus?.state === "connecting"}></span>
       <strong>{state.telemetryStatusLabel}</strong>
       <span>{state.t("home.telemetryState")}</span>
       <small>{state.telemetryAddress}</small>
     </button>
-    <a class="metric-cell" href="/plugins">
+    <a class="home-status-item" href="/plugins">
       <strong>{state.enabledPackageCount}/{state.packages.length}</strong>
       <span>{state.t("home.activePackagesLabel")}</span>
       <small>{state.t("home.packageRuntime")}</small>
     </a>
-    <a class="metric-cell" href="/developer">
+    <a class="home-status-item" href="/developer">
       <strong>{state.developerErrors.length}</strong>
       <span>{state.t("home.diagnostics")}</span>
       <small>{state.t("home.diagnosticsMeta")}</small>
     </a>
   </section>
 
-  <section class="card-grid">
-    <article class="studio-card home-runtime-card">
-      <div>
-        <h3>{state.t("home.runtimeStatus")}</h3>
-        <p>{state.t("home.runtimeStatusDesc")}</p>
-      </div>
+  <section class="home-workspace">
+    <article class="home-workspace-section home-runtime-section">
+      <header class="home-workspace-heading">
+        <h2>{state.t("home.runtimeStatus")}</h2>
+      </header>
       <div class="runtime-version-card">
         <span class="runtime-api-copy">
           <small>{state.t("developer.runtimeApiVersion")}</small>
@@ -62,11 +61,11 @@
       </div>
     </article>
 
-    <article class="studio-card">
-      <div>
-        <h3>{state.t("home.packages")}</h3>
-        <p>{state.t("home.packagesDesc")}</p>
-      </div>
+    <article class="home-workspace-section">
+      <header class="home-workspace-heading">
+        <h2>{state.t("home.packages")}</h2>
+        <span>{runningPackages.length}</span>
+      </header>
       {#if runningPackages.length}
         <ul class="home-admin-list">
           {#each runningPackages.slice(0, 5) as pkg (pkg.id)}
@@ -80,20 +79,18 @@
           {/each}
         </ul>
       {:else}
-        <div class="empty-state compact">
-          <p>{state.t("packages.noneInstalled")}</p>
-        </div>
+        <p class="home-empty-row">{state.t("packages.noneInstalled")}</p>
       {/if}
       <div class="card-actions">
         <a class="btn-primary" href="/plugins">{state.t("home.managePackages")}</a>
       </div>
     </article>
 
-    <article class="studio-card">
-      <div>
-        <h3>{state.t("home.diagnostics")}</h3>
-        <p>{state.t("home.diagnosticsDesc")}</p>
-      </div>
+    <article class="home-workspace-section home-diagnostics-section">
+      <header class="home-workspace-heading">
+        <h2>{state.t("home.diagnostics")}</h2>
+        <span>{latestDiagnostics.length}</span>
+      </header>
       {#if latestDiagnostics.length}
         <ul class="home-admin-list">
           {#each latestDiagnostics as entry (entry.id)}
@@ -107,9 +104,7 @@
           {/each}
         </ul>
       {:else}
-        <div class="empty-state compact">
-          <p>{state.t("home.noDiagnostics")}</p>
-        </div>
+        <p class="home-empty-row">{state.t("home.noDiagnostics")}</p>
       {/if}
       <div class="card-actions">
         <a class="btn-secondary" href="/developer">{state.t("nav.developer")}</a>
@@ -118,10 +113,9 @@
   </section>
 
   {#if packagesWithIssues.length}
-    <section class="studio-panel">
+    <section class="home-issue-section">
       <div class="panel-heading">
         <h2>{state.t("home.packageIssues")}</h2>
-        <p>{state.t("home.packageIssuesDesc")}</p>
       </div>
       <ul class="home-admin-list issue-list">
         {#each packagesWithIssues as pkg (pkg.id)}

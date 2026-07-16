@@ -4,24 +4,24 @@ export const THEME_STORAGE_KEY = "bakingrl-theme";
 export const THEMES = [
   {
     id: "industrial-bakery",
-    label: "Industrial Bakery",
-    description: "Dark broadcast workshop.",
+    label: "Control Room",
+    description: "Dark broadcast workspace.",
     preview: {
-      background: "#121110",
-      surface: "#292520",
-      accent: "#d75f1d",
-      text: "#f1ece4"
+      background: "#0f1216",
+      surface: "#20262d",
+      accent: "#f06445",
+      text: "#f3f5f7"
     }
   },
   {
     id: "light-bakery",
-    label: "Light Bakery",
-    description: "Light studio control room.",
+    label: "Daylight",
+    description: "Light broadcast workspace.",
     preview: {
-      background: "#f4eadc",
-      surface: "#fff8ef",
-      accent: "#b95219",
-      text: "#201a15"
+      background: "#f4f6f8",
+      surface: "#ffffff",
+      accent: "#d84e32",
+      text: "#17212b"
     }
   }
 ] as const;

@@ -1,29 +1,30 @@
 :root {
   color-scheme: dark;
-  --bg-dark: #121110;
-  --bg-panel: #1d1b18;
-  --bg-panel-hover: #292520;
-  --border-color: rgba(235, 220, 198, 0.16);
-  --border-color-focus: rgba(216, 95, 29, 0.62);
-  --text-primary: #f1ece4;
-  --text-secondary: #c9bca9;
-  --text-muted: #8e8170;
-  --accent: #d75f1d;
-  --accent-hover: #f08a3c;
-  --danger: #c94f3f;
-  --danger-hover: #e15e4e;
-  --success: #6fa35e;
-  --success-bg: rgba(111, 163, 94, 0.12);
-  --warn: #d9a24a;
+  --bg-dark: #0f1216;
+  --bg-panel: #171b20;
+  --bg-panel-hover: #20262d;
+  --border-color: rgba(211, 221, 232, 0.13);
+  --border-color-focus: rgba(78, 184, 199, 0.62);
+  --text-primary: #f3f5f7;
+  --text-secondary: #b7c0ca;
+  --text-muted: #75808c;
+  --accent: #f06445;
+  --accent-hover: #ff7656;
+  --info: #4eb8c7;
+  --danger: #eb5d68;
+  --danger-hover: #ff707a;
+  --success: #51b879;
+  --success-bg: rgba(81, 184, 121, 0.12);
+  --warn: #e0a84a;
   --radius-sm: 5px;
   --radius-md: 7px;
   --radius-lg: 8px;
   --transition: 0.2s ease;
   --font-family: 'IBM Plex Sans', 'Aptos', 'Segoe UI Variable', system-ui, sans-serif;
-  --editor-bg-dark: #0d0c0b;
-  --editor-bg-panel: rgba(29, 27, 24, 0.94);
-  --editor-bg-panel-hover: rgba(216, 95, 29, 0.12);
-  --accent-contrast: #fff7ee;
+  --editor-bg-dark: #0a0d10;
+  --editor-bg-panel: rgba(23, 27, 32, 0.96);
+  --editor-bg-panel-hover: rgba(78, 184, 199, 0.1);
+  --accent-contrast: #ffffff;
   --shadow-soft: 0 10px 32px rgba(0, 0, 0, 0.28);
   --shadow-elevated: 0 24px 68px rgba(0, 0, 0, 0.42);
 }
@@ -34,32 +35,46 @@
 
 :root[data-theme="light-bakery"] {
   color-scheme: light;
-  --bg-dark: #f4eadc;
-  --bg-panel: #fff8ef;
-  --bg-panel-hover: #f1e0cc;
-  --border-color: rgba(73, 56, 40, 0.18);
-  --border-color-focus: rgba(185, 82, 25, 0.58);
-  --text-primary: #201a15;
-  --text-secondary: #5d5146;
-  --text-muted: #8d7a68;
-  --accent: #b95219;
-  --accent-hover: #d66a25;
-  --danger: #a94035;
-  --danger-hover: #c94f3f;
-  --success: #557f47;
-  --success-bg: rgba(85, 127, 71, 0.12);
-  --warn: #a87420;
-  --editor-bg-dark: #eadcc8;
-  --editor-bg-panel: rgba(255, 248, 239, 0.94);
-  --editor-bg-panel-hover: rgba(185, 82, 25, 0.1);
-  --shadow-soft: 0 10px 26px rgba(73, 56, 40, 0.12);
-  --shadow-elevated: 0 24px 58px rgba(73, 56, 40, 0.18);
+  --bg-dark: #f4f6f8;
+  --bg-panel: #ffffff;
+  --bg-panel-hover: #edf1f4;
+  --border-color: rgba(31, 43, 55, 0.15);
+  --border-color-focus: rgba(12, 135, 151, 0.58);
+  --text-primary: #17212b;
+  --text-secondary: #4f5d6b;
+  --text-muted: #7b8793;
+  --accent: #d84e32;
+  --accent-hover: #b93c24;
+  --info: #0c8797;
+  --danger: #c63f4a;
+  --danger-hover: #a92f39;
+  --success: #238258;
+  --success-bg: rgba(35, 130, 88, 0.1);
+  --warn: #a76a13;
+  --editor-bg-dark: #e8edf1;
+  --editor-bg-panel: rgba(255, 255, 255, 0.97);
+  --editor-bg-panel-hover: rgba(12, 135, 151, 0.08);
+  --shadow-soft: 0 10px 26px rgba(31, 43, 55, 0.1);
+  --shadow-elevated: 0 24px 58px rgba(31, 43, 55, 0.16);
 }
 
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
 body {
   margin: 0;
+  min-width: 0;
+  min-height: 100%;
   background: var(--bg-dark);
   color: var(--text-primary);
   font-family: var(--font-family);
   -webkit-font-smoothing: antialiased;
+}
+
+body {
+  overflow: hidden;
 }
