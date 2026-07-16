@@ -10,7 +10,7 @@ plugins can be powerful, can own meaningful workflows, and can combine browser
 UI, host APIs, and native helper processes.
 
 The public plugin contract is `bakingrl.plugin/4`, top-level `bakingrlApi:
-"2.2.0"`, and SDK package version `2.2.0`.
+"2.3.0"`, and SDK package version `2.3.0`.
 
 ## What A V4 Plugin Can Do
 
@@ -55,7 +55,11 @@ The extension host receives a typed context with:
 - `sidecars`;
 - `telemetry`;
 - `state`;
-- `diagnostics`.
+- `diagnostics`;
+- `plugins`;
+- `extensions`;
+- `resources`;
+- `webviews`.
 
 The process communicates with the Rust host through newline-delimited JSON-RPC
 on stdio. `stderr` is reserved for plugin logs.
@@ -81,6 +85,12 @@ webview's bundle.
 
 This keeps routing and window lifecycle in the host while still allowing rich
 plugin-authored UI.
+
+A webview with `kind: "surface"` is a singleton desktop surface whose
+transparency, always-on-top, click-through, and resizable capabilities are
+fixed by the manifest. Runtime calls may change only its bounds and target
+screen. Overlay editors and renderers remain plugin-owned; the host owns the
+window and permission boundary.
 
 ## Native Sidecars
 
@@ -146,10 +156,16 @@ The live implementation is the object registered from `activate(context)`.
 
 ## Manifest Permissions
 
-V4 manifests do not declare a manifest permission block. The host remains the
-boundary for package-local storage resolution, settings and secret access,
-telemetry/state streams, sidecar calls, service routing, and browser bridge
-calls.
+Runtime API 2.3 manifests declare structured bus, registry, network, and
+storage permissions. The host enforces bus, registry, and storage declarations
+on mediated calls. Package publishes and registry writes remain constrained to
+`plugin.<package-id>.*`; cross-package reads require both a matching permission
+and a declared dependency.
+
+Network declarations are consent metadata, not a sandbox. A Node extension
+host or native sidecar can use direct operating-system APIs with the user's
+rights. BakingRL displays reviewed permissions and native capabilities during
+Marketplace installation, but does not claim that they make plugin code safe.
 
 The trusted model optimizes for power and observability. A broken plugin should
 be easy to identify, stop, restart, or disable.
@@ -165,6 +181,7 @@ The host keeps these guardrails:
 - crash loop detection blocks restart after repeated crashes;
 - packages can be stopped, restarted, or reloaded;
 - package metadata can carry hashes, signatures, review state, and trust state.
+- Marketplace installation requires explicit trust for each new publisher key.
 
 ## What Plugins Must Not Assume
 

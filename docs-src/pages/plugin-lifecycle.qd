@@ -19,9 +19,14 @@ npm install
 npm run build
 ```
 
-The source package depends on the published `@bakingrl/plugin-sdk` package.
-When testing unreleased SDK changes, plugin authors can temporarily use a local
-SDK checkout, but published npm packages are the default development path.
+The source package depends on `@bakingrl/plugin-sdk`. Release-equivalent tests
+must pack the local SDK and helper CLI, install the resulting tarballs as
+physical package copies, and run plugin checks from that installed state. The
+`BakingRLPlugins` command is:
+
+```sh
+npm run validate:local-sdk-pack
+```
 
 ## Validate
 
@@ -37,8 +42,9 @@ Validation should fail before the package reaches BakingRL if:
 - the schema version is unsupported;
 - required fields are absent;
 - entry files are missing;
-- page templates point outside the package;
-- layout templates point outside the package;
+- permission declarations are missing or invalid;
+- dependencies and external contributions disagree;
+- webviews, resources, schemas, or sidecars point outside the package;
 - bundle paths are unsafe.
 
 ## Pack
@@ -53,6 +59,21 @@ A `.brlp` archive is a ZIP-based distribution format containing the manifest,
 built files, assets, schemas, and optional hashes or signatures.
 
 ## Install
+
+The normal user path is the verified Marketplace. BakingRL verifies the signed
+catalogue, resolves dependencies, selects the current platform artifact, shows
+the complete operation and capability review, and asks the user to trust every
+new publisher key before installation.
+
+Downloads are staged and checked against the catalogue and package signature.
+Only after every package passes does the host replace the installed set. A
+failure rolls the transaction back rather than leaving a partial dependency
+graph.
+
+On first run, BakingRL offers the current `firstRun` Marketplace section. The
+selection is optional and still uses the same review and publisher trust flow.
+
+For local development:
 
 During local development:
 
@@ -72,7 +93,7 @@ into app data.
 ## Discover
 
 At startup or reload time, the host scans installed packages and reads their
-manifests. Discovery does not imply trust. It only means the package is visible.
+manifests. Discovery alone does not prove publisher identity or safe behavior.
 
 ## Validate In Host
 
@@ -87,6 +108,8 @@ Host validation checks:
 - entry references;
 - hash metadata when present;
 - signature metadata when present;
+- structured Runtime API 2.3 permissions;
+- dependency, contribution, resource, and surface declarations;
 - package size and extraction constraints.
 
 ## Enable

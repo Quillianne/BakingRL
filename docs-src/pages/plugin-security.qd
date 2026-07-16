@@ -29,8 +29,9 @@ sidecar. Native plugin code must not be loaded into the host binary.
 
 ## Host-Mediated APIs
 
-V4 manifests no longer declare a manifest permission block. Plugin code reaches
-host functionality through SDK APIs owned by the host:
+Runtime API 2.3 manifests declare structured permissions for bus, registry,
+network, and storage access. Plugin code reaches host functionality through SDK
+APIs owned by the host:
 
 - package-local storage resolution;
 - settings and secret access;
@@ -38,9 +39,14 @@ host functionality through SDK APIs owned by the host:
 - sidecar and service calls;
 - webview and configuration contexts.
 
-Those APIs are the boundary. Manifests describe what the package contributes
-and which runtime API it targets; they do not carry a permission policy that
-the author can extend.
+Those APIs are the enforceable boundary. Bus, registry, and storage calls are
+checked against manifest permissions. Network declarations communicate
+consent, but they cannot sandbox direct Node or native sidecar access.
+
+The permission review, package signature, and Marketplace listing describe and
+identify code. They do not guarantee behavior. BakingRL follows a trusted
+extension model similar to VS Code: the user must trust the publisher, and the
+software provides no warranty for plugin behavior.
 
 ## Safe Mode
 
@@ -80,6 +86,11 @@ operators can see what is running and what failed.
 
 ## Distribution Trust
 
+The Marketplace catalogue is verified against a root key pinned in the host.
+The catalogue binds a developer signing key to exact platform artifacts,
+digests, runtime metadata, permissions, and native capabilities. Installation
+requires explicit trust when a publisher key has not been accepted locally.
+
 Hashes, signatures, and package metadata help review package provenance.
 They do not make code safe by themselves. They answer different questions:
 
@@ -87,6 +98,10 @@ They do not make code safe by themselves. They answer different questions:
 - Which developer or catalog entry published it?
 - Which capabilities does it claim?
 - Which runtime API does it target?
+
+Publisher trust is stored as the developer id plus key fingerprint. A new key
+requires a new consent decision; catalogue verification never silently trusts
+an unknown publisher key.
 
 ## Author Guidance
 

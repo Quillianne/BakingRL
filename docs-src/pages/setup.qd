@@ -12,6 +12,8 @@ This page covers local setup for the host application.
 - Tauri desktop prerequisites for your operating system.
 - A sibling `BakingRLSDK` checkout only when working on unreleased SDK changes.
 - A sibling `BakingRLPlugins` checkout only when testing local plugin packages.
+- A sibling `BakingRLMarketplace` checkout when reviewing or publishing the
+  signed public catalogue.
 
 Linux builds may need GTK, WebKit, GLib, and related Tauri system packages.
 Use the official Tauri prerequisites for the exact package names on your
@@ -47,6 +49,18 @@ The development app reads installed packages from the local app-data package
 directory. Use the plugin helper CLI from `BakingRLSDK` or `BakingRLPlugins` to
 install local packages for runtime testing.
 
+For release-equivalent plugin validation, pack the SDK and helper CLI locally,
+install those tarballs as physical package copies in a temporary workspace,
+then run the product and local-install smoke tests:
+
+```sh
+cd ../BakingRLPlugins
+npm run validate:local-sdk-pack
+```
+
+This catches package-export and packed-file errors that workspace symlinks can
+hide.
+
 ## Documentation
 
 ```sh
@@ -66,6 +80,7 @@ bakingproject/
   BakingRL/
   BakingRLSDK/
   BakingRLPlugins/
+  BakingRLMarketplace/
 ```
 
 This layout lets local plugin packages depend on local SDK changes while the

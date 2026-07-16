@@ -21,6 +21,10 @@ the `BakingRLSDK` documentation.
   data flow.
 - [Plugin System](pages/plugin-system.qd): how packages are discovered,
   described, enabled, and mounted by the host.
+- [Marketplace](pages/marketplace.qd): catalogue verification, publisher trust,
+  dependency plans, and transactional installation.
+- [Broadcast Workflow](pages/broadcast-workflow.qd): how the first-party stats,
+  layout, visual, overlay, and OBS plugins fit together.
 - [Troubleshooting](pages/troubleshooting.qd): common runtime, telemetry, and
   package-manager failures.
 
@@ -32,7 +36,8 @@ Use the split below when deciding where a behavior should be documented:
 BakingRL/         Host application and runtime behavior
 BakingRLSDK/      SDK contracts, generator, CLI, plugin-author docs
 BakingRLPlugins/  First-party and experimental plugin packages
+BakingRLMarketplace/  Signed public catalogue and review metadata
 ```
 
-The current host runtime API is `2.2.0`. Compatible packages declare top-level
-`bakingrlApi` in the supported `2.2.x` range.
+The current host runtime API is `2.3.0`. Compatible packages declare top-level
+`bakingrlApi` in the supported `2.3.x` range. Runtime API 2.2 is not supported.

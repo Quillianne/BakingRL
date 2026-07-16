@@ -14,6 +14,8 @@ BakingRL is responsible for:
 
 - telemetry connection state and event normalization;
 - package discovery, installation, compatibility checks, and enable state;
+- signed Marketplace catalogue verification, publisher trust, dependency
+  planning, and transactional package updates;
 - trusted plugin v4 activation, package settings, and runtime diagnostics;
 - Node extension hosts and native sidecar supervision;
 - standalone package webviews, command/service routing, resources, secrets,
@@ -36,6 +38,9 @@ The plugin repository owns first-party package source. Host documentation may
 describe how packages behave after installation, but it should not document
 individual plugin implementation details.
 
+The Marketplace repository owns signed catalogue and review metadata. It does
+not own plugin source or mirror bundle contents.
+
 ## Design Goals
 
 - Keep plugin packages portable as `.brlp` bundles.
@@ -44,6 +49,8 @@ individual plugin implementation details.
 - Make package surfaces explicit through `runtime`, `contributes`, settings,
   resources, webviews, services, and extension points.
 - Keep runtime APIs small, versioned, and host-mediated.
+- Verify catalogue and bundle provenance without presenting signatures as a
+  guarantee of plugin behavior.
 - Surface incompatibility and runtime errors early in the dashboard.
 
 ## Who Should Read This

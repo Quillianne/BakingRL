@@ -16,7 +16,13 @@ top-level `bakingrlApi`.
   "name": "Example Extension",
   "version": "1.0.0",
   "author": "Example Author",
-  "bakingrlApi": "2.2.0",
+  "bakingrlApi": "2.3.0",
+  "permissions": {
+    "bus": { "read": ["UpdateState"], "publish": [] },
+    "registry": { "read": [], "write": [] },
+    "network": { "http": [], "websocket": [], "listen": [] },
+    "storage": { "read": [], "write": [] }
+  },
   "runtime": {
     "node": {
       "entry": "dist/extension/index.js"
@@ -44,12 +50,20 @@ Must be `bakingrl.plugin/4`.
 `id`
 
 Stable package identity. Use reverse-DNS style values such as
-`com.bakingrl.cast-package` or `com.example.scoreboard`.
+`com.example.scoreboard` or an owned namespace such as
+`bakingrl.broadcast-visuals`.
 
 `bakingrlApi`
 
-Must target the host runtime API. Current runtime API is `2.2.0`; the host
-accepts compatible `2.2.x` packages.
+Must target the host runtime API. Current runtime API is `2.3.0`; the host
+accepts compatible `2.3.x` packages.
+
+`permissions`
+
+Must declare structured bus, registry, network, and storage access. The host
+enforces mediated bus, registry, and storage calls. Network declarations are
+shown as consent metadata because direct Node and sidecar network access is not
+sandboxed.
 
 `runtime.node.entry`
 
@@ -105,8 +119,9 @@ export async function deactivate() {}
 ```
 
 The runtime context provides commands, services, bus, registry, storage,
-settings, secrets metadata, sidecars, telemetry, state, and diagnostics through
-host-mediated SDK APIs.
+settings, secrets metadata, sidecars, telemetry, state, diagnostics, plugin
+graph discovery, extension points, resources, and webviews through host-mediated
+SDK APIs.
 
 ## Bus And Registry Namespaces
 
@@ -119,12 +134,13 @@ plugin.<package-id>.*
 For example:
 
 ```txt
-plugin.com.bakingrl.cast-package.state
-plugin.com.bakingrl.cast-package.sequence
+plugin.com.example.scoreboard.state
+plugin.com.example.scoreboard.sequence
 ```
 
-Cross-package reads and writes are host-mediated. V4 manifests do not declare a
-manifest permission block.
+Cross-package reads and writes are host-mediated. Runtime API 2.3 checks the
+structured manifest permission block. Registry writes outside the caller
+namespace remain rejected even when a broad write pattern is declared.
 
 ## Sidecars
 
@@ -140,7 +156,7 @@ array entries:
         "bin": "bin/helper",
         "args": [],
         "env": {},
-        "platforms": ["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64"],
+        "platforms": ["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64", "windows-x64"],
         "protocol": "jsonrpc-stdio",
         "activation": "onEnable"
       }
@@ -212,5 +228,10 @@ tests, local caches, signing keys, and secrets should not be included.
 ## `.brlp` Archives
 
 `.brlp` files are package bundles. The host inspects archive contents before
-installing them and should reject unsafe paths, unsupported schemas, hash
-mismatches, and invalid signatures.
+installing them and rejects unsafe paths, unsupported schemas, incompatible
+Runtime APIs, invalid permissions, hash mismatches, and invalid signatures.
+
+Marketplace installation applies stricter equality checks: manifest identity,
+version, runtime declarations, dependencies, permissions, native capabilities,
+artifact digest, and developer signing key must match the reviewed catalogue
+record before the transaction can commit.

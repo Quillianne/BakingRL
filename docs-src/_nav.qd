@@ -11,6 +11,9 @@
   - [Plugin Lifecycle](pages/plugin-lifecycle.qd)
   - [Host Package Behavior](pages/plugin-package-format.qd)
   - [Plugin Security](pages/plugin-security.qd)
+- Product And Distribution
+  - [Marketplace](pages/marketplace.qd)
+  - [Broadcast Workflow](pages/broadcast-workflow.qd)
 - Operations
   - [Troubleshooting](pages/troubleshooting.qd)
   - [Status And Roadmap](pages/status.qd)

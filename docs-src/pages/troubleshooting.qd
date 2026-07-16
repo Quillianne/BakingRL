@@ -58,12 +58,35 @@ validation command, reinstall it locally, then reload packages in BakingRL.
 ## Incompatible Plugin Package
 
 If a package is installed but disabled, inspect its package details. Packages
-must declare top-level `bakingrlApi` and the current host supports `2.2.x`.
+must declare top-level `bakingrlApi` and the current host supports `2.3.x`.
 
 When the declared version is different, rebuild the package with a compatible
 SDK and helper CLI. The host keeps the package visible so users can
 identify the package ID, package version, and declared runtime API before
 removing or updating it.
+
+## Marketplace Unavailable Or Expired
+
+BakingRL accepts a catalogue only after verifying the exact bytes against the
+pinned Marketplace root. When a network refresh fails, the host may use the
+last verified cache for browsing. An expired cache remains visible but cannot
+install packages.
+
+Check the system clock, network access to
+`https://quillianne.github.io/BakingRLMarketplace`, catalogue expiry, and the
+Developer diagnostics. Do not replace the pinned root or bypass signature,
+sequence, digest, or expiry checks to make an installation succeed.
+
+## Marketplace Installation Rejected
+
+The reviewed Marketplace version must provide an artifact for the current
+platform. Its SHA-256 digest, developer signature, manifest identity, version,
+Runtime API, dependencies, permissions, and native capabilities must match the
+catalogue plan exactly.
+
+If any check fails, no package in the transaction should become active. Publish
+a corrected signed bundle and update the Marketplace record instead of editing
+the downloaded archive.
 
 ## Missing Configuration Action
 

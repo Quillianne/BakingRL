@@ -20,9 +20,12 @@ Rocket League telemetry
 Package loading follows a separate path:
 
 ```txt
-package source
-  -> install/extract
+signed catalogue or local package source
+  -> catalogue, publisher, artifact, and platform checks
+  -> dependency plan
+  -> staged download and extraction
   -> manifest validation
+  -> transactional package swap
   -> runtime registration
   -> command/service/webview/resource availability
 ```
@@ -33,6 +36,10 @@ The host is the trusted boundary. It owns:
 
 - Telemetry socket connections.
 - Package installation and extraction.
+- Marketplace root trust, catalogue signature verification, anti-rollback
+  sequence state, expiry handling, and verified cache storage.
+- Platform artifact selection, bundle digest/signature verification, dependency
+  planning, and transactional multi-package installation.
 - Manifest parsing and bundle validation.
 - Host-mediated runtime API checks.
 - Registry access.
@@ -53,6 +60,8 @@ The frontend owns:
 
 - Dashboard UI.
 - Package management UI.
+- Marketplace browsing, first-run recommendations, installation review, and
+  explicit publisher trust.
 - Package configuration UI.
 - Standalone package webview windows.
 - System vitals and developer diagnostics.
@@ -72,6 +81,8 @@ set of host-mediated surfaces:
 - Sidecars access host resources through mediated JSON-RPC APIs.
 - Extension points and contributions let plugins build domain-specific
   ecosystems without BakingRL knowing that domain.
+- Surface webviews provide host-owned window lifecycle for plugin-rendered
+  overlays without moving layout or rendering logic into the host.
 
 ## Data Ownership
 

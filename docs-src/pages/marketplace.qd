@@ -1,0 +1,81 @@
+.docname {Marketplace}
+.docauthor {BakingRL}
+.include {docs}
+.doclang {en}
+
+BakingRL Marketplace is the normal user-facing distribution path for plugins.
+The host consumes a static `bakingrl.marketplace/2` catalogue published by the
+separate `BakingRLMarketplace` repository.
+
+## Verification Chain
+
+The host does not trust keys embedded in downloaded data. It pins the
+Marketplace root key and verifies:
+
+- the detached signature over the exact `marketplace.json` bytes;
+- signature schema, algorithm, key id, signed filename, and SHA-256 digest;
+- catalogue schema, generated time, expiry, and monotone sequence;
+- developer key status and package/version status;
+- exact artifact URL, target platform, and bundle SHA-256 digest.
+
+The greatest accepted sequence is stored locally to reject catalogue rollback.
+A successfully verified catalogue and signature are cached together.
+
+## Browsing And Expiry
+
+The Marketplace view groups recommended, new, installed, and update state from
+the verified catalogue. A network failure can fall back to the verified cache.
+An expired cache remains available for read-only browsing, but installation is
+disabled until a current catalogue is verified.
+
+## First Run
+
+On first run, BakingRL offers the catalogue `firstRun` section. The user can
+select any subset or skip the proposal. The current first-party proposal is:
+
+- Extended Statistics;
+- Layout Studio;
+- Broadcast Visuals;
+- OBS Gateway.
+
+The first-run dialog does not bypass normal installation review or publisher
+trust.
+
+## Installation Review
+
+Before downloading, the host resolves the dependency closure and chooses the
+stable Runtime API 2.3 artifact for the current platform. The review shows:
+
+- install, update, downgrade, or reinstall operations;
+- dependencies and target versions;
+- mediated bus, registry, network, and storage declarations;
+- Node, sidecar, webview, and surface capabilities;
+- developer identity, verification state, and signing-key fingerprint.
+
+Every previously untrusted developer key requires explicit consent. Trust is
+stored as the developer id plus key fingerprint, so a replacement key requires
+a new decision.
+
+## Trusted Extension Disclaimer
+
+Catalogue and package signatures prove provenance and integrity, not behavior.
+Node extension hosts and native sidecars can execute code with the user's
+rights. Network permissions are consent declarations, not an operating-system
+sandbox.
+
+Install only publishers you trust. BakingRL provides no warranty for plugin
+behavior.
+
+## Transactional Install
+
+The host downloads every planned artifact to staging, checks its catalogue
+digest and developer signature, inspects the manifest, and compares identity,
+version, Runtime API, dependencies, permissions, and native capabilities with
+the reviewed record.
+
+Installed packages are replaced only after the complete plan passes. Existing
+directories are backed up during the swap, and any failure restores the prior
+set. The host then reloads the package graph and confirms that expected
+versions are installed.
+
+This prevents a dependency set from being left half-updated.

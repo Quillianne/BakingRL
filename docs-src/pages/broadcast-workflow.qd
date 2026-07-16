@@ -1,0 +1,81 @@
+.docname {Broadcast Workflow}
+.docauthor {BakingRL}
+.include {docs}
+.doclang {en}
+
+The first-party broadcast stack is composed from independent Runtime API 2.3
+plugins. BakingRL supplies the runtime, windows, telemetry, permissions, and
+installation flow; product behavior remains in plugins.
+
+## Dependency Direction
+
+```txt
+Extended Statistics -> Layout Studio -> Broadcast Visuals
+                               |
+                               +-> OBS Gateway
+```
+
+PlayerStreak and Deja Vu add optional services and visuals through the same
+Layout Studio extension point.
+
+## Extended Statistics
+
+`bakingrl.stats-extended` owns reusable telemetry aggregation. It persists
+series, match, player, team, and cage statistics and exposes stable services to
+other plugins. Its dashboard inspects those values.
+
+It does not own layout documents, overlay windows, visual composition, or OBS
+networking.
+
+## Layout Studio
+
+`bakingrl.layout-studio` owns saved layout documents and the layout editor. A
+document contains canvas geometry, layers, native text/image/shape items, and
+references to plugin-contributed visuals.
+
+Layout Studio exposes `bakingrl.layout-studio/visual` so visual packs can join
+the catalogue without changing the host or editor. Its service provides the
+same active document to local overlay rendering and OBS Gateway.
+
+Layout Studio decides what is placed, where it is placed, and which layout is
+active. It does not define the complete first-party visual catalogue and does
+not serve HTTP routes to OBS.
+
+## Broadcast Visuals
+
+`bakingrl.broadcast-visuals` contributes the first-party responsive renderers:
+scoreboards, player panels, goal and victory scenes, team events, cage maps,
+and statistics views. Each contribution targets the Layout Studio visual
+extension point and declares remote rendering compatibility.
+
+Its control webview manages broadcast state. It does not own saved layouts or
+the layout editor, and it is not the OBS web server.
+
+## Local Overlay
+
+The local game overlay is a host-opened plugin surface. The host owns window
+lifecycle, bounds, transparency, always-on-top, click-through, and screen
+selection. Layout Studio and visual plugins own the rendered content.
+
+The visual must fill the rectangle assigned by the layout. Resizing the surface
+or item should reflow the visual rather than preserving an unrelated fixed
+scale.
+
+## OBS Gateway
+
+`bakingrl.obs-gateway` is the bridge to OBS Studio. Its supervised native
+sidecar exposes configurable local HTTP browser-source URLs, health and
+snapshot APIs, Server-Sent Events, and WebSocket events.
+
+The gateway reads active Layout Studio documents through the
+`bakingrl.layout-studio/layoutStudio` service and refreshes on layout-change
+events. It renders the same native items and remote-compatible visual modules.
+It does not synthesize layouts from installed resources.
+
+In short:
+
+- Layout Studio edits and stores compositions;
+- Broadcast Visuals supplies renderable blocks;
+- the local overlay displays a composition above the game;
+- OBS Gateway publishes that composition over HTTP for OBS browser sources;
+- OBS Studio consumes the URL and remains an external application.

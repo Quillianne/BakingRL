@@ -25,6 +25,8 @@ pages/
   plugin-lifecycle.qd
   plugin-package-format.qd
   plugin-security.qd
+  marketplace.qd
+  broadcast-workflow.qd
   troubleshooting.qd
   status.qd
 ```

@@ -41,6 +41,15 @@ installed locally through the package helper.
 Generated bundles, build outputs, hashes, signatures, and signing keys should
 not be committed unless a release process explicitly calls for them.
 
+## BakingRLMarketplace
+
+The Marketplace repository contains the reviewed package index, developer
+signing keys, first-run sections, exact release artifact URLs and SHA-256
+digests, schemas, validation tests, and the catalogue publication workflow.
+
+The generated public catalogue is signed in CI. Private signing keys never
+belong in this or any sibling repository.
+
 ## Local Development Flow
 
 Typical runtime testing uses all three repositories:
@@ -49,6 +58,7 @@ Typical runtime testing uses all three repositories:
 BakingRLSDK      update SDK contracts or helper CLI
 BakingRLPlugins  rebuild and install packages
 BakingRL         reload packages and test host behavior
+BakingRLMarketplace  review and publish exact release artifacts
 ```
 
 Keep commits separate per repository so host, SDK, and plugin changes remain

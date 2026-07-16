@@ -3,10 +3,12 @@
 BakingRL is the desktop host application for Rocket League telemetry and
 plugin runtimes. It owns telemetry ingestion, package discovery, runtime
 lifecycle, host-mediated plugin APIs, package settings/secrets, diagnostics,
-and the dashboard UI.
+the verified Marketplace client, transactional package installation, and the
+dashboard UI.
 
 Plugin authoring tools and public plugin contracts live in the sibling
 `BakingRLSDK` repository. First-party plugin source lives in `BakingRLPlugins`.
+The signed public catalogue lives in `BakingRLMarketplace`.
 
 ## Repository Role
 
@@ -15,6 +17,8 @@ Use this repository when working on:
 - the Tauri host and Rust backend;
 - the Svelte dashboard, standalone package webviews, and package manager;
 - package installation, runtime compatibility, settings, secrets, and diagnostics;
+- Marketplace catalogue verification, publisher trust, dependency planning,
+  platform artifact selection, and transactional installation;
 - plugin runtime APIs, command/service routing, resources, and sidecar status;
 - host-facing documentation.
 
@@ -38,6 +42,7 @@ bakingproject/
   BakingRL/
   BakingRLSDK/
   BakingRLPlugins/
+  BakingRLMarketplace/
 ```
 
 ## Documentation
@@ -54,12 +59,18 @@ generator usage, and authoring workflows are documented in `BakingRLSDK`.
 
 ## Current Runtime Contract
 
-The current host runtime API is `2.2.0`. The host supports packages declaring:
+The current host runtime API is `2.3.0`. The host supports packages declaring:
 
 ```txt
-2.2.x
+2.3.x
 ```
 
 Packages without a compatible top-level `bakingrlApi` field can be installed
 for inspection, but BakingRL disables them and refuses activation until they are
 rebuilt with a compatible SDK.
+
+The host downloads the Marketplace catalogue from
+`https://quillianne.github.io/BakingRLMarketplace`, verifies its detached
+signature against a pinned root key, and installs only exact reviewed artifacts.
+Signatures establish provenance, not safety: plugins execute trusted code with
+the user's rights, so users must trust the publisher and receive no warranty.
