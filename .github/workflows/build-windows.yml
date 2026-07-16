@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   build-windows:
-    runs-on: [self-hosted, windows, x64]
+    runs-on: windows-latest
     timeout-minutes: 120
 
     defaults:
