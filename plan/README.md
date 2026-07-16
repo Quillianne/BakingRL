@@ -117,6 +117,8 @@ Le contrat normatif partage entre les quatre depots est decrit dans
 [`runtime-api-2.3.md`](runtime-api-2.3.md).
 
 - Faire evoluer la Runtime API de `2.2` vers `2.3`.
+- Accepter uniquement les packages `2.3.x`; les packages plus anciens doivent
+  etre reconstruits et aucune couche de retrocompatibilite n'est maintenue.
 - Ajouter un type de webview `surface` avec taille, position, ecran,
   transparence, always-on-top, click-through et redimensionnement.
 - Le host detruit les surfaces lorsqu'un plugin est desactive ou plante.

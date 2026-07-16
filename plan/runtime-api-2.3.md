@@ -5,15 +5,15 @@ implementations peuvent ajouter des helpers internes, mais elles ne doivent pas
 changer les formes ou les garanties ci-dessous sans mettre a jour les quatre
 depots.
 
-## Compatibilite
+## Version supportee
 
-- Le host expose Runtime API `2.3.0` et accepte les packages `2.2.x` et `2.3.x`.
+- Le host expose Runtime API `2.3.0` et accepte uniquement les packages
+  `2.3.x`.
 - Le schema de manifest reste `bakingrl.plugin/4`.
-- Un package `2.2.x` conserve `plugin://self/...` pour `readText` et
-  `writeText`. Il ne peut pas utiliser les surfaces, le stockage JSON, `list`,
-  `delete` ou `usage`.
-- Un package `2.3.x` utilise uniquement des chemins de stockage relatifs.
-- Les nouvelles cles du manifest 2.3 sont refusees si `bakingrlApi` cible 2.2.
+- Les packages plus anciens sont incompatibles et doivent etre reconstruits.
+- Aucune couche de retrocompatibilite, aucun adaptateur d'URI et aucune
+  migration automatique de stockage legacy ne sont maintenus.
+- Tous les packages utilisent uniquement des chemins de stockage relatifs.
 
 ## Permissions
 
@@ -134,14 +134,8 @@ fichiers. Les ecritures utilisent fichier temporaire, flush et rename sous
 verrou. Le quota des API mediatisees est de 256 Mio par plugin.
 
 Un uninstall conserve les donnees par defaut. Leur suppression demande une
-action explicite. La migration de `.bakingrl/storage` pour un meme package est
-one-shot, idempotente et executee avant tout remplacement.
-
-Une migration inter-ID ne peut venir que d'une `dataMigration` signee dans le
-catalogue. Source et destination doivent avoir le meme `developerId` et la meme
-cle de signature. Les chemins sont allowlistes, l'utilisateur confirme, les
-fichiers sont copies sans supprimer la source et le host conserve un recu
-idempotent.
+action explicite. Les anciens stockages situes dans les packages et les donnees
+d'un package renomme ne sont pas migres automatiquement.
 
 ## Contributions et delegation
 
@@ -240,8 +234,8 @@ Le nouveau catalogue utilise `bakingrl.marketplace/2` et contient:
 - sections `recommended`, `new` et `firstRun`;
 - editeurs avec `kind`, verification et cles identifiees;
 - fiches et medias hashes inclus dans l'index signe;
-- packages, versions, dependances, permissions, capacites derivees, artefacts
-  par plateforme et migrations de donnees;
+- packages, versions, dependances, permissions, capacites derivees et artefacts
+  par plateforme;
 - statuts `active`, `yanked` et `revoked` pour packages, versions et cles.
 
 `revoked` exige une raison et une date. Une entree yanked n'est plus installable
