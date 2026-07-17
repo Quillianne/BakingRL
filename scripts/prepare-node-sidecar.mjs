@@ -1,5 +1,6 @@
 import { constants } from "node:fs";
-import { access, chmod, copyFile, mkdir, realpath } from "node:fs/promises";
+import { access, chmod, copyFile, mkdir, realpath, rm } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 
 const explicitSource = process.env.BAKINGRL_NODE_BINARY;
@@ -14,7 +15,31 @@ await mkdir(outDir, { recursive: true });
 await copyFile(source, destination);
 await chmod(destination, 0o755);
 
-console.log(`Prepared Node sidecar: ${destination}`);
+const probeEnv = { ...process.env };
+delete probeEnv.NODE_OPTIONS;
+delete probeEnv.NODE_PATH;
+const probe = spawnSync(destination, ["--version"], {
+  encoding: "utf8",
+  env: probeEnv,
+  timeout: 10_000,
+  windowsHide: true
+});
+if (probe.error || probe.status !== 0) {
+  await rm(destination, { force: true });
+  const details = [
+    probe.error?.message,
+    probe.signal ? `signal ${probe.signal}` : undefined,
+    probe.stderr?.trim(),
+    probe.stdout?.trim()
+  ].filter(Boolean).join("\n");
+  throw new Error(
+    `Copied Node binary '${source}' cannot run from the Tauri sidecar location. ` +
+      "Use a self-contained Node distribution or set BAKINGRL_NODE_BINARY to one before building." +
+      (details ? `\n${details}` : "")
+  );
+}
+
+console.log(`Prepared Node sidecar: ${destination} (${probe.stdout.trim()})`);
 
 function defaultTriple() {
   const key = `${process.platform}:${process.arch}`;

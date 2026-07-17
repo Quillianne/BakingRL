@@ -12,6 +12,7 @@
     "docs:build": "quarkdown c docs-src/main.qd -o docs-site --clean --subdoc-naming file-name",
     "docs:dev": "quarkdown c docs-src/main.qd -o docs-site --clean --subdoc-naming file-name -p -w",
     "extension-host:build": "esbuild src-tauri/extension-host/bootstrap.ts --bundle --platform=node --format=esm --target=node20 --outfile=src-tauri/gen/extension-host/bootstrap.mjs",
+    "extension-host:smoke": "node scripts/smoke-extension-host.mjs",
     "node:prepare": "node scripts/prepare-node-sidecar.mjs",
     "tauri:before-build": "npm run node:prepare && npm run build",
     "tauri": "tauri"

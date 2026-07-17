@@ -52,11 +52,26 @@ jobs:
       - name: Prepare Node sidecar
         run: npm run node:prepare
 
+      - name: Smoke prepared plugin runtime
+        run: >-
+          npm run extension-host:smoke --
+          --node src-tauri/bin/node-x86_64-pc-windows-msvc.exe
+          --bootstrap src-tauri/gen/extension-host/bootstrap.mjs
+
       - name: Check Rust
         run: cargo check --manifest-path src-tauri/Cargo.toml
 
+      - name: Test Rust
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib
+
       - name: Build Tauri app
         run: npm run tauri build
+
+      - name: Smoke final plugin runtime inputs
+        run: >-
+          npm run extension-host:smoke --
+          --node src-tauri/bin/node-x86_64-pc-windows-msvc.exe
+          --bootstrap src-tauri/gen/extension-host/bootstrap.mjs
 
       - name: Upload Windows bundles
         uses: actions/upload-artifact@v7

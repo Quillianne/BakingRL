@@ -55,6 +55,24 @@ its runtime channel during reload.
 If the package was just edited locally, rebuild it, run the plugin repository
 validation command, reinstall it locally, then reload packages in BakingRL.
 
+## Node Extension Host Exited With Code 1
+
+Open the package runtime details or the Developer error panel. BakingRL keeps a
+bounded tail of the extension host `stderr` and includes it after the exit
+status, so an activation stack trace or unhandled rejection should remain
+visible even when the process failed before the dashboard listeners started.
+
+Rebuild and preflight the exact installable package contents before retrying.
+For first-party packages, run the plugin runtime smoke and local-install
+validation in addition to the normal build and manifest checks.
+
+## Local Build Rejects The Prepared Node Runtime
+
+`node:prepare` executes the copied binary before allowing it into a Tauri
+bundle. If the local Node installation depends on libraries beside its original
+path, use a self-contained Node distribution and point
+`BAKINGRL_NODE_BINARY` to its executable before building the release.
+
 ## Incompatible Plugin Package
 
 If a package is installed but disabled, inspect its package details. Packages
