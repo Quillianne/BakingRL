@@ -55,11 +55,11 @@ jobs:
       - name: Check frontend
         run: npm run check
 
+      - name: Build frontend resources
+        run: npm run build
+
       - name: Prepare Node sidecar
         run: npm run node:prepare
-
-      - name: Build extension host
-        run: npm run extension-host:build
 
       - name: Smoke prepared plugin runtime
         run: >-
