@@ -1179,6 +1179,13 @@ fn resolve_node_path(
     }
 
     let mut candidates = Vec::new();
+    if let Ok(current_exe) = std::env::current_exe() {
+        candidates.extend(executable_node_candidates(
+            &current_exe,
+            target_triple(),
+            exe_suffix(),
+        ));
+    }
     if let Ok(resource_dir) = app_handle.path().resource_dir() {
         candidates.extend(bundled_node_candidates(
             &resource_dir,
@@ -1205,6 +1212,13 @@ fn resolve_node_path(
     }
 
     which::which("node").map_err(|_| ExtensionHostRuntimeError::NodeNotFound)
+}
+
+fn executable_node_candidates(executable: &Path, triple: &str, suffix: &str) -> Vec<PathBuf> {
+    executable
+        .parent()
+        .map(|directory| bundled_node_candidates(directory, triple, suffix))
+        .unwrap_or_default()
 }
 
 fn bundled_node_candidates(root: &Path, triple: &str, suffix: &str) -> Vec<PathBuf> {
@@ -1293,7 +1307,7 @@ fn exe_suffix() -> &'static str {
 
 #[cfg(test)]
 mod node_path_tests {
-    use super::bundled_node_candidates;
+    use super::{bundled_node_candidates, executable_node_candidates};
     use std::path::Path;
 
     #[test]
@@ -1307,6 +1321,17 @@ mod node_path_tests {
             candidates[2],
             Path::new("resources/bin/node-x86_64-pc-windows-msvc.exe")
         );
+    }
+
+    #[test]
+    fn checks_tauri_sidecar_next_to_macos_application_executable() {
+        let candidates = executable_node_candidates(
+            Path::new("BakingRL.app/Contents/MacOS/bakingrl"),
+            "aarch64-apple-darwin",
+            "",
+        );
+
+        assert_eq!(candidates[1], Path::new("BakingRL.app/Contents/MacOS/node"));
     }
 }
 

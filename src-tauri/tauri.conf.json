@@ -4,7 +4,7 @@
   "version": "0.10.2",
   "identifier": "com.quillianne.bakingrl",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "npm run tauri:before-dev",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "npm run tauri:before-build",
     "frontendDist": "../build"
@@ -44,6 +44,14 @@
       "gen/extension-host": "extension-host"
     },
     "externalBin": ["bin/node"],
+    "macOS": {
+      "entitlements": "Entitlements.plist",
+      "files": {
+        "Resources/node/LICENSE": "./gen/node/LICENSE"
+      },
+      "minimumSystemVersion": "13.5",
+      "signingIdentity": "-"
+    },
     "fileAssociations": [
       {
         "ext": ["brlp"],

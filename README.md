@@ -35,6 +35,16 @@ cargo check --manifest-path src-tauri/Cargo.toml
 npm run tauri dev
 ```
 
+On macOS, the first Tauri dev or build command downloads the pinned official
+Node.js runtime into `node_modules/.cache`, verifies its SHA-256 digest, and
+stages it as the plugin runtime sidecar. Set `BAKINGRL_NODE_BINARY` only when an
+explicit self-contained Node binary must be used instead.
+
+Local macOS bundles use a valid ad-hoc signature so the embedded runtime receives
+its JIT entitlement. A production build must set `APPLE_SIGNING_IDENTITY` to a
+Developer ID identity; Tauri gives that environment variable precedence over the
+local default.
+
 Recommended sibling layout:
 
 ```txt
