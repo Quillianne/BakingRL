@@ -413,13 +413,13 @@ impl PluginHost {
         );
         let sidecar_specs = sidecar_specs_for_records(&records);
         let sidecar_service_specs = sidecar_service_specs_for_records(&records);
+        *self.records.lock().unwrap() = records;
         self.reload_runtimes_with_specs(
             &settings,
             extension_host_specs,
             sidecar_specs,
             sidecar_service_specs,
         );
-        *self.records.lock().unwrap() = records;
         let packages = self.list_packages();
         self.emit_packages_changed(&packages);
         packages
@@ -543,6 +543,7 @@ impl PluginHost {
         {
             warn!("Unable to reload sidecar runtimes: {}", err);
         }
+        self.reconcile_sidecar_services(&sidecar_service_specs);
         if let Err(err) = self.extension_host_runtimes.reload_with_app_handle(
             extension_host_specs,
             self.app_handle.clone(),
@@ -555,7 +556,6 @@ impl PluginHost {
         ) {
             warn!("Unable to reload extension host runtimes: {}", err);
         }
-        self.reconcile_sidecar_services(&sidecar_service_specs);
     }
 
     fn reconcile_sidecar_services(

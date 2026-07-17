@@ -1164,6 +1164,7 @@ pre {
   color: var(--danger);
   font-size: 12px;
   overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .package-detail-tabs {

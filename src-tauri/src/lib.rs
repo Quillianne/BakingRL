@@ -334,8 +334,8 @@ pub fn run() {
                 PluginHost::new(app_handle.clone(), bus.clone(), registry.clone())
                     .expect("Impossible d'initialiser le gestionnaire de packages"),
             );
-            plugin_host.initialize();
             _app.manage(plugin_host.clone());
+            plugin_host.initialize();
 
             if plugin_host.get_app_settings().behavior.start_minimized
                 && !launched_from_package_file

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::models::PackageSettingsFile;
@@ -93,9 +93,9 @@ pub(super) fn extension_host_specs_for_records(
     storage_base: &Path,
 ) -> Vec<ExtensionHostRuntimeSpec> {
     let service_methods = service_methods_for_records(records);
-    records
-        .values()
-        .filter(|record| record.descriptor.enabled && record.descriptor.error.is_none())
+    ordered_extension_host_package_ids(records)
+        .into_iter()
+        .filter_map(|package_id| records.get(&package_id))
         .filter_map(|record| {
             let runtime = record.manifest.runtime_v4()?;
             let node = runtime.node.as_ref()?;
@@ -118,6 +118,7 @@ pub(super) fn extension_host_specs_for_records(
             sidecars.sort_by(|a, b| a.sidecar_name.cmp(&b.sidecar_name));
             Some(ExtensionHostRuntimeSpec {
                 package_id: record.manifest.id().to_string(),
+                required_node_dependencies: required_node_dependencies(record, records),
                 runtime_api: runtime_api_req(&record.manifest),
                 package_root: package_root.to_path_buf(),
                 entry_path: package_root.join(&node.entry),
@@ -143,6 +144,91 @@ pub(super) fn extension_host_specs_for_records(
             })
         })
         .collect()
+}
+
+fn required_node_dependencies(
+    record: &PackageRecord,
+    records: &HashMap<String, PackageRecord>,
+) -> Vec<String> {
+    let mut dependencies = record
+        .manifest
+        .dependencies_v4()
+        .iter()
+        .filter(|dependency| !dependency.optional)
+        .filter_map(|dependency| {
+            records
+                .get(&dependency.package_id)
+                .and_then(|record| record.manifest.runtime_v4())
+                .and_then(|runtime| runtime.node.as_ref())
+                .map(|_| dependency.package_id.clone())
+        })
+        .collect::<Vec<_>>();
+    dependencies.sort();
+    dependencies.dedup();
+    dependencies
+}
+
+fn ordered_extension_host_package_ids(records: &HashMap<String, PackageRecord>) -> Vec<String> {
+    let candidates = records
+        .iter()
+        .filter(|(_, record)| {
+            record.descriptor.enabled
+                && record.descriptor.error.is_none()
+                && record
+                    .manifest
+                    .runtime_v4()
+                    .and_then(|runtime| runtime.node.as_ref())
+                    .is_some()
+        })
+        .map(|(package_id, _)| package_id.clone())
+        .collect::<BTreeSet<_>>();
+    let mut remaining_dependencies = candidates
+        .iter()
+        .map(|package_id| (package_id.clone(), 0usize))
+        .collect::<HashMap<_, _>>();
+    let mut dependents = HashMap::<String, BTreeSet<String>>::new();
+
+    for package_id in &candidates {
+        let Some(record) = records.get(package_id) else {
+            continue;
+        };
+        for dependency in record
+            .manifest
+            .dependencies_v4()
+            .iter()
+            .filter(|dependency| !dependency.optional)
+        {
+            if !candidates.contains(&dependency.package_id) {
+                continue;
+            }
+            *remaining_dependencies.get_mut(package_id).unwrap() += 1;
+            dependents
+                .entry(dependency.package_id.clone())
+                .or_default()
+                .insert(package_id.clone());
+        }
+    }
+
+    let mut ready = remaining_dependencies
+        .iter()
+        .filter_map(|(package_id, remaining)| (*remaining == 0).then_some(package_id.clone()))
+        .collect::<BTreeSet<_>>();
+    let mut ordered = Vec::with_capacity(candidates.len());
+    while let Some(package_id) = ready.pop_first() {
+        ordered.push(package_id.clone());
+        let Some(package_dependents) = dependents.get(&package_id) else {
+            continue;
+        };
+        for dependent in package_dependents {
+            let remaining = remaining_dependencies.get_mut(dependent).unwrap();
+            *remaining -= 1;
+            if *remaining == 0 {
+                ready.insert(dependent.clone());
+            }
+        }
+    }
+
+    ordered
 }
 
 fn secret_keys_for_package_settings(
@@ -315,6 +401,23 @@ mod tests {
         }
     }
 
+    fn node_manifest(package_id: &str, dependencies: Vec<&str>) -> serde_json::Value {
+        serde_json::json!({
+            "schemaVersion": "bakingrl.plugin/4",
+            "id": package_id,
+            "name": package_id,
+            "version": "1.0.0",
+            "bakingrlApi": "2.3.0",
+            "dependencies": dependencies
+                .into_iter()
+                .map(|dependency| serde_json::json!({ "packageId": dependency }))
+                .collect::<Vec<_>>(),
+            "runtime": {
+                "node": { "entry": "dist/extension-host.js" }
+            }
+        })
+    }
+
     #[test]
     fn sidecar_v4_without_platforms_supports_current_host() {
         assert!(sidecar_supports_platform(&sidecar(Vec::new()), "linux-x64"));
@@ -330,6 +433,105 @@ mod tests {
             &sidecar(vec!["darwin-arm64", "windows-x64"]),
             "linux-x64"
         ));
+    }
+
+    #[test]
+    fn extension_host_specs_are_deterministic_and_dependency_first() {
+        let (consumer_id, consumer) = manifest_record(
+            node_manifest("com.example.a-consumer", vec!["com.example.z-provider"]),
+            true,
+        );
+        let (independent_id, independent) =
+            manifest_record(node_manifest("com.example.b-independent", Vec::new()), true);
+        let (provider_id, provider) =
+            manifest_record(node_manifest("com.example.z-provider", Vec::new()), true);
+        let records = HashMap::from([
+            (consumer_id, consumer),
+            (provider_id, provider),
+            (independent_id, independent),
+        ]);
+
+        let specs = extension_host_specs_for_records(
+            &records,
+            &PackageSettingsFile::default(),
+            Path::new("/tmp/package-settings.json"),
+            Path::new("/tmp/plugin-storage"),
+        );
+
+        assert_eq!(
+            specs
+                .iter()
+                .map(|spec| spec.package_id.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "com.example.b-independent",
+                "com.example.z-provider",
+                "com.example.a-consumer",
+            ]
+        );
+        assert_eq!(
+            specs
+                .iter()
+                .find(|spec| spec.package_id == "com.example.a-consumer")
+                .unwrap()
+                .required_node_dependencies,
+            vec!["com.example.z-provider".to_string()]
+        );
+    }
+
+    #[test]
+    fn extension_host_spec_order_excludes_unresolved_dependency_cycles() {
+        let (first_id, first) = manifest_record(
+            node_manifest("com.example.a-cycle", vec!["com.example.b-cycle"]),
+            true,
+        );
+        let (second_id, second) = manifest_record(
+            node_manifest("com.example.b-cycle", vec!["com.example.a-cycle"]),
+            true,
+        );
+        let records = HashMap::from([(second_id, second), (first_id, first)]);
+
+        assert!(ordered_extension_host_package_ids(&records).is_empty());
+    }
+
+    #[test]
+    fn optional_node_dependencies_do_not_create_hard_runtime_edges() {
+        let (consumer_id, consumer) = manifest_record(
+            serde_json::json!({
+                "schemaVersion": "bakingrl.plugin/4",
+                "id": "com.example.a-consumer",
+                "name": "Consumer",
+                "version": "1.0.0",
+                "bakingrlApi": "2.3.0",
+                "dependencies": [{
+                    "packageId": "com.example.z-provider",
+                    "optional": true
+                }],
+                "runtime": {
+                    "node": { "entry": "dist/extension-host.js" }
+                }
+            }),
+            true,
+        );
+        let (provider_id, provider) =
+            manifest_record(node_manifest("com.example.z-provider", Vec::new()), true);
+        let records = HashMap::from([(consumer_id, consumer), (provider_id, provider)]);
+
+        let specs = extension_host_specs_for_records(
+            &records,
+            &PackageSettingsFile::default(),
+            Path::new("/tmp/package-settings.json"),
+            Path::new("/tmp/plugin-storage"),
+        );
+
+        assert_eq!(
+            specs
+                .iter()
+                .map(|spec| spec.package_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["com.example.a-consumer", "com.example.z-provider"]
+        );
+        assert!(specs[0].required_node_dependencies.is_empty());
     }
 
     #[test]

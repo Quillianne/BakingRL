@@ -5,7 +5,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -15,7 +15,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use thiserror::Error;
 use tokio::sync::broadcast::error::TryRecvError;
 use tokio::sync::mpsc as tokio_mpsc;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 use super::diagnostics::{PluginDiagnosticInput, PluginDiagnosticSeverity, PluginDiagnosticsStore};
 use super::plugin_storage::{normalize_storage_path, PluginStorage};
@@ -40,6 +40,11 @@ use crate::registry::Registry;
 const MAX_CRASHES_IN_WINDOW: usize = 3;
 const CRASH_WINDOW: Duration = Duration::from_secs(60);
 const RESTART_DELAY: Duration = Duration::from_millis(500);
+const ACTIVATION_READY_TIMEOUT: Duration = Duration::from_secs(10);
+const ACTIVATION_SIGNAL_SETTLE_TIMEOUT: Duration = Duration::from_secs(1);
+const MAX_RUNTIME_STDERR_LINES: usize = 64;
+const MAX_RUNTIME_STDERR_LINE_BYTES: usize = 4 * 1024;
+const MAX_RUNTIME_STDERR_BYTES: usize = 32 * 1024;
 const STATE_HUB_FILE: &str = "runtime-state.json";
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -109,6 +114,31 @@ pub enum ExtensionHostRuntimeError {
         runtime_key: String,
         source: std::io::Error,
     },
+    #[error(
+        "Extension host '{runtime_key}' did not report activation readiness within {timeout_secs}s.{stderr}"
+    )]
+    ActivationTimeout {
+        runtime_key: String,
+        timeout_secs: u64,
+        stderr: String,
+    },
+    #[error("Extension host '{runtime_key}' failed during activation: {message}")]
+    ActivationFailed {
+        runtime_key: String,
+        message: String,
+    },
+    #[error("Extension host '{runtime_key}' activation supervisor stopped: {message}")]
+    ActivationSupervisorStopped {
+        runtime_key: String,
+        message: String,
+    },
+    #[error(
+        "Extension host '{runtime_key}' cannot start because required Node runtime dependencies are unavailable: {dependencies}."
+    )]
+    RequiredDependenciesUnavailable {
+        runtime_key: String,
+        dependencies: String,
+    },
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -126,6 +156,7 @@ pub struct ExtensionHostWebviewSpec {
 #[derive(Debug, Clone)]
 pub struct ExtensionHostRuntimeSpec {
     pub package_id: String,
+    pub required_node_dependencies: Vec<String>,
     pub runtime_api: Option<semver::VersionReq>,
     pub package_root: PathBuf,
     pub entry_path: PathBuf,
@@ -158,6 +189,89 @@ struct ExtensionHostRuntimeHandle {
     thread: Option<thread::JoinHandle<()>>,
 }
 
+const ACTIVATION_PENDING: u8 = 0;
+const ACTIVATION_READY: u8 = 1;
+const ACTIVATION_FAILED: u8 = 2;
+
+#[derive(Clone)]
+struct ExtensionHostActivationSignal {
+    state: Arc<AtomicU8>,
+    sender: Arc<Mutex<Option<mpsc::Sender<Result<(), String>>>>>,
+}
+
+impl ExtensionHostActivationSignal {
+    fn new() -> (Self, mpsc::Receiver<Result<(), String>>) {
+        let (sender, receiver) = mpsc::channel();
+        (
+            Self {
+                state: Arc::new(AtomicU8::new(ACTIVATION_PENDING)),
+                sender: Arc::new(Mutex::new(Some(sender))),
+            },
+            receiver,
+        )
+    }
+
+    fn ready<F>(&self, on_ready: F) -> bool
+    where
+        F: FnOnce(),
+    {
+        let notify_waiter = match self.state.compare_exchange(
+            ACTIVATION_PENDING,
+            ACTIVATION_READY,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => true,
+            Err(ACTIVATION_READY) => false,
+            Err(_) => return false,
+        };
+        on_ready();
+        if notify_waiter {
+            if let Some(sender) = self.sender.lock().unwrap().take() {
+                let _ = sender.send(Ok(()));
+            }
+        }
+        true
+    }
+
+    fn fail(&self, message: String) -> bool {
+        if self
+            .state
+            .compare_exchange(
+                ACTIVATION_PENDING,
+                ACTIVATION_FAILED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_err()
+        {
+            return false;
+        }
+        if let Some(sender) = self.sender.lock().unwrap().take() {
+            let _ = sender.send(Err(message));
+        }
+        true
+    }
+
+    fn has_failed(&self) -> bool {
+        self.state.load(Ordering::Acquire) == ACTIVATION_FAILED
+    }
+}
+
+struct StartingExtensionHostRuntime {
+    handle: ExtensionHostRuntimeHandle,
+    activation: ExtensionHostActivationSignal,
+    activation_rx: mpsc::Receiver<Result<(), String>>,
+    activation_stderr: RuntimeStderrBuffer,
+}
+
+enum ActivationTimeoutResolution {
+    Ready,
+    Failed(String),
+    Timeout(ExtensionHostRuntimeError),
+    SupervisorStopped(ExtensionHostRuntimeError),
+}
+
 impl ExtensionHostRuntimeHandle {
     fn is_finished(&self) -> bool {
         self.thread
@@ -165,14 +279,24 @@ impl ExtensionHostRuntimeHandle {
             .is_some_and(thread::JoinHandle::is_finished)
     }
 
-    fn shutdown(mut self) {
+    fn shutdown(self) {
+        self.shutdown_inner(true);
+    }
+
+    fn finish_after_activation_failure(self) {
+        self.shutdown_inner(false);
+    }
+
+    fn shutdown_inner(mut self, emit_stopping_status: bool) {
         let already_finished = self
             .thread
             .as_ref()
             .is_some_and(thread::JoinHandle::is_finished);
         if !already_finished {
-            let status = set_extension_host_stopping(&self.statuses, &self.runtime_key);
-            emit_extension_host_runtime_status(&self.app_handle, &self.runtime_key, status);
+            if emit_stopping_status {
+                let status = set_extension_host_stopping(&self.statuses, &self.runtime_key);
+                emit_extension_host_runtime_status(&self.app_handle, &self.runtime_key, status);
+            }
             if let Some(shutdown) = self.shutdown.take() {
                 let _ = shutdown.send(());
             }
@@ -197,6 +321,12 @@ impl ExtensionHostRuntimeHandle {
 pub struct ExtensionHostRuntimeManager {
     handles: Mutex<HashMap<String, ExtensionHostRuntimeHandle>>,
     statuses: SharedExtensionHostRuntimeStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExtensionHostRuntimeAvailability {
+    Ready,
+    Unavailable,
 }
 
 impl ExtensionHostRuntimeManager {
@@ -233,13 +363,42 @@ impl ExtensionHostRuntimeManager {
         }
 
         let mut first_error = None;
+        let mut availability = HashMap::new();
         for spec in specs {
             let runtime_key = spec.runtime_key();
             let fingerprint = format!("{spec:?}");
-            if handles
-                .get(&runtime_key)
-                .is_some_and(|handle| handle.fingerprint == fingerprint && !handle.is_finished())
-            {
+            let unavailable_dependencies = unavailable_required_node_dependencies(
+                &spec.required_node_dependencies,
+                &availability,
+            );
+            if !unavailable_dependencies.is_empty() {
+                if let Some(handle) = handles.remove(&runtime_key) {
+                    handle.shutdown();
+                }
+                let err = required_dependencies_unavailable_error(
+                    runtime_key.clone(),
+                    unavailable_dependencies,
+                );
+                warn!("Unable to start extension host runtime: {}", err);
+                report_extension_host_start_error(
+                    &app_handle,
+                    &self.statuses,
+                    &diagnostics,
+                    &runtime_key,
+                    &err,
+                );
+                availability.insert(runtime_key, ExtensionHostRuntimeAvailability::Unavailable);
+                if first_error.is_none() {
+                    first_error = Some(err);
+                }
+                continue;
+            }
+            if handles.get(&runtime_key).is_some_and(|handle| {
+                handle.fingerprint == fingerprint
+                    && !handle.is_finished()
+                    && extension_host_runtime_is_running(&self.statuses, &runtime_key)
+            }) {
+                availability.insert(runtime_key, ExtensionHostRuntimeAvailability::Ready);
                 continue;
             }
             if let Some(handle) = handles.remove(&runtime_key) {
@@ -255,33 +414,23 @@ impl ExtensionHostRuntimeManager {
                 sidecars.clone(),
                 diagnostics.clone(),
                 self.statuses.clone(),
-            ) {
+            )
+            .and_then(wait_for_extension_host_activation)
+            {
                 Ok(handle) => {
-                    handles.insert(runtime_key, handle);
+                    handles.insert(runtime_key.clone(), handle);
+                    availability.insert(runtime_key, ExtensionHostRuntimeAvailability::Ready);
                 }
                 Err(err) => {
                     warn!("Unable to start extension host runtime: {}", err);
-                    emit_runtime_error(
+                    report_extension_host_start_error(
                         &app_handle,
-                        "extensionHost",
-                        &runtime_key,
-                        &err.to_string(),
-                    );
-                    let status = set_extension_host_crashed(
                         &self.statuses,
+                        &diagnostics,
                         &runtime_key,
-                        None,
-                        err.to_string(),
+                        &err,
                     );
-                    emit_extension_host_runtime_status(&app_handle, &runtime_key, status);
-                    diagnostics.push(PluginDiagnosticInput {
-                        package_id: Some(runtime_key.clone()),
-                        source: "extensionHost".to_string(),
-                        severity: PluginDiagnosticSeverity::Error,
-                        phase: "activation".to_string(),
-                        message: err.to_string(),
-                        crash_count: None,
-                    });
+                    availability.insert(runtime_key, ExtensionHostRuntimeAvailability::Unavailable);
                     if first_error.is_none() {
                         first_error = Some(err);
                     }
@@ -309,28 +458,72 @@ impl ExtensionHostRuntimeManager {
         let mut handles = self.handles.lock().unwrap();
         let runtime_key = spec.runtime_key();
         let fingerprint = format!("{spec:?}");
-        if handles
-            .get(&runtime_key)
-            .is_some_and(|handle| handle.fingerprint == fingerprint && !handle.is_finished())
-        {
+        let unavailable_dependencies = spec
+            .required_node_dependencies
+            .iter()
+            .filter(|dependency| {
+                !handles.get(*dependency).is_some_and(|handle| {
+                    !handle.is_finished()
+                        && extension_host_runtime_is_running(&self.statuses, dependency)
+                })
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if !unavailable_dependencies.is_empty() {
+            if let Some(handle) = handles.remove(&runtime_key) {
+                handle.shutdown();
+            }
+            let err = required_dependencies_unavailable_error(
+                runtime_key.clone(),
+                unavailable_dependencies,
+            );
+            report_extension_host_start_error(
+                &app_handle,
+                &self.statuses,
+                &diagnostics,
+                &runtime_key,
+                &err,
+            );
+            return Err(err);
+        }
+        if handles.get(&runtime_key).is_some_and(|handle| {
+            handle.fingerprint == fingerprint
+                && !handle.is_finished()
+                && extension_host_runtime_is_running(&self.statuses, &runtime_key)
+        }) {
             return Ok(());
         }
         if let Some(handle) = handles.remove(&runtime_key) {
             handle.shutdown();
         }
-        let handle = spawn_extension_host_runtime(
+        let result = spawn_extension_host_runtime(
             spec,
-            app_handle,
+            app_handle.clone(),
             bus,
             registry,
             command_router,
             service_router,
             sidecars,
-            diagnostics,
+            diagnostics.clone(),
             self.statuses.clone(),
-        )?;
-        handles.insert(runtime_key, handle);
-        Ok(())
+        )
+        .and_then(wait_for_extension_host_activation);
+        match result {
+            Ok(handle) => {
+                handles.insert(runtime_key, handle);
+                Ok(())
+            }
+            Err(err) => {
+                report_extension_host_start_error(
+                    &app_handle,
+                    &self.statuses,
+                    &diagnostics,
+                    &runtime_key,
+                    &err,
+                );
+                Err(err)
+            }
+        }
     }
 
     pub fn stop(&self, package_id: &str) -> bool {
@@ -349,6 +542,71 @@ impl ExtensionHostRuntimeManager {
             handle.shutdown();
         }
     }
+}
+
+fn activation_error_was_reported_by_supervisor(error: &ExtensionHostRuntimeError) -> bool {
+    matches!(error, ExtensionHostRuntimeError::ActivationFailed { .. })
+}
+
+fn extension_host_runtime_is_running(
+    statuses: &SharedExtensionHostRuntimeStatus,
+    package_id: &str,
+) -> bool {
+    statuses
+        .lock()
+        .unwrap()
+        .get(package_id)
+        .is_some_and(|status| status.state == ExtensionHostRuntimeState::Running && status.running)
+}
+
+fn unavailable_required_node_dependencies(
+    required_dependencies: &[String],
+    availability: &HashMap<String, ExtensionHostRuntimeAvailability>,
+) -> Vec<String> {
+    required_dependencies
+        .iter()
+        .filter(|dependency| {
+            !matches!(
+                availability.get(*dependency),
+                Some(ExtensionHostRuntimeAvailability::Ready)
+            )
+        })
+        .cloned()
+        .collect()
+}
+
+fn required_dependencies_unavailable_error(
+    runtime_key: String,
+    dependencies: Vec<String>,
+) -> ExtensionHostRuntimeError {
+    ExtensionHostRuntimeError::RequiredDependenciesUnavailable {
+        runtime_key,
+        dependencies: dependencies.join(", "),
+    }
+}
+
+fn report_extension_host_start_error(
+    app_handle: &AppHandle,
+    statuses: &SharedExtensionHostRuntimeStatus,
+    diagnostics: &PluginDiagnosticsStore,
+    runtime_key: &str,
+    error: &ExtensionHostRuntimeError,
+) {
+    if activation_error_was_reported_by_supervisor(error) {
+        return;
+    }
+    let message = error.to_string();
+    emit_runtime_error(app_handle, "extensionHost", runtime_key, &message);
+    let status = set_extension_host_crashed(statuses, runtime_key, None, message.clone());
+    emit_extension_host_runtime_status(app_handle, runtime_key, status);
+    diagnostics.push(PluginDiagnosticInput {
+        package_id: Some(runtime_key.to_string()),
+        source: "extensionHost".to_string(),
+        severity: PluginDiagnosticSeverity::Error,
+        phase: "activation".to_string(),
+        message,
+        crash_count: None,
+    });
 }
 
 impl Drop for ExtensionHostRuntimeManager {
@@ -379,6 +637,7 @@ struct ExtensionHostContext {
     registered_services: Arc<Mutex<HashSet<String>>>,
     diagnostics: PluginDiagnosticsStore,
     runtime_statuses: SharedExtensionHostRuntimeStatus,
+    activation: ExtensionHostActivationSignal,
     sidecars: SidecarRuntimeController,
     sidecar_specs: HashMap<String, SidecarRuntimeSpec>,
     webviews: HashMap<String, ExtensionHostWebviewSpec>,
@@ -530,7 +789,7 @@ fn spawn_extension_host_runtime(
     sidecars: SidecarRuntimeController,
     diagnostics: PluginDiagnosticsStore,
     statuses: SharedExtensionHostRuntimeStatus,
-) -> Result<ExtensionHostRuntimeHandle, ExtensionHostRuntimeError> {
+) -> Result<StartingExtensionHostRuntime, ExtensionHostRuntimeError> {
     let runtime_key = spec.runtime_key();
     let fingerprint = format!("{spec:?}");
     let status = set_extension_host_starting(&statuses, &runtime_key);
@@ -560,6 +819,8 @@ fn spawn_extension_host_runtime(
         .collect::<HashMap<_, _>>();
     let webviews = spec.webviews.clone();
     let rpc = ExtensionHostRpc::default();
+    let (activation, activation_rx) = ExtensionHostActivationSignal::new();
+    let activation_stderr = RuntimeStderrBuffer::default();
     let (command_call_tx, command_call_rx) = tokio_mpsc::channel(128);
     spawn_extension_command_dispatcher(
         runtime_key.clone(),
@@ -623,6 +884,7 @@ fn spawn_extension_host_runtime(
         registered_services: Arc::new(Mutex::new(HashSet::new())),
         diagnostics,
         runtime_statuses: statuses.clone(),
+        activation: activation.clone(),
         sidecars,
         sidecar_specs,
         webviews,
@@ -664,10 +926,18 @@ fn spawn_extension_host_runtime(
         }
     };
     let (shutdown_tx, shutdown_rx) = mpsc::channel();
+    let supervisor_activation_stderr = activation_stderr.clone();
     let thread = match thread::Builder::new()
         .name(format!("bakingrl-extension-host-{runtime_key}"))
-        .spawn(move || supervise_runtime(launch, context, child, shutdown_rx))
-    {
+        .spawn(move || {
+            supervise_runtime(
+                launch,
+                context,
+                child,
+                shutdown_rx,
+                supervisor_activation_stderr,
+            )
+        }) {
         Ok(thread) => thread,
         Err(source) => {
             let error = ExtensionHostRuntimeError::Spawn {
@@ -681,14 +951,112 @@ fn spawn_extension_host_runtime(
         }
     };
 
-    Ok(ExtensionHostRuntimeHandle {
-        runtime_key,
-        fingerprint,
-        app_handle,
-        statuses,
-        shutdown: Some(shutdown_tx),
-        thread: Some(thread),
+    Ok(StartingExtensionHostRuntime {
+        handle: ExtensionHostRuntimeHandle {
+            runtime_key,
+            fingerprint,
+            app_handle,
+            statuses,
+            shutdown: Some(shutdown_tx),
+            thread: Some(thread),
+        },
+        activation,
+        activation_rx,
+        activation_stderr,
     })
+}
+
+fn wait_for_extension_host_activation(
+    starting: StartingExtensionHostRuntime,
+) -> Result<ExtensionHostRuntimeHandle, ExtensionHostRuntimeError> {
+    let StartingExtensionHostRuntime {
+        handle,
+        activation,
+        activation_rx,
+        activation_stderr,
+    } = starting;
+    let runtime_key = handle.runtime_key.clone();
+    match activation_rx.recv_timeout(ACTIVATION_READY_TIMEOUT) {
+        Ok(Ok(())) => return Ok(handle),
+        Ok(Err(message)) => {
+            handle.finish_after_activation_failure();
+            return Err(ExtensionHostRuntimeError::ActivationFailed {
+                runtime_key,
+                message,
+            });
+        }
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            match resolve_activation_timeout(
+                runtime_key.clone(),
+                &activation,
+                &activation_rx,
+                &activation_stderr,
+            ) {
+                ActivationTimeoutResolution::Ready => return Ok(handle),
+                ActivationTimeoutResolution::Failed(message) => {
+                    handle.finish_after_activation_failure();
+                    return Err(ExtensionHostRuntimeError::ActivationFailed {
+                        runtime_key,
+                        message,
+                    });
+                }
+                ActivationTimeoutResolution::Timeout(error)
+                | ActivationTimeoutResolution::SupervisorStopped(error) => {
+                    handle.shutdown();
+                    return Err(error);
+                }
+            }
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            let result = activation_supervisor_stopped_error(runtime_key, &activation_stderr);
+            activation.fail(result.to_string());
+            handle.shutdown();
+            return Err(result);
+        }
+    }
+}
+
+fn resolve_activation_timeout(
+    runtime_key: String,
+    activation: &ExtensionHostActivationSignal,
+    activation_rx: &mpsc::Receiver<Result<(), String>>,
+    stderr: &RuntimeStderrBuffer,
+) -> ActivationTimeoutResolution {
+    let timeout = activation_timeout_error(runtime_key.clone(), stderr);
+    if activation.fail(timeout.to_string()) {
+        return ActivationTimeoutResolution::Timeout(timeout);
+    }
+    match activation_rx.recv_timeout(ACTIVATION_SIGNAL_SETTLE_TIMEOUT) {
+        Ok(Ok(())) => ActivationTimeoutResolution::Ready,
+        Ok(Err(message)) => ActivationTimeoutResolution::Failed(message),
+        Err(_) => ActivationTimeoutResolution::SupervisorStopped(
+            activation_supervisor_stopped_error(runtime_key, stderr),
+        ),
+    }
+}
+
+fn activation_timeout_error(
+    runtime_key: String,
+    stderr: &RuntimeStderrBuffer,
+) -> ExtensionHostRuntimeError {
+    ExtensionHostRuntimeError::ActivationTimeout {
+        runtime_key,
+        timeout_secs: ACTIVATION_READY_TIMEOUT.as_secs(),
+        stderr: captured_stderr_suffix(stderr),
+    }
+}
+
+fn activation_supervisor_stopped_error(
+    runtime_key: String,
+    stderr: &RuntimeStderrBuffer,
+) -> ExtensionHostRuntimeError {
+    ExtensionHostRuntimeError::ActivationSupervisorStopped {
+        runtime_key,
+        message: crash_message_with_stderr(
+            "Runtime supervisor stopped before reporting readiness.".to_string(),
+            stderr,
+        ),
+    }
 }
 
 fn spawn_extension_service_dispatcher(
@@ -951,6 +1319,73 @@ enum ChildOutcome {
     },
 }
 
+#[derive(Clone, Default)]
+struct RuntimeStderrBuffer {
+    state: Arc<Mutex<RuntimeStderrBufferState>>,
+}
+
+#[derive(Default)]
+struct RuntimeStderrBufferState {
+    lines: VecDeque<String>,
+    bytes: usize,
+}
+
+impl RuntimeStderrBuffer {
+    fn push(&self, line: &str) {
+        let line = truncate_runtime_stderr_line(line);
+        let mut state = self.state.lock().unwrap();
+        state.bytes = state.bytes.saturating_add(line.len());
+        state.lines.push_back(line);
+        while state.lines.len() > MAX_RUNTIME_STDERR_LINES || state.bytes > MAX_RUNTIME_STDERR_BYTES
+        {
+            let Some(removed) = state.lines.pop_front() else {
+                break;
+            };
+            state.bytes = state.bytes.saturating_sub(removed.len());
+        }
+    }
+
+    fn render(&self) -> String {
+        self.state
+            .lock()
+            .unwrap()
+            .lines
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+fn truncate_runtime_stderr_line(line: &str) -> String {
+    if line.len() <= MAX_RUNTIME_STDERR_LINE_BYTES {
+        return line.to_string();
+    }
+    let mut end = MAX_RUNTIME_STDERR_LINE_BYTES;
+    while !line.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &line[..end])
+}
+
+fn crash_message_with_stderr(message: String, stderr: &RuntimeStderrBuffer) -> String {
+    let stderr = stderr.render();
+    if stderr.trim().is_empty() {
+        message
+    } else {
+        format!("{message}\n{stderr}")
+    }
+}
+
+fn captured_stderr_suffix(stderr: &RuntimeStderrBuffer) -> String {
+    let stderr = stderr.render();
+    if stderr.trim().is_empty() {
+        String::new()
+    } else {
+        format!("\nCaptured stderr:\n{stderr}")
+    }
+}
+
 fn now_millis() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1057,8 +1492,10 @@ fn supervise_runtime(
     context: ExtensionHostContext,
     first_child: Child,
     shutdown_rx: mpsc::Receiver<()>,
+    activation_stderr: RuntimeStderrBuffer,
 ) {
     let mut child = Some(first_child);
+    let mut next_stderr_buffer = Some(activation_stderr);
     let mut crashes = VecDeque::new();
 
     loop {
@@ -1097,9 +1534,19 @@ fn supervise_runtime(
             },
         };
 
-        match supervise_child_once(&launch.runtime_key, running_child, &shutdown_rx, &context) {
+        let stderr_buffer = next_stderr_buffer.take().unwrap_or_default();
+        match supervise_child_once(
+            &launch.runtime_key,
+            running_child,
+            &shutdown_rx,
+            &context,
+            stderr_buffer,
+        ) {
             ChildOutcome::Shutdown | ChildOutcome::ExitSuccess => break,
             ChildOutcome::Crash { message, .. } => {
+                if context.activation.has_failed() {
+                    break;
+                }
                 let now = Instant::now();
                 crashes.push_back(now);
                 while crashes
@@ -1176,6 +1623,7 @@ fn supervise_child_once(
     mut child: Child,
     shutdown_rx: &mpsc::Receiver<()>,
     context: &ExtensionHostContext,
+    stderr_buffer: RuntimeStderrBuffer,
 ) -> ChildOutcome {
     context.bus_subscriptions.lock().unwrap().clear();
     let stdin = child
@@ -1200,13 +1648,11 @@ fn supervise_child_once(
             "stderr",
             stream,
             context.app_handle.clone(),
+            stderr_buffer.clone(),
         )
     });
 
-    let status = set_extension_host_running(&context.runtime_statuses, runtime_key);
-    emit_extension_host_runtime_status(&context.app_handle, runtime_key, status);
-    info!("Extension host runtime '{}' started.", runtime_key);
-    let outcome = loop {
+    let mut outcome = loop {
         if shutdown_rx.try_recv().is_ok() {
             let status = set_extension_host_stopping(&context.runtime_statuses, runtime_key);
             emit_extension_host_runtime_status(&context.app_handle, runtime_key, status);
@@ -1249,27 +1695,11 @@ fn supervise_child_once(
                     break ChildOutcome::ExitSuccess;
                 }
                 let message = format!("Extension host runtime exited with {status}.");
-                warn!("extensionHost '{}': {}", runtime_key, message);
-                let status = set_extension_host_crashed(
-                    &context.runtime_statuses,
-                    runtime_key,
-                    exit_code,
-                    message.clone(),
-                );
-                emit_extension_host_runtime_status(&context.app_handle, runtime_key, status);
                 break ChildOutcome::Crash { message, exit_code };
             }
             Ok(None) => thread::sleep(Duration::from_millis(100)),
             Err(err) => {
                 let message = format!("Unable to inspect extension host process: {err}");
-                error!("extensionHost '{}': {}", runtime_key, message);
-                let status = set_extension_host_crashed(
-                    &context.runtime_statuses,
-                    runtime_key,
-                    None,
-                    message.clone(),
-                );
-                emit_extension_host_runtime_status(&context.app_handle, runtime_key, status);
                 break ChildOutcome::Crash {
                     message,
                     exit_code: None,
@@ -1283,6 +1713,17 @@ fn supervise_child_once(
     }
     if let Some(stderr) = stderr {
         let _ = stderr.join();
+    }
+    if let ChildOutcome::Crash { message, exit_code } = &mut outcome {
+        *message = crash_message_with_stderr(std::mem::take(message), &stderr_buffer);
+        warn!("extensionHost '{}': {}", runtime_key, message);
+        let status = set_extension_host_crashed(
+            &context.runtime_statuses,
+            runtime_key,
+            *exit_code,
+            message.clone(),
+        );
+        emit_extension_host_runtime_status(&context.app_handle, runtime_key, status);
     }
     let _ = bus_shutdown_tx.send(());
     let _ = bus_forwarder.join();
@@ -1298,6 +1739,49 @@ fn supervise_child_once(
     context
         .rpc
         .reject_pending("Extension host process stopped before answering.");
+    let (activation_failure, activation_exit_code, already_crashed) = match &outcome {
+        ChildOutcome::Crash { message, exit_code } => (message.clone(), *exit_code, true),
+        ChildOutcome::ExitSuccess => (
+            crash_message_with_stderr(
+                "Runtime exited before reporting activation readiness.".to_string(),
+                &stderr_buffer,
+            ),
+            Some(0),
+            false,
+        ),
+        ChildOutcome::Shutdown => (
+            crash_message_with_stderr(
+                "Runtime stopped before reporting activation readiness.".to_string(),
+                &stderr_buffer,
+            ),
+            None,
+            false,
+        ),
+    };
+    if context.activation.fail(activation_failure.clone()) {
+        if !already_crashed {
+            let status = set_extension_host_crashed(
+                &context.runtime_statuses,
+                runtime_key,
+                activation_exit_code,
+                activation_failure.clone(),
+            );
+            emit_extension_host_runtime_status(&context.app_handle, runtime_key, status);
+        }
+        emit_runtime_error(
+            &context.app_handle,
+            "extensionHost",
+            runtime_key,
+            &activation_failure,
+        );
+        push_diagnostic(
+            context,
+            PluginDiagnosticSeverity::Error,
+            "activation",
+            activation_failure,
+            None,
+        );
+    }
     outcome
 }
 
@@ -1446,6 +1930,7 @@ fn handle_host_request(
     params: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     match method {
+        "runtime/ready" => runtime_ready(runtime_key, context),
         "commands/registerCommand" => register_command(context, params),
         "commands/unregisterCommand" => unregister_command(context, params),
         "commands/executeCommand" => call_command(context, params),
@@ -1491,6 +1976,22 @@ fn handle_host_request(
             "Extension host JSON-RPC method '{method}' is not supported."
         )),
     }
+}
+
+fn runtime_ready(
+    runtime_key: &str,
+    context: &ExtensionHostContext,
+) -> Result<serde_json::Value, String> {
+    if !context.activation.ready(|| {
+        let status = set_extension_host_running(&context.runtime_statuses, runtime_key);
+        emit_extension_host_runtime_status(&context.app_handle, runtime_key, status);
+        info!("Extension host runtime '{}' is ready.", runtime_key);
+    }) {
+        return Err(format!(
+            "Extension host '{runtime_key}' is no longer accepting an activation readiness signal."
+        ));
+    }
+    Ok(serde_json::json!({ "ok": true }))
 }
 
 fn ensure_permission_matches(
@@ -2567,6 +3068,7 @@ fn spawn_log_reader<R>(
     stream_name: &'static str,
     stream: R,
     app_handle: AppHandle,
+    stderr_buffer: RuntimeStderrBuffer,
 ) -> thread::JoinHandle<()>
 where
     R: std::io::Read + Send + 'static,
@@ -2574,6 +3076,7 @@ where
     thread::spawn(move || {
         let reader = BufReader::new(stream);
         for line in reader.lines().map_while(Result::ok) {
+            stderr_buffer.push(&line);
             warn!("extensionHost '{}' {}: {}", runtime_key, stream_name, line);
             emit_runtime_log(
                 &app_handle,
@@ -2649,6 +3152,182 @@ mod tests {
     use super::*;
 
     #[test]
+    fn activation_ready_updates_lifecycle_before_unblocking_manager() {
+        let (activation, activation_rx) = ExtensionHostActivationSignal::new();
+        let lifecycle_updated = Arc::new(AtomicU8::new(0));
+        let lifecycle_updated_for_callback = lifecycle_updated.clone();
+
+        assert!(activation.ready(|| {
+            assert_eq!(activation_rx.try_recv(), Err(mpsc::TryRecvError::Empty));
+            lifecycle_updated_for_callback.store(1, Ordering::Release);
+        }));
+
+        assert_eq!(
+            activation_rx.recv_timeout(Duration::from_millis(50)),
+            Ok(Ok(()))
+        );
+        assert_eq!(lifecycle_updated.load(Ordering::Acquire), 1);
+
+        let restart_lifecycle_updated = Arc::new(AtomicU8::new(0));
+        let restart_lifecycle_updated_for_callback = restart_lifecycle_updated.clone();
+        assert!(activation.ready(|| {
+            restart_lifecycle_updated_for_callback.store(1, Ordering::Release);
+        }));
+        assert_eq!(restart_lifecycle_updated.load(Ordering::Acquire), 1);
+    }
+
+    #[test]
+    fn activation_failure_blocks_late_ready_signal() {
+        let (activation, activation_rx) = ExtensionHostActivationSignal::new();
+        assert!(activation.fail("activation crashed".to_string()));
+        assert_eq!(
+            activation_rx.recv_timeout(Duration::from_millis(50)),
+            Ok(Err("activation crashed".to_string()))
+        );
+
+        let callback_called = Arc::new(AtomicU8::new(0));
+        let callback_called_for_ready = callback_called.clone();
+        assert!(!activation.ready(|| {
+            callback_called_for_ready.store(1, Ordering::Release);
+        }));
+        assert_eq!(callback_called.load(Ordering::Acquire), 0);
+        assert!(activation.has_failed());
+    }
+
+    #[test]
+    fn activation_timeout_error_includes_captured_stderr() {
+        let stderr = RuntimeStderrBuffer::default();
+        stderr.push("Error: plugin activation hung");
+
+        let error = activation_timeout_error("com.pkg.extension".to_string(), &stderr).to_string();
+
+        assert!(error.contains("did not report activation readiness within 10s"));
+        assert!(error.contains("Captured stderr"));
+        assert!(error.contains("Error: plugin activation hung"));
+    }
+
+    #[test]
+    fn activation_ready_wins_timeout_race_without_becoming_timeout() {
+        let (activation, activation_rx) = ExtensionHostActivationSignal::new();
+        assert!(activation.ready(|| {}));
+
+        let resolution = resolve_activation_timeout(
+            "com.pkg.extension".to_string(),
+            &activation,
+            &activation_rx,
+            &RuntimeStderrBuffer::default(),
+        );
+
+        assert!(matches!(resolution, ActivationTimeoutResolution::Ready));
+    }
+
+    #[test]
+    fn activation_timeout_is_claimed_only_while_signal_is_pending() {
+        let (activation, activation_rx) = ExtensionHostActivationSignal::new();
+
+        let resolution = resolve_activation_timeout(
+            "com.pkg.extension".to_string(),
+            &activation,
+            &activation_rx,
+            &RuntimeStderrBuffer::default(),
+        );
+
+        assert!(matches!(
+            resolution,
+            ActivationTimeoutResolution::Timeout(_)
+        ));
+        assert!(activation.has_failed());
+    }
+
+    #[test]
+    fn required_node_runtime_availability_propagates_failures() {
+        let required = vec!["com.pkg.provider".to_string()];
+        let mut availability = HashMap::new();
+
+        assert_eq!(
+            unavailable_required_node_dependencies(&required, &availability),
+            required
+        );
+        availability.insert(
+            "com.pkg.provider".to_string(),
+            ExtensionHostRuntimeAvailability::Unavailable,
+        );
+        assert_eq!(
+            unavailable_required_node_dependencies(&required, &availability),
+            required
+        );
+        availability.insert(
+            "com.pkg.provider".to_string(),
+            ExtensionHostRuntimeAvailability::Ready,
+        );
+        assert!(unavailable_required_node_dependencies(&required, &availability).is_empty());
+    }
+
+    #[test]
+    fn supervisor_reported_activation_failure_is_not_reported_twice() {
+        let process_failure = ExtensionHostRuntimeError::ActivationFailed {
+            runtime_key: "com.pkg.extension".to_string(),
+            message: "process exited".to_string(),
+        };
+        let timeout = activation_timeout_error(
+            "com.pkg.extension".to_string(),
+            &RuntimeStderrBuffer::default(),
+        );
+
+        assert!(activation_error_was_reported_by_supervisor(
+            &process_failure
+        ));
+        assert!(!activation_error_was_reported_by_supervisor(&timeout));
+    }
+
+    #[test]
+    fn runtime_stderr_buffer_keeps_a_bounded_tail() {
+        let buffer = RuntimeStderrBuffer::default();
+        for index in 0..(MAX_RUNTIME_STDERR_LINES + 2) {
+            buffer.push(&format!("line-{index}"));
+        }
+
+        let lines = buffer
+            .render()
+            .lines()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let expected_last = format!("line-{}", MAX_RUNTIME_STDERR_LINES + 1);
+        assert_eq!(lines.len(), MAX_RUNTIME_STDERR_LINES);
+        assert_eq!(lines.first().map(String::as_str), Some("line-2"));
+        assert_eq!(
+            lines.last().map(String::as_str),
+            Some(expected_last.as_str())
+        );
+    }
+
+    #[test]
+    fn runtime_stderr_buffer_truncates_large_unicode_lines_safely() {
+        let buffer = RuntimeStderrBuffer::default();
+        buffer.push(&"é".repeat(MAX_RUNTIME_STDERR_LINE_BYTES));
+
+        let rendered = buffer.render();
+        assert!(rendered.ends_with('…'));
+        assert!(rendered.len() <= MAX_RUNTIME_STDERR_LINE_BYTES + '…'.len_utf8());
+    }
+
+    #[test]
+    fn crash_message_includes_captured_stderr_stack() {
+        let buffer = RuntimeStderrBuffer::default();
+        buffer.push("Error: activation failed");
+        buffer.push("    at activate (plugin.mjs:12:3)");
+
+        let message = crash_message_with_stderr(
+            "Extension host runtime exited with exit code: 1.".to_string(),
+            &buffer,
+        );
+
+        assert!(message.contains("exit code: 1"));
+        assert!(message.contains("Error: activation failed"));
+        assert!(message.contains("at activate (plugin.mjs:12:3)"));
+    }
+
+    #[test]
     fn extension_host_runtime_status_tracks_lifecycle() {
         let statuses = SharedExtensionHostRuntimeStatus::default();
         let package_id = "com.pkg.extension";
@@ -2662,6 +3341,7 @@ mod tests {
         assert_eq!(running.state, ExtensionHostRuntimeState::Running);
         assert!(running.running);
         assert_eq!(running.last_error, None);
+        assert!(extension_host_runtime_is_running(&statuses, package_id));
 
         let crashed = set_extension_host_crashed(
             &statuses,
@@ -2680,6 +3360,7 @@ mod tests {
         assert!(!restarting.running);
         assert_eq!(restarting.restart_count, 1);
         assert_eq!(restarting.crash_count, 1);
+        assert!(!extension_host_runtime_is_running(&statuses, package_id));
 
         let stopped = set_extension_host_stopped(&statuses, package_id, Some(0));
         assert_eq!(stopped.state, ExtensionHostRuntimeState::Stopped);

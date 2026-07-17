@@ -33,6 +33,7 @@ import type {
   MarketplaceSnapshot,
   PackageDescriptor,
   PendingInstall,
+  PluginDiagnosticEvent,
   PreparedPackageInstall,
   RegistryEntry,
   RuntimeInfo,
@@ -107,6 +108,7 @@ export class DashboardState {
   developerTelemetryGroups = $state<DeveloperTelemetryGroup[]>([]);
   developerTelemetryBuffer: DeveloperTelemetryEntry[] = [];
   developerTelemetryFlushTimer: ReturnType<typeof setTimeout> | null = null;
+  pluginDiagnosticsHydrated = false;
   developerErrors = $state<DeveloperErrorEntry[]>([]);
   developerTelemetrySort = $state<DeveloperTelemetrySort>("arrival");
   developerFrameTemplate = $state<DeveloperFrameTemplate>("UpdateState");
@@ -280,6 +282,22 @@ export class DashboardState {
     const telemetrySnapshot = await invoke<GameEventFrame | null>("get_telemetry_snapshot");
     if (telemetrySnapshot) this.recordTelemetryFrame(telemetrySnapshot);
     this.registryEntries = await invoke<RegistryEntry[]>("registry_entries");
+    await this.hydratePluginDiagnostics();
+  }
+
+  async hydratePluginDiagnostics() {
+    if (this.pluginDiagnosticsHydrated) return;
+    const diagnostics = await invoke<PluginDiagnosticEvent[]>("list_plugin_diagnostics");
+    for (const diagnostic of diagnostics) {
+      const scope = diagnostic.packageId ? `${diagnostic.source}:${diagnostic.packageId}` : diagnostic.source;
+      this.recordDeveloperError({
+        kind: diagnostic.severity,
+        source: scope,
+        message: `[${diagnostic.phase}] ${diagnostic.message}`,
+        timestampMs: diagnostic.timestampMs
+      });
+    }
+    this.pluginDiagnosticsHydrated = true;
   }
 
   async refreshMarketplace(refresh = false, announceErrors = false) {

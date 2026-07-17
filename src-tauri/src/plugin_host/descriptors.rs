@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
 use crate::plugin_package::bundle::BundleInspection;
@@ -408,111 +408,219 @@ pub(super) fn supported_runtime_api_label() -> String {
 }
 
 pub(super) fn apply_graph_diagnostics(records: &mut HashMap<String, PackageRecord>) {
-    let dependency_snapshot = graph_snapshot(records);
-    for record in records.values_mut() {
-        let mut graph_error = None;
-
-        for dependency_descriptor in &mut record.descriptor.dependencies {
-            let (status, message) = dependency_status(dependency_descriptor, &dependency_snapshot);
-            dependency_descriptor.status = status.clone();
-            dependency_descriptor.message = message.clone();
-            if !dependency_descriptor.optional
-                && !matches!(status, PackageDependencyStatus::Satisfied)
-                && graph_error.is_none()
-            {
-                graph_error = message;
-            }
-        }
-
-        if let Some(error) = graph_error {
+    let initially_enabled = records
+        .iter()
+        .filter(|(_, record)| record.descriptor.enabled)
+        .map(|(package_id, _)| package_id.clone())
+        .collect::<HashSet<_>>();
+    let required_cycle_errors = required_dependency_cycle_errors(records);
+    for (package_id, error) in &required_cycle_errors {
+        if let Some(record) = records.get_mut(package_id) {
             record.descriptor.enabled = false;
-            record.descriptor.error = Some(error);
+            record.descriptor.error = Some(error.clone());
         }
     }
 
-    let contribution_snapshot = graph_snapshot(records);
-    for record in records.values_mut() {
-        if record.descriptor.error.is_some() {
+    loop {
+        let mut disabled_any = false;
+        let dependency_snapshot = graph_snapshot(records);
+        for (package_id, record) in records.iter_mut() {
+            let mut graph_error = None;
+
+            for dependency_descriptor in &mut record.descriptor.dependencies {
+                let (status, message) =
+                    dependency_status(dependency_descriptor, &dependency_snapshot);
+                dependency_descriptor.status = status.clone();
+                dependency_descriptor.message = message.clone();
+                if !dependency_descriptor.optional
+                    && !matches!(status, PackageDependencyStatus::Satisfied)
+                    && graph_error.is_none()
+                {
+                    graph_error = message;
+                }
+            }
+
+            if let Some(error) = graph_error.filter(|_| initially_enabled.contains(package_id)) {
+                disabled_any |= record.descriptor.enabled;
+                record.descriptor.enabled = false;
+                if !required_cycle_errors.contains_key(package_id) {
+                    record.descriptor.error = Some(error);
+                }
+            }
+        }
+
+        let contribution_snapshot = graph_snapshot(records);
+        for (package_id, record) in records.iter_mut() {
+            if !initially_enabled.contains(package_id) || record.descriptor.error.is_some() {
+                continue;
+            }
+            let package_id = record.manifest.id().to_string();
+            let dependency_package_ids = record
+                .manifest
+                .dependencies_v4()
+                .iter()
+                .map(|dependency| dependency.package_id.as_str())
+                .collect::<HashSet<_>>();
+            let mut graph_error = None;
+
+            for contribution in &record.manifest.contributes_v4().contributions {
+                let Some((target_package_id, target_extension_point)) =
+                    contribution.target.split_once('/')
+                else {
+                    graph_error.get_or_insert_with(|| {
+                        format!(
+                            "Contribution '{}' has invalid target '{}'.",
+                            contribution.id, contribution.target
+                        )
+                    });
+                    continue;
+                };
+                if target_package_id != package_id
+                    && !dependency_package_ids.contains(target_package_id)
+                {
+                    graph_error.get_or_insert_with(|| {
+                        format!(
+                            "Contribution '{}' targets '{}' but the package does not declare a dependency on '{}'.",
+                            contribution.id, contribution.target, target_package_id
+                        )
+                    });
+                    continue;
+                }
+                let Some(target) = contribution_snapshot.get(target_package_id) else {
+                    graph_error.get_or_insert_with(|| {
+                        format!(
+                            "Contribution '{}' targets missing package '{}'.",
+                            contribution.id, target_package_id
+                        )
+                    });
+                    continue;
+                };
+                if !target.enabled {
+                    graph_error.get_or_insert_with(|| {
+                        format!(
+                            "Contribution '{}' targets disabled package '{}'.",
+                            contribution.id, target_package_id
+                        )
+                    });
+                    continue;
+                }
+                if !target.compatible {
+                    graph_error.get_or_insert_with(|| {
+                        format!(
+                            "Contribution '{}' targets incompatible package '{}'.",
+                            contribution.id, target_package_id
+                        )
+                    });
+                    continue;
+                }
+                if !target
+                    .extension_points
+                    .iter()
+                    .any(|point| point == target_extension_point)
+                {
+                    graph_error.get_or_insert_with(|| {
+                        format!(
+                            "Contribution '{}' targets unknown extension point '{}'.",
+                            contribution.id, contribution.target
+                        )
+                    });
+                }
+            }
+
+            if let Some(error) = graph_error {
+                disabled_any |= record.descriptor.enabled;
+                record.descriptor.enabled = false;
+                record.descriptor.error = Some(error);
+            }
+        }
+
+        if !disabled_any {
+            break;
+        }
+    }
+}
+
+fn required_dependency_cycle_errors(
+    records: &HashMap<String, PackageRecord>,
+) -> HashMap<String, String> {
+    let package_ids = records
+        .iter()
+        .filter(|(_, record)| {
+            record.descriptor.enabled
+                && record.descriptor.error.is_none()
+                && record.descriptor.compatibility.is_compatible()
+        })
+        .map(|(package_id, _)| package_id.clone())
+        .collect::<BTreeSet<_>>();
+    let graph = package_ids
+        .iter()
+        .map(|package_id| {
+            let mut dependencies = records[package_id]
+                .manifest
+                .dependencies_v4()
+                .iter()
+                .filter(|dependency| !dependency.optional)
+                .filter(|dependency| package_ids.contains(&dependency.package_id))
+                .map(|dependency| dependency.package_id.clone())
+                .collect::<Vec<_>>();
+            dependencies.sort();
+            dependencies.dedup();
+            (package_id.clone(), dependencies)
+        })
+        .collect::<HashMap<_, _>>();
+
+    package_ids
+        .into_iter()
+        .filter_map(|package_id| {
+            let mut path = vec![package_id.clone()];
+            let mut visited = HashSet::from([package_id.clone()]);
+            find_required_dependency_cycle(
+                &package_id,
+                &package_id,
+                &graph,
+                &mut path,
+                &mut visited,
+            )
+            .map(|cycle| {
+                let cycle = cycle
+                    .iter()
+                    .map(|member| format!("'{member}'"))
+                    .collect::<Vec<_>>()
+                    .join(" -> ");
+                (
+                    package_id,
+                    format!("Required dependency cycle detected: {cycle}."),
+                )
+            })
+        })
+        .collect()
+}
+
+fn find_required_dependency_cycle(
+    start: &str,
+    current: &str,
+    graph: &HashMap<String, Vec<String>>,
+    path: &mut Vec<String>,
+    visited: &mut HashSet<String>,
+) -> Option<Vec<String>> {
+    for dependency in graph.get(current).into_iter().flatten() {
+        if dependency == start {
+            let mut cycle = path.clone();
+            cycle.push(start.to_string());
+            return Some(cycle);
+        }
+        if !visited.insert(dependency.clone()) {
             continue;
         }
-        let package_id = record.manifest.id().to_string();
-        let dependency_package_ids = record
-            .manifest
-            .dependencies_v4()
-            .iter()
-            .map(|dependency| dependency.package_id.as_str())
-            .collect::<HashSet<_>>();
-        let mut graph_error = None;
-
-        for contribution in &record.manifest.contributes_v4().contributions {
-            let Some((target_package_id, target_extension_point)) =
-                contribution.target.split_once('/')
-            else {
-                graph_error.get_or_insert_with(|| {
-                    format!(
-                        "Contribution '{}' has invalid target '{}'.",
-                        contribution.id, contribution.target
-                    )
-                });
-                continue;
-            };
-            if target_package_id != package_id
-                && !dependency_package_ids.contains(target_package_id)
-            {
-                graph_error.get_or_insert_with(|| {
-                    format!(
-                        "Contribution '{}' targets '{}' but the package does not declare a dependency on '{}'.",
-                        contribution.id, contribution.target, target_package_id
-                    )
-                });
-                continue;
-            }
-            let Some(target) = contribution_snapshot.get(target_package_id) else {
-                graph_error.get_or_insert_with(|| {
-                    format!(
-                        "Contribution '{}' targets missing package '{}'.",
-                        contribution.id, target_package_id
-                    )
-                });
-                continue;
-            };
-            if !target.enabled {
-                graph_error.get_or_insert_with(|| {
-                    format!(
-                        "Contribution '{}' targets disabled package '{}'.",
-                        contribution.id, target_package_id
-                    )
-                });
-                continue;
-            }
-            if !target.compatible {
-                graph_error.get_or_insert_with(|| {
-                    format!(
-                        "Contribution '{}' targets incompatible package '{}'.",
-                        contribution.id, target_package_id
-                    )
-                });
-                continue;
-            }
-            if !target
-                .extension_points
-                .iter()
-                .any(|point| point == target_extension_point)
-            {
-                graph_error.get_or_insert_with(|| {
-                    format!(
-                        "Contribution '{}' targets unknown extension point '{}'.",
-                        contribution.id, contribution.target
-                    )
-                });
-            }
+        path.push(dependency.clone());
+        if let Some(cycle) = find_required_dependency_cycle(start, dependency, graph, path, visited)
+        {
+            return Some(cycle);
         }
-
-        if let Some(error) = graph_error {
-            record.descriptor.enabled = false;
-            record.descriptor.error = Some(error);
-        }
+        path.pop();
+        visited.remove(dependency);
     }
+    None
 }
 
 fn graph_snapshot(
@@ -1056,6 +1164,155 @@ mod tests {
             .error
             .as_ref()
             .is_some_and(|error| error.contains("does not satisfy version requirement")));
+    }
+
+    #[test]
+    fn graph_diagnostics_rejects_required_dependency_cycles() {
+        let mut records = HashMap::from([
+            package_record(
+                serde_json::json!({
+                    "schemaVersion": "bakingrl.plugin/4",
+                    "id": "bakingrl.cycle-a",
+                    "name": "Cycle A",
+                    "version": "1.0.0",
+                    "bakingrlApi": "2.3.0",
+                    "dependencies": [{ "packageId": "bakingrl.cycle-b" }]
+                }),
+                true,
+            ),
+            package_record(
+                serde_json::json!({
+                    "schemaVersion": "bakingrl.plugin/4",
+                    "id": "bakingrl.cycle-b",
+                    "name": "Cycle B",
+                    "version": "1.0.0",
+                    "bakingrlApi": "2.3.0",
+                    "dependencies": [{ "packageId": "bakingrl.cycle-a" }]
+                }),
+                true,
+            ),
+        ]);
+
+        apply_graph_diagnostics(&mut records);
+
+        for record in records.values() {
+            assert!(!record.descriptor.enabled);
+            assert!(record
+                .descriptor
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("Required dependency cycle detected")));
+        }
+    }
+
+    #[test]
+    fn graph_diagnostics_does_not_treat_optional_dependencies_as_cycles() {
+        let mut records = HashMap::from([
+            package_record(
+                serde_json::json!({
+                    "schemaVersion": "bakingrl.plugin/4",
+                    "id": "bakingrl.optional-a",
+                    "name": "Optional A",
+                    "version": "1.0.0",
+                    "bakingrlApi": "2.3.0",
+                    "dependencies": [{
+                        "packageId": "bakingrl.optional-b",
+                        "optional": true
+                    }]
+                }),
+                true,
+            ),
+            package_record(
+                serde_json::json!({
+                    "schemaVersion": "bakingrl.plugin/4",
+                    "id": "bakingrl.optional-b",
+                    "name": "Optional B",
+                    "version": "1.0.0",
+                    "bakingrlApi": "2.3.0",
+                    "dependencies": [{ "packageId": "bakingrl.optional-a" }]
+                }),
+                true,
+            ),
+        ]);
+
+        apply_graph_diagnostics(&mut records);
+
+        assert!(records.values().all(|record| record.descriptor.enabled));
+        assert!(records
+            .values()
+            .all(|record| record.descriptor.error.is_none()));
+    }
+
+    #[test]
+    fn graph_diagnostics_ignores_cycles_through_disabled_packages() {
+        let mut records = HashMap::from([
+            package_record(
+                serde_json::json!({
+                    "schemaVersion": "bakingrl.plugin/4",
+                    "id": "bakingrl.enabled",
+                    "name": "Enabled",
+                    "version": "1.0.0",
+                    "bakingrlApi": "2.3.0",
+                    "dependencies": [{ "packageId": "bakingrl.disabled" }]
+                }),
+                true,
+            ),
+            package_record(
+                serde_json::json!({
+                    "schemaVersion": "bakingrl.plugin/4",
+                    "id": "bakingrl.disabled",
+                    "name": "Disabled",
+                    "version": "1.0.0",
+                    "bakingrlApi": "2.3.0",
+                    "dependencies": [{ "packageId": "bakingrl.enabled" }]
+                }),
+                false,
+            ),
+        ]);
+
+        apply_graph_diagnostics(&mut records);
+
+        assert!(records["bakingrl.enabled"]
+            .descriptor
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("Dependency 'bakingrl.disabled' is disabled")));
+        assert_eq!(records["bakingrl.disabled"].descriptor.error, None);
+    }
+
+    #[test]
+    fn graph_diagnostics_propagates_required_dependency_failures_to_fixpoint() {
+        let dependency_chain = [
+            ("bakingrl.chain-a", None),
+            ("bakingrl.chain-b", Some("bakingrl.chain-a")),
+            ("bakingrl.chain-c", Some("bakingrl.chain-b")),
+            ("bakingrl.chain-d", Some("bakingrl.chain-c")),
+        ];
+        let mut records = dependency_chain
+            .into_iter()
+            .map(|(package_id, dependency)| {
+                package_record(
+                    serde_json::json!({
+                        "schemaVersion": "bakingrl.plugin/4",
+                        "id": package_id,
+                        "name": package_id,
+                        "version": "1.0.0",
+                        "bakingrlApi": "2.3.0",
+                        "dependencies": dependency
+                            .map(|dependency| vec![serde_json::json!({ "packageId": dependency })])
+                            .unwrap_or_default()
+                    }),
+                    package_id != "bakingrl.chain-a",
+                )
+            })
+            .collect::<HashMap<_, _>>();
+
+        apply_graph_diagnostics(&mut records);
+
+        assert!(records.values().all(|record| !record.descriptor.enabled));
+        for package_id in ["bakingrl.chain-b", "bakingrl.chain-c", "bakingrl.chain-d"] {
+            assert!(records[package_id].descriptor.error.is_some());
+        }
     }
 
     #[test]

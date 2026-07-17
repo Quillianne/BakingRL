@@ -537,16 +537,13 @@ process.on("SIGTERM", () => {
   void shutdown(0);
 });
 
-activate().catch(async (error) => {
+async function start() {
+  await activate();
+  // The host processes activation notifications (including service registrations) before this request.
+  await rpc.request("runtime/ready", {});
+}
+
+start().catch(async (error) => {
   console.error("Plugin activate(context) failed.", error);
-  try {
-    await rpc.request("diagnostics/log", {
-      severity: "fatal",
-      phase: "activation",
-      message: errorMessage(error)
-    });
-  } catch {
-    // The host may already be gone; exiting non-zero lets the Rust supervisor diagnose the crash.
-  }
   await shutdown(1);
 });
