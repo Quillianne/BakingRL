@@ -51,6 +51,88 @@ struct BundleSignatureFile {
     signed_file: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArchivePathKind {
+    File,
+    Directory,
+}
+
+#[derive(Debug)]
+struct ArchivePathRecord {
+    canonical_path: String,
+    kind: ArchivePathKind,
+    explicit_entry: bool,
+    source_entry: String,
+}
+
+#[derive(Debug, Default)]
+struct PortableArchivePaths {
+    paths: BTreeMap<String, ArchivePathRecord>,
+}
+
+impl PortableArchivePaths {
+    fn register(&mut self, entry_name: &str, is_dir: bool) -> Result<(), String> {
+        let components = portable_path_components(entry_name)?;
+        validate_reserved_root_entry(&components, is_dir)?;
+
+        let mut canonical_path = String::new();
+        for (index, component) in components.iter().enumerate() {
+            if !canonical_path.is_empty() {
+                canonical_path.push('/');
+            }
+            canonical_path.push_str(component);
+
+            let is_leaf = index + 1 == components.len();
+            let kind = if is_leaf && !is_dir {
+                ArchivePathKind::File
+            } else {
+                ArchivePathKind::Directory
+            };
+            let portable_key = canonical_path.to_uppercase();
+
+            match self.paths.get_mut(&portable_key) {
+                Some(existing) => {
+                    if existing.canonical_path != canonical_path {
+                        return Err(format!(
+                            "Bundle entries '{}' and '{}' collide after Unicode uppercase normalization ('{}' vs '{}').",
+                            existing.source_entry,
+                            entry_name,
+                            existing.canonical_path,
+                            canonical_path
+                        ));
+                    }
+                    if existing.kind != kind {
+                        return Err(format!(
+                            "Bundle entries '{}' and '{}' conflict because '{}' is both a file and a directory.",
+                            existing.source_entry, entry_name, canonical_path
+                        ));
+                    }
+                    if is_leaf && existing.explicit_entry {
+                        return Err(format!("Bundle contains duplicate entry '{entry_name}'."));
+                    }
+                    if is_leaf {
+                        existing.explicit_entry = true;
+                        existing.source_entry = entry_name.to_string();
+                    }
+                }
+                None => {
+                    self.paths.insert(
+                        portable_key,
+                        ArchivePathRecord {
+                            canonical_path: canonical_path.clone(),
+                            kind,
+                            explicit_entry: is_leaf,
+                            source_entry: entry_name.to_string(),
+                        },
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
 pub fn inspect_bundle(path: &Path) -> Result<BundleInspection, String> {
     let sha256 = sha256_file(path)?;
     let file = File::open(path).map_err(|e| format!("Unable to open bundle: {e}"))?;
@@ -70,13 +152,14 @@ pub fn extract_bundle(path: &Path, target_dir: &Path) -> Result<BundleInspection
     let file = File::open(path).map_err(|e| format!("Unable to open bundle: {e}"))?;
     let mut archive = ZipArchive::new(file).map_err(|e| format!("Invalid .brlp archive: {e}"))?;
     let hashes = read_hashes(&mut archive)?;
+    let mut archive_paths = PortableArchivePaths::default();
 
     for index in 0..archive.len() {
         let mut file = archive
             .by_index(index)
             .map_err(|e| format!("Unable to read archive entry: {e}"))?;
         let entry_name = file.name().to_string();
-        validate_archive_path(&entry_name)?;
+        archive_paths.register(&entry_name, file.is_dir())?;
         if file.is_dir() {
             fs::create_dir_all(target_dir.join(&entry_name))
                 .map_err(|e| format!("Unable to create bundle directory: {e}"))?;
@@ -103,7 +186,57 @@ pub fn extract_bundle(path: &Path, target_dir: &Path) -> Result<BundleInspection
             .map_err(|e| format!("Unable to write bundle entry '{entry_name}': {e}"))?;
     }
 
+    make_declared_sidecars_executable(target_dir, &inspection.manifest)?;
+
     Ok(inspection)
+}
+
+#[cfg(unix)]
+fn make_declared_sidecars_executable(
+    target_dir: &Path,
+    manifest: &PluginPackageManifest,
+) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let Some(runtime) = manifest.runtime_v4() else {
+        return Ok(());
+    };
+    for sidecar in &runtime.sidecars {
+        if !sidecar_supports_current_platform(sidecar) {
+            continue;
+        }
+        let relative_path = validate_archive_path(&sidecar.bin)?;
+        let binary_path = target_dir.join(relative_path);
+        let metadata = fs::metadata(&binary_path).map_err(|error| {
+            format!(
+                "Unable to inspect declared sidecar '{}': {error}",
+                sidecar.bin
+            )
+        })?;
+        if !metadata.is_file() {
+            return Err(format!(
+                "Declared sidecar '{}' is not a regular file after extraction.",
+                sidecar.bin
+            ));
+        }
+        let mut permissions = metadata.permissions();
+        permissions.set_mode(permissions.mode() | 0o111);
+        fs::set_permissions(&binary_path, permissions).map_err(|error| {
+            format!(
+                "Unable to make declared sidecar '{}' executable: {error}",
+                sidecar.bin
+            )
+        })?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn make_declared_sidecars_executable(
+    _target_dir: &Path,
+    _manifest: &PluginPackageManifest,
+) -> Result<(), String> {
+    Ok(())
 }
 
 fn inspect_archive<R: Read + Seek>(
@@ -118,13 +251,14 @@ fn inspect_archive<R: Read + Seek>(
     let mut hashes_raw: Option<Vec<u8>> = None;
     let mut signature_raw: Option<String> = None;
     let mut entries = BTreeSet::new();
+    let mut archive_paths = PortableArchivePaths::default();
 
     for index in 0..archive.len() {
         let mut file = archive
             .by_index(index)
             .map_err(|e| format!("Unable to inspect bundle entry: {e}"))?;
         let entry_name = file.name().to_string();
-        validate_archive_path(&entry_name)?;
+        archive_paths.register(&entry_name, file.is_dir())?;
         if is_symlink(file.unix_mode()) {
             return Err(format!("Bundle entry '{entry_name}' is a symlink"));
         }
@@ -361,9 +495,7 @@ fn verify_bundle_signature(
 }
 
 pub fn validate_archive_path(value: &str) -> Result<PathBuf, String> {
-    if value.trim().is_empty() {
-        return Err("Bundle entry path cannot be empty".to_string());
-    }
+    portable_path_components(value)?;
     let path = Path::new(value);
     if path.is_absolute()
         || path.components().any(|component| {
@@ -378,6 +510,91 @@ pub fn validate_archive_path(value: &str) -> Result<PathBuf, String> {
         ));
     }
     Ok(path.to_path_buf())
+}
+
+fn portable_path_components(value: &str) -> Result<Vec<&str>, String> {
+    if value.trim().is_empty() {
+        return Err("Bundle entry path cannot be empty".to_string());
+    }
+    if value.contains('\\') {
+        return Err(format!(
+            "Bundle entry '{value}' must use '/' as its path separator"
+        ));
+    }
+
+    let path_without_directory_suffix = value.strip_suffix('/').unwrap_or(value);
+    if path_without_directory_suffix.is_empty() {
+        return Err(format!(
+            "Bundle entry '{value}' must stay inside the plugin"
+        ));
+    }
+
+    let components: Vec<_> = path_without_directory_suffix.split('/').collect();
+    for component in &components {
+        if component.is_empty() || *component == "." || *component == ".." {
+            return Err(format!(
+                "Bundle entry '{value}' must use non-empty normalized path segments"
+            ));
+        }
+        if component.ends_with('.') || component.ends_with(' ') {
+            return Err(format!(
+                "Bundle entry '{value}' contains a path segment ending with a dot or space"
+            ));
+        }
+        if component.chars().any(|character| {
+            character <= '\u{1f}' || matches!(character, '<' | '>' | ':' | '"' | '|' | '?' | '*')
+        }) {
+            return Err(format!(
+                "Bundle entry '{value}' contains characters that are invalid in Windows paths"
+            ));
+        }
+        if is_windows_reserved_name(component) {
+            return Err(format!(
+                "Bundle entry '{value}' uses Windows-reserved path segment '{component}'"
+            ));
+        }
+    }
+
+    Ok(components)
+}
+
+fn validate_reserved_root_entry(components: &[&str], is_dir: bool) -> Result<(), String> {
+    if components.len() != 1 {
+        return Ok(());
+    }
+    let entry_name = components[0];
+    for reserved_name in [MANIFEST_FILE, HASHES_FILE, SIGNATURE_FILE] {
+        if entry_name.eq_ignore_ascii_case(reserved_name) {
+            if entry_name != reserved_name {
+                return Err(format!(
+                    "Reserved bundle entry '{entry_name}' must use exact canonical case '{reserved_name}'."
+                ));
+            }
+            if is_dir {
+                return Err(format!(
+                    "Reserved bundle entry '{reserved_name}' must be a file."
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn is_windows_reserved_name(component: &str) -> bool {
+    let basename = component
+        .split_once('.')
+        .map_or(component, |(basename, _)| basename)
+        .to_ascii_uppercase();
+    matches!(basename.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || basename
+            .strip_prefix("COM")
+            .or_else(|| basename.strip_prefix("LPT"))
+            .is_some_and(|suffix| {
+                matches!(
+                    suffix,
+                    "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+                )
+            })
 }
 
 fn is_symlink(mode: Option<u32>) -> bool {
@@ -548,6 +765,167 @@ mod tests {
     }
 
     #[test]
+    fn rejects_case_insensitive_file_collisions() {
+        let dir = tempdir().unwrap();
+        let bundle_path = dir.path().join("case-collision.brlp");
+        let manifest = valid_manifest();
+        let mut entries = valid_bundle_entries(&manifest);
+        entries.extend([("assets/Index.js", "first"), ("assets/index.js", "second")]);
+        write_bundle(&bundle_path, &entries);
+
+        let error = inspect_bundle(&bundle_path).unwrap_err();
+        assert!(error.contains("Unicode uppercase normalization"));
+        assert!(error.contains("assets/Index.js"));
+        assert!(error.contains("assets/index.js"));
+    }
+
+    #[test]
+    fn rejects_case_insensitive_implicit_directory_collisions() {
+        let dir = tempdir().unwrap();
+        let bundle_path = dir.path().join("directory-case-collision.brlp");
+        let manifest = valid_manifest();
+        let mut entries = valid_bundle_entries(&manifest);
+        entries.extend([
+            ("Assets/first.txt", "first"),
+            ("assets/second.txt", "second"),
+        ]);
+        write_bundle(&bundle_path, &entries);
+
+        let error = inspect_bundle(&bundle_path).unwrap_err();
+        assert!(error.contains("Unicode uppercase normalization"));
+        assert!(error.contains("Assets"));
+        assert!(error.contains("assets"));
+    }
+
+    #[test]
+    fn rejects_unicode_uppercase_file_collisions() {
+        let dir = tempdir().unwrap();
+        let bundle_path = dir.path().join("unicode-case-collision.brlp");
+        let manifest = valid_manifest();
+        let mut entries = valid_bundle_entries(&manifest);
+        entries.extend([("assets/É.js", "first"), ("assets/é.js", "second")]);
+        write_bundle(&bundle_path, &entries);
+
+        let error = inspect_bundle(&bundle_path).unwrap_err();
+        assert!(error.contains("Unicode uppercase normalization"));
+        assert!(error.contains("assets/É.js"));
+        assert!(error.contains("assets/é.js"));
+    }
+
+    #[test]
+    fn rejects_windows_unicode_sigma_file_collisions() {
+        let dir = tempdir().unwrap();
+        let bundle_path = dir.path().join("unicode-sigma-collision.brlp");
+        let manifest = valid_manifest();
+        let mut entries = valid_bundle_entries(&manifest);
+        entries.extend([("assets/σ.js", "first"), ("assets/ς.js", "second")]);
+        write_bundle(&bundle_path, &entries);
+
+        let error = inspect_bundle(&bundle_path).unwrap_err();
+        assert!(error.contains("Unicode uppercase normalization"));
+        assert!(error.contains("assets/σ.js"));
+        assert!(error.contains("assets/ς.js"));
+    }
+
+    #[test]
+    fn rejects_file_directory_prefix_conflicts_regardless_of_entry_order() {
+        let dir = tempdir().unwrap();
+        let manifest = valid_manifest();
+        let conflict_orders = [
+            [("assets", "file"), ("assets/icon.png", "icon")],
+            [("assets/icon.png", "icon"), ("assets", "file")],
+        ];
+
+        for (index, conflict_entries) in conflict_orders.iter().enumerate() {
+            let bundle_path = dir.path().join(format!("file-directory-{index}.brlp"));
+            let mut entries = valid_bundle_entries(&manifest);
+            entries.extend(conflict_entries.iter().copied());
+            write_bundle(&bundle_path, &entries);
+
+            let error = inspect_bundle(&bundle_path).unwrap_err();
+            assert!(error.contains("both a file and a directory"));
+            assert!(error.contains("assets"));
+        }
+    }
+
+    #[test]
+    fn rejects_noncanonical_reserved_root_entry_names() {
+        let dir = tempdir().unwrap();
+        let manifest = valid_manifest();
+        for (index, (entry_name, canonical_name)) in [
+            ("BakingRL.Plugin.Json", MANIFEST_FILE),
+            ("Manifest.Hashes.Json", HASHES_FILE),
+            ("Signature.Ed25519", SIGNATURE_FILE),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let bundle_path = dir.path().join(format!("reserved-case-{index}.brlp"));
+            let mut entries = valid_bundle_entries(&manifest);
+            entries.push((entry_name, "{}"));
+            write_bundle(&bundle_path, &entries);
+
+            let error = inspect_bundle(&bundle_path).unwrap_err();
+            assert!(error.contains("must use exact canonical case"));
+            assert!(error.contains(canonical_name));
+        }
+    }
+
+    #[test]
+    fn rejects_nonportable_windows_archive_paths() {
+        let dir = tempdir().unwrap();
+        let manifest = valid_manifest();
+        for (index, entry_name) in [
+            "assets\\index.js",
+            "assets/index.js.",
+            "assets/index.js ",
+            "assets//index.js",
+            "C:/index.js",
+            "assets/CON.txt",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let bundle_path = dir.path().join(format!("windows-path-{index}.brlp"));
+            let mut entries = valid_bundle_entries(&manifest);
+            entries.push((entry_name, "invalid"));
+            write_bundle(&bundle_path, &entries);
+
+            let error = inspect_bundle(&bundle_path).unwrap_err();
+            assert!(
+                error.contains("Bundle entry"),
+                "unexpected validation error for {entry_name:?}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_windows_reserved_names_with_superscript_digits() {
+        let dir = tempdir().unwrap();
+        let manifest = valid_manifest();
+        for (index, entry_name) in [
+            "assets/COM¹.txt",
+            "assets/COM².txt",
+            "assets/COM³.txt",
+            "assets/LPT¹.txt",
+            "assets/LPT².txt",
+            "assets/LPT³.txt",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let bundle_path = dir.path().join(format!("windows-superscript-{index}.brlp"));
+            let mut entries = valid_bundle_entries(&manifest);
+            entries.push((entry_name, "invalid"));
+            write_bundle(&bundle_path, &entries);
+
+            let error = inspect_bundle(&bundle_path).unwrap_err();
+            assert!(error.contains("Windows-reserved path segment"));
+            assert!(error.contains(entry_name));
+        }
+    }
+
+    #[test]
     fn rejects_bundle_missing_declared_manifest_file() {
         let dir = tempdir().unwrap();
         let bundle_path = dir.path().join("missing-declared-file.brlp");
@@ -624,5 +1002,51 @@ mod tests {
         extract_bundle(&bundle_path, &target).unwrap();
         assert!(target.join(MANIFEST_FILE).exists());
         assert!(target.join("dist/extension-host.js").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn extraction_marks_current_platform_sidecars_executable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().unwrap();
+        let bundle_path = dir.path().join("sidecar.brlp");
+        let target = dir.path().join("target");
+        let manifest = serde_json::json!({
+            "schemaVersion": "bakingrl.plugin/4",
+            "id": "com.example.sidecar-extraction",
+            "name": "Sidecar extraction",
+            "version": "1.0.0",
+            "bakingrlApi": "2.3.0",
+            "runtime": {
+                "sidecars": [
+                    {
+                        "id": "worker",
+                        "bin": "bin/worker",
+                        "platforms": [current_bundle_platform()],
+                        "protocol": "jsonrpc-stdio"
+                    }
+                ]
+            },
+            "contributes": {}
+        })
+        .to_string();
+        write_bundle(
+            &bundle_path,
+            &[(MANIFEST_FILE, &manifest), ("bin/worker", "sidecar bytes")],
+        );
+
+        extract_bundle(&bundle_path, &target).unwrap();
+
+        let sidecar_mode = fs::metadata(target.join("bin/worker"))
+            .unwrap()
+            .permissions()
+            .mode();
+        let manifest_mode = fs::metadata(target.join(MANIFEST_FILE))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(sidecar_mode & 0o111, 0o111);
+        assert_eq!(manifest_mode & 0o111, 0);
     }
 }
