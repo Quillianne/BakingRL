@@ -205,6 +205,7 @@ export class DashboardState {
   notifyError(error: unknown) {
     const message = this.errorMessage(error);
     this.recordDeveloperError({
+      severity: "error",
       kind: "app",
       source: "Dashboard",
       message
@@ -291,6 +292,7 @@ export class DashboardState {
     for (const diagnostic of diagnostics) {
       const scope = diagnostic.packageId ? `${diagnostic.source}:${diagnostic.packageId}` : diagnostic.source;
       this.recordDeveloperError({
+        severity: diagnostic.severity,
         kind: diagnostic.severity,
         source: scope,
         message: `[${diagnostic.phase}] ${diagnostic.message}`,
@@ -879,6 +881,7 @@ export class DashboardState {
   }
 
   recordDeveloperError(error: {
+    severity?: DeveloperErrorEntry["severity"];
     kind?: string;
     source?: string;
     message: string;
@@ -889,6 +892,7 @@ export class DashboardState {
       id: `${receivedAtMs}-${Math.random().toString(36).slice(2)}`,
       receivedAt: new Date(receivedAtMs).toLocaleTimeString(),
       receivedAtMs,
+      severity: error.severity ?? "error",
       kind: error.kind || "runtime",
       source: error.source || "BakingRL",
       message: error.message
@@ -900,6 +904,7 @@ export class DashboardState {
   recordRuntimeError(error: RuntimeErrorEvent) {
     const message = error.message || this.t("developer.unknownError");
     const entry = this.recordDeveloperError({
+      severity: "error",
       kind: error.kind || "runtime",
       source: error.source || "Runtime",
       message,
@@ -911,6 +916,7 @@ export class DashboardState {
   recordRuntimeLog(log: RuntimeLogEvent) {
     const line = log.line || "";
     this.recordDeveloperError({
+      severity: "info",
       kind: log.kind || "log",
       source: log.source || "Runtime",
       message: log.stream ? `[${log.stream}] ${line}` : line

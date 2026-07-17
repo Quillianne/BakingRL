@@ -4,24 +4,24 @@ export const THEME_STORAGE_KEY = "bakingrl-theme";
 export const THEMES = [
   {
     id: "industrial-bakery",
-    label: "Signal Black",
-    description: "Dark control desk.",
+    labelKey: "settings.themeGraphite",
+    descriptionKey: "settings.themeGraphiteDesc",
     preview: {
-      background: "#0d0f0d",
-      surface: "#252b23",
-      accent: "#b7e45c",
-      text: "#f1f4ed"
+      background: "#0e1014",
+      surface: "#20242c",
+      accent: "#f3a35c",
+      text: "#f3f5f7"
     }
   },
   {
     id: "light-bakery",
-    label: "Studio Paper",
-    description: "Light control desk.",
+    labelKey: "settings.themeLight",
+    descriptionKey: "settings.themeLightDesc",
     preview: {
-      background: "#ecefe8",
-      surface: "#f8faf5",
-      accent: "#527d10",
-      text: "#171b15"
+      background: "#eef1f5",
+      surface: "#ffffff",
+      accent: "#b85d1d",
+      text: "#171a1f"
     }
   }
 ] as const;

@@ -1,10 +1,12 @@
 <script lang="ts">
+  import { tick } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import {
+    ArrowUpRight,
+    Ellipsis,
     ExternalLink,
     FolderOpen,
     LockKeyhole,
-    MonitorUp,
     Power,
     RefreshCw,
     ScanSearch,
@@ -14,6 +16,11 @@
     X
   } from "@lucide/svelte";
   import { getDashboardContext } from "$lib/dashboard/context";
+  import {
+    packageCategories,
+    packageConfigurationIsPrimary,
+    resolvePackagePrimaryAction
+  } from "$lib/dashboard/packagePresentation";
   import type {
     ExtensionHostRuntimeStatus,
     MarketplacePackage,
@@ -49,9 +56,21 @@
   };
 
   let detailPackageId = $state<string | null>(null);
-  let pluginView = $state<PluginView>("marketplace");
+  let pluginView = $state<PluginView>("installed");
   let marketplaceQuery = $state("");
+  let installedQuery = $state("");
+  let installedCategory = $state<string | null>(null);
+  let detailDialog = $state<HTMLDivElement | null>(null);
+  let detailOpener: HTMLElement | null = null;
   const detailPackage = $derived(dashboard.packages.find((pkg) => pkg.id === detailPackageId) ?? null);
+  const installedCategories = $derived(
+    [...new Set(dashboard.packages.flatMap((pkg) => packageCategories(pkg)))].sort((left, right) =>
+      packageCategoryLabel(left).localeCompare(packageCategoryLabel(right))
+    )
+  );
+  const filteredInstalledPackages = $derived(
+    dashboard.packages.filter((pkg) => installedPackageMatches(pkg, installedQuery, installedCategory))
+  );
   const filteredMarketplacePackages = $derived(
     (dashboard.marketplaceSnapshot?.catalogue.packages ?? []).filter((pkg) =>
       marketplacePackageMatches(pkg, marketplaceQuery)
@@ -63,6 +82,17 @@
   const displayedMarketplacePackages = $derived(
     pluginView === "updates" ? marketplaceUpdates : filteredMarketplacePackages
   );
+
+  $effect(() => {
+    if (installedCategory && !installedCategories.includes(installedCategory)) {
+      installedCategory = null;
+    }
+  });
+
+  $effect(() => {
+    if (!detailPackage) return;
+    void tick().then(() => detailDialog?.focus());
+  });
 
   function versionParts(value: string) {
     const match = /^(\d+)\.(\d+)\.(\d+)/.exec(value);
@@ -86,7 +116,7 @@
           (version) =>
             version.status === "active" &&
             version.channel === "stable" &&
-            version.runtimeApi.startsWith("2.3.")
+            runtimeApiSupported(version.runtimeApi)
         )
         .sort((left, right) => compareVersions(right.version, left.version))[0] ?? null
     );
@@ -94,6 +124,19 @@
 
   function installedMarketplacePackage(pkg: MarketplacePackage) {
     return dashboard.packages.find((installed) => installed.id === pkg.id) ?? null;
+  }
+
+  function runtimeApiSupported(value: string) {
+    const declared = versionParts(value);
+    const [minimumRaw, maximumRaw] = (dashboard.runtimeInfo?.supportedRuntimeApi ?? "2.3.0 - 2.4.0")
+      .split(" - ")
+      .map((part) => part.trim());
+    const minimum = versionParts(minimumRaw ?? "2.3.0");
+    const maximum = versionParts(maximumRaw ?? "2.4.0");
+    const declaredMinor = (declared[0] ?? 0) * 1000 + (declared[1] ?? 0);
+    const minimumMinor = (minimum[0] ?? 0) * 1000 + (minimum[1] ?? 0);
+    const maximumMinor = (maximum[0] ?? 0) * 1000 + (maximum[1] ?? 0);
+    return declaredMinor >= minimumMinor && declaredMinor <= maximumMinor;
   }
 
   function isMarketplaceUpdate(pkg: MarketplacePackage) {
@@ -147,11 +190,47 @@
   }
 
   function openPackageDetails(pkg: PackageDescriptor) {
+    detailOpener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     detailPackageId = pkg.id;
   }
 
   function closePackageDetails() {
+    const opener = detailOpener;
     detailPackageId = null;
+    detailOpener = null;
+    void tick().then(() => opener?.focus());
+  }
+
+  function handlePackageDetailKeydown(event: KeyboardEvent) {
+    if (!detailPackage) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closePackageDetails();
+      return;
+    }
+    if (event.key !== "Tab" || !detailDialog) return;
+
+    const focusable = Array.from(
+      detailDialog.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])'
+      )
+    ).filter((element) => !element.hidden && element.getAttribute("aria-hidden") !== "true");
+    if (!focusable.length) {
+      event.preventDefault();
+      detailDialog.focus();
+      return;
+    }
+
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const active = document.activeElement;
+    if (event.shiftKey && (active === first || active === detailDialog)) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && active === last) {
+      event.preventDefault();
+      first.focus();
+    }
   }
 
   async function openPackageConfiguration(pkg: PackageDescriptor) {
@@ -170,13 +249,50 @@
     }
   }
 
-  function primaryWebview(pkg: PackageDescriptor) {
-    return (
-      pkg.contributions.webviews.find((webview) => webview.kind === "settings" && webview.name === "settings") ??
-      pkg.contributions.webviews.find((webview) => webview.kind === "settings") ??
-      pkg.contributions.webviews[0] ??
-      null
-    );
+  function installedPackageMatches(pkg: PackageDescriptor, query: string, category: string | null) {
+    const categories = packageCategories(pkg);
+    if (category && !categories.includes(category)) return false;
+
+    const normalized = query.trim().toLocaleLowerCase();
+    if (!normalized) return true;
+    return [
+      pkg.name,
+      pkg.id,
+      pkg.author ?? "",
+      ...categories,
+      ...categories.map((item) => packageCategoryLabel(item))
+    ]
+      .join(" ")
+      .toLocaleLowerCase()
+      .includes(normalized);
+  }
+
+  function packageCategoryLabel(category: string) {
+    switch (category) {
+      case "layouts":
+        return dashboard.t("packages.categoryLayouts");
+      case "broadcast":
+        return dashboard.t("packages.categoryBroadcast");
+      case "statistics":
+        return dashboard.t("packages.categoryStatistics");
+      case "integration":
+        return dashboard.t("packages.categoryIntegration");
+      case "visuals":
+        return dashboard.t("packages.categoryVisuals");
+      case "development":
+        return dashboard.t("packages.categoryDevelopment");
+      case "utility":
+        return dashboard.t("packages.categoryUtility");
+      default:
+        return category;
+    }
+  }
+
+  function packagePrimaryActionLabel(pkg: PackageDescriptor) {
+    const action = resolvePackagePrimaryAction(pkg);
+    return dashboard.tx(action?.configuration ? "packages.configurePlugin" : "packages.openPlugin", {
+      name: pkg.name
+    });
   }
 
   function packageSidecars(pkg: PackageDescriptor) {
@@ -333,10 +449,24 @@
     }
   }
 
-  async function openPrimaryPackageWebview(pkg: PackageDescriptor) {
-    const webview = primaryWebview(pkg);
-    if (!webview) return;
-    await openPackageWebview(pkg, webview.name);
+  async function openPrimaryPackageAction(pkg: PackageDescriptor) {
+    const action = resolvePackagePrimaryAction(pkg);
+    if (!action) return;
+    if (action.kind === "webview") {
+      await openPackageWebview(pkg, action.target);
+      return;
+    }
+    await openPackageConfiguration(pkg);
+  }
+
+  function primaryPackageActionDisabled(pkg: PackageDescriptor) {
+    const action = resolvePackagePrimaryAction(pkg);
+    if (!action) return true;
+    if (dashboard.busy || dashboard.isPackageTogglePending(pkg) || dashboard.isPackageDeleting(pkg)) {
+      return true;
+    }
+    if (action.kind === "settings") return !pkg.has_public_settings;
+    return !dashboard.isPackageEnabled(pkg) || !dashboard.isPackageCompatible(pkg);
   }
 
   function packageContributionSections(pkg: PackageDescriptor): PackageContributionSection[] {
@@ -391,30 +521,31 @@
   }
 </script>
 
+<svelte:window onkeydown={handlePackageDetailKeydown} />
+
 <header class="page-title control-page-title">
   <div>
-    <span class="page-index">02 / BakingRL</span>
+    <span class="page-index">{dashboard.t("packages.eyebrow")}</span>
     <h1>{dashboard.t("marketplace.pluginsTitle")}</h1>
+    <p>{dashboard.t("packages.pageDesc")}</p>
   </div>
   <button
-    class="icon-button"
+    class="btn-secondary header-action"
     onclick={() =>
       void (pluginView === "installed"
         ? dashboard.reloadPackages()
         : dashboard.refreshMarketplace(true, true))}
     disabled={dashboard.busy || dashboard.marketplaceLoading}
-    aria-label={pluginView === "installed" ? dashboard.t("common.reload") : dashboard.t("marketplace.refresh")}
-    title={pluginView === "installed" ? dashboard.t("common.reload") : dashboard.t("marketplace.refresh")}
   >
     <RefreshCw size={16} strokeWidth={1.8} class={dashboard.packagesReloading || dashboard.marketplaceLoading ? "spinning" : ""} />
+    {pluginView === "installed" ? dashboard.t("common.reload") : dashboard.t("marketplace.refresh")}
   </button>
 </header>
 
-<div class="plugin-view-tabs" role="tablist" aria-label={dashboard.t("marketplace.pluginsTitle")}>
+<div class="plugin-view-tabs" role="group" aria-label={dashboard.t("marketplace.pluginsTitle")}>
   <button
     type="button"
-    role="tab"
-    aria-selected={pluginView === "marketplace"}
+    aria-pressed={pluginView === "marketplace"}
     class:active={pluginView === "marketplace"}
     onclick={() => (pluginView = "marketplace")}
   >
@@ -422,8 +553,7 @@
   </button>
   <button
     type="button"
-    role="tab"
-    aria-selected={pluginView === "installed"}
+    aria-pressed={pluginView === "installed"}
     class:active={pluginView === "installed"}
     onclick={() => (pluginView = "installed")}
   >
@@ -432,8 +562,7 @@
   </button>
   <button
     type="button"
-    role="tab"
-    aria-selected={pluginView === "updates"}
+    aria-pressed={pluginView === "updates"}
     class:active={pluginView === "updates"}
     onclick={() => (pluginView = "updates")}
   >
@@ -524,64 +653,133 @@
   <section class="installed-registry">
     <header class="installed-registry-head">
       <span>{dashboard.t("packages.installedTitle")}</span>
-      <strong>{dashboard.packages.length}</strong>
+      <strong>
+        {filteredInstalledPackages.length === dashboard.packages.length
+          ? dashboard.packages.length
+          : `${filteredInstalledPackages.length}/${dashboard.packages.length}`}
+      </strong>
     </header>
     {#if dashboard.packages.length}
+      <div class="installed-toolbar">
+        <label class="installed-search">
+          <Search size={15} strokeWidth={1.8} aria-hidden="true" />
+          <input
+            bind:value={installedQuery}
+            aria-label={dashboard.t("packages.searchInstalled")}
+            placeholder={dashboard.t("packages.searchInstalled")}
+          />
+        </label>
+        {#if installedCategories.length}
+          <div
+            class="installed-category-filters"
+            role="group"
+            aria-label={dashboard.t("packages.filterByCategory")}
+          >
+            <button
+              type="button"
+              class:active={installedCategory === null}
+              aria-pressed={installedCategory === null}
+              onclick={() => (installedCategory = null)}
+            >
+              {dashboard.t("packages.allCategories")}
+            </button>
+            {#each installedCategories as category (category)}
+              <button
+                type="button"
+                class:active={installedCategory === category}
+                aria-pressed={installedCategory === category}
+                onclick={() => (installedCategory = installedCategory === category ? null : category)}
+              >
+                {packageCategoryLabel(category)}
+              </button>
+            {/each}
+          </div>
+        {/if}
+      </div>
+
+      {#if filteredInstalledPackages.length}
       <div class="package-registry-list">
-        {#each dashboard.packages as pkg, index (pkg.id)}
+        {#each filteredInstalledPackages as pkg (pkg.id)}
+          {@const primaryAction = resolvePackagePrimaryAction(pkg)}
           <article
             class="package-registry-row"
             class:disabled={!dashboard.isPackageEnabled(pkg)}
             title={`${dashboard.contributionCount(pkg)} ${dashboard.t("packages.elements")}`}
           >
-            <span class="package-row-index">{String(index + 1).padStart(2, "0")}</span>
-            <i class={dashboard.packageDisplayStateClass(pkg)} aria-hidden="true"></i>
-
             <div class="package-row-identity">
               <h3>{pkg.name}</h3>
-              <p>{pkg.id} / v{pkg.version} / {pkg.author ?? dashboard.t("packages.unknownAuthor")}</p>
+              {#if packageCategories(pkg).length}
+                <p class="package-purpose">
+                  {#each packageCategories(pkg) as category (category)}
+                    <span>{packageCategoryLabel(category)}</span>
+                  {/each}
+                </p>
+              {/if}
+              <small>{pkg.id} · v{pkg.version}</small>
               {#if pkg.error}<small class="package-row-error">{pkg.error}</small>{/if}
             </div>
 
-            <div class="package-row-runtime">
-              {#if pkg.runtime?.node}<span>Node</span>{/if}
-              {#if packageSidecars(pkg).length}<span>{packageSidecars(pkg).length} sidecar</span>{/if}
-              {#if pkg.contributions.webviews.length}<span>{pkg.contributions.webviews.length} webview</span>{/if}
-            </div>
-
-            <span class="package-row-state" title={dashboard.packageDisplayStateTitle(pkg)}>
+            <button
+              class="package-state-toggle {dashboard.packageDisplayStateClass(pkg)}"
+              type="button"
+              onclick={() => void dashboard.togglePackage(pkg)}
+              disabled={dashboard.isPackageToggleDisabled(pkg) || dashboard.isPackageTogglePending(pkg)}
+              aria-pressed={dashboard.isPackageToggleButtonEnabled(pkg)}
+              title={dashboard.packageDisplayStateTitle(pkg)}
+            >
+              <Power size={14} strokeWidth={1.9} />
               {dashboard.packageDisplayStateLabel(pkg)}
-            </span>
+            </button>
 
-            <div class="package-card-tools">
-              <button class="icon-button" onclick={() => openPackageDetails(pkg)} title={dashboard.t("packages.details")} aria-label={dashboard.t("packages.details")}>
-                <ScanSearch size={15} strokeWidth={1.8} />
+            {#if primaryAction}
+              <button
+                class="btn-secondary package-primary-action"
+                type="button"
+                onclick={() => void openPrimaryPackageAction(pkg)}
+                disabled={primaryPackageActionDisabled(pkg)}
+              >
+                <span>{packagePrimaryActionLabel(pkg)}</span>
+                <ArrowUpRight size={15} strokeWidth={1.8} />
               </button>
-              {#if pkg.contributions.webviews.length}
-                <button class="icon-button" onclick={() => void openPrimaryPackageWebview(pkg)} disabled={!dashboard.isPackageEnabled(pkg) || !dashboard.isPackageCompatible(pkg)} title={dashboard.t("packages.openWebview")} aria-label={dashboard.t("packages.openWebview")}>
-                  <MonitorUp size={15} strokeWidth={1.8} />
+            {:else}
+              <span class="package-no-primary-action">{dashboard.t("packages.noPrimaryAction")}</span>
+            {/if}
+
+            <details class="package-action-menu">
+              <summary class="icon-button" title={dashboard.t("packages.moreActions")} aria-label={dashboard.t("packages.moreActions")}>
+                <Ellipsis size={17} strokeWidth={1.8} />
+              </summary>
+              <div>
+                <button type="button" onclick={() => openPackageDetails(pkg)}>
+                  <ScanSearch size={15} strokeWidth={1.8} />
+                  {dashboard.t("packages.details")}
                 </button>
-              {/if}
-              {#if pkg.has_public_settings}
-                <button class="icon-button" onclick={() => openPackageConfiguration(pkg)} disabled={dashboard.isPackageDeleting(pkg)} title={dashboard.t("packages.configuration")} aria-label={dashboard.t("packages.configuration")}>
-                  <Settings2 size={15} strokeWidth={1.8} />
+                {#if pkg.has_public_settings && !packageConfigurationIsPrimary(pkg)}
+                  <button type="button" onclick={() => openPackageConfiguration(pkg)} disabled={dashboard.isPackageDeleting(pkg)}>
+                    <Settings2 size={15} strokeWidth={1.8} />
+                    {dashboard.t("packages.configuration")}
+                  </button>
+                {/if}
+                {#if pkg.has_secrets}
+                  <button type="button" onclick={() => openPackageSecrets(pkg)} disabled={dashboard.isPackageDeleting(pkg)}>
+                    <LockKeyhole size={15} strokeWidth={1.8} />
+                    {dashboard.t("packages.secrets")}
+                  </button>
+                {/if}
+                <button class="danger" type="button" onclick={() => dashboard.removePackage(pkg)} disabled={dashboard.isPackageActionDisabled(pkg)}>
+                  <Trash2 size={15} strokeWidth={1.8} />
+                  {dashboard.t("common.remove")}
                 </button>
-              {/if}
-              {#if pkg.has_secrets}
-                <button class="icon-button secret" onclick={() => openPackageSecrets(pkg)} disabled={dashboard.isPackageDeleting(pkg)} title={dashboard.t("packages.secrets")} aria-label={dashboard.t("packages.secrets")}>
-                  <LockKeyhole size={15} strokeWidth={1.8} />
-                </button>
-              {/if}
-              <button class="icon-button danger" onclick={() => dashboard.removePackage(pkg)} disabled={dashboard.isPackageActionDisabled(pkg)} title={dashboard.t("common.remove")} aria-label={dashboard.t("common.remove")}>
-                <Trash2 size={15} strokeWidth={1.8} />
-              </button>
-              <button class="icon-button package-power" onclick={() => void dashboard.togglePackage(pkg)} disabled={dashboard.isPackageToggleDisabled(pkg) || dashboard.isPackageTogglePending(pkg)} title={dashboard.isPackageToggleButtonEnabled(pkg) ? dashboard.t("common.disable") : dashboard.t("common.enable")} aria-label={dashboard.isPackageToggleButtonEnabled(pkg) ? dashboard.t("common.disable") : dashboard.t("common.enable")}>
-                <Power size={15} strokeWidth={1.9} />
-              </button>
-            </div>
+              </div>
+            </details>
           </article>
         {/each}
       </div>
+      {:else}
+        <div class="empty-state installed-empty-state">
+          <p>{dashboard.t("packages.noFilteredPackages")}</p>
+        </div>
+      {/if}
     {:else}
       <div class="empty-state">
         <p>{dashboard.t("packages.noneInstalled")}</p>
@@ -589,11 +787,15 @@
     {/if}
   </section>
 
-  <aside class="install-console">
-    <header class="installed-registry-head">
-      <span>{dashboard.t("packages.installTitle")}</span>
-      <FolderOpen size={15} strokeWidth={1.8} />
-    </header>
+  <details class="manual-install-panel">
+    <summary>
+      <span>
+        <FolderOpen size={16} strokeWidth={1.8} />
+        <strong>{dashboard.t("packages.manualInstall")}</strong>
+        <small>{dashboard.t("packages.manualInstallDesc")}</small>
+      </span>
+      <span>{dashboard.t("packages.advanced")}</span>
+    </summary>
 
     <div class="install-source-list">
       <section class="install-source">
@@ -631,7 +833,12 @@
         <label for="gitRepo">{dashboard.t("packages.gitRepo")}</label>
         <input id="gitRepo" bind:value={dashboard.gitRepo} placeholder="https://github.com/user/repo" disabled={dashboard.busy} />
         <div class="form-row">
-          <input bind:value={dashboard.gitRev} placeholder={dashboard.t("packages.gitRevPlaceholder")} disabled={dashboard.busy} />
+          <input
+            bind:value={dashboard.gitRev}
+            aria-label={dashboard.t("packages.gitRevPlaceholder")}
+            placeholder={dashboard.t("packages.gitRevPlaceholder")}
+            disabled={dashboard.busy}
+          />
           <button class="btn-primary" onclick={() => void dashboard.installFromGit()} disabled={dashboard.busy || !dashboard.gitRepo.trim()}>
             <ScanSearch size={15} strokeWidth={1.8} />
             {dashboard.t("common.inspect")}
@@ -639,7 +846,7 @@
         </div>
       </section>
     </div>
-  </aside>
+  </details>
 </div>
 {/if}
 
@@ -648,10 +855,11 @@
     <button
       type="button"
       class="modal-scrim"
-      aria-label={dashboard.t("common.cancel")}
+      aria-label={dashboard.t("common.close")}
       onclick={closePackageDetails}
     ></button>
     <div
+      bind:this={detailDialog}
       class="studio-modal package-detail-modal"
       role="dialog"
       aria-modal="true"
@@ -669,7 +877,7 @@
           </div>
           <p>v{detailPackage.version} · {dashboard.t("packages.by")} {detailPackage.author ?? dashboard.t("packages.unknownAuthor")}</p>
         </div>
-        <button type="button" class="icon-button package-detail-close" aria-label={dashboard.t("common.cancel")} onclick={closePackageDetails}>
+        <button type="button" class="icon-button package-detail-close" aria-label={dashboard.t("common.close")} onclick={closePackageDetails}>
           <X size={16} strokeWidth={1.8} />
         </button>
       </div>
@@ -930,7 +1138,7 @@
 
       <div class="modal-actions">
         <button type="button" class="btn-secondary" onclick={closePackageDetails}>
-          {dashboard.t("common.cancel")}
+          {dashboard.t("common.close")}
         </button>
         <button
           type="button"

@@ -52,23 +52,23 @@
       </span>
     </a>
 
-    <nav class="rail-nav" aria-label="Primary">
-      <a class="nav-link" class:active={$page.url.pathname === "/"} href="/" aria-label={state.t("nav.home")} title={state.t("nav.home")}>
+    <nav class="rail-nav" aria-label={state.t("nav.primary")}>
+      <a class="nav-link" class:active={$page.url.pathname === "/"} href="/" aria-current={$page.url.pathname === "/" ? "page" : undefined} aria-label={state.t("nav.home")} title={state.t("nav.home")}>
         <House size={17} strokeWidth={1.8} />
         <span>{state.t("nav.home")}</span>
       </a>
-      <a class="nav-link" class:active={$page.url.pathname.startsWith("/plugins")} href="/plugins" aria-label={state.t("nav.packages")} title={state.t("nav.packages")}>
+      <a class="nav-link" class:active={$page.url.pathname.startsWith("/plugins")} href="/plugins" aria-current={$page.url.pathname.startsWith("/plugins") ? "page" : undefined} aria-label={state.t("nav.packages")} title={state.t("nav.packages")}>
         <Blocks size={17} strokeWidth={1.8} />
         <span>{state.t("nav.packages")}</span>
         {#if state.packageErrorCount}
           <span class="nav-count">{state.packageErrorCount}</span>
         {/if}
       </a>
-      <a class="nav-link" class:active={$page.url.pathname.startsWith("/developer")} href="/developer" aria-label={state.t("nav.developer")} title={state.t("nav.developer")}>
+      <a class="nav-link admin-link developer-link" class:active={$page.url.pathname.startsWith("/developer")} href="/developer" aria-current={$page.url.pathname.startsWith("/developer") ? "page" : undefined} aria-label={state.t("nav.developer")} title={state.t("nav.developer")}>
         <SquareTerminal size={17} strokeWidth={1.8} />
         <span>{state.t("nav.developer")}</span>
       </a>
-      <a class="nav-link settings-link" class:active={$page.url.pathname.startsWith("/settings")} href="/settings" aria-label={state.t("nav.settings")} title={state.t("nav.settings")}>
+      <a class="nav-link settings-link admin-link" class:active={$page.url.pathname.startsWith("/settings")} href="/settings" aria-current={$page.url.pathname.startsWith("/settings") ? "page" : undefined} aria-label={state.t("nav.settings")} title={state.t("nav.settings")}>
         <Settings2 size={17} strokeWidth={1.8} />
         <span>{state.t("nav.settings")}</span>
       </a>

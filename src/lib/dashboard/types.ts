@@ -116,6 +116,16 @@ export type PluginRuntimeDescriptor = {
   sidecars: PluginRuntimeSidecarDescriptor[];
 };
 
+export type PluginPrimaryActionDescriptor = {
+  kind: "webview" | "settings";
+  target: string | null;
+};
+
+export type PluginPresentationDescriptor = {
+  categories: string[];
+  primaryAction: PluginPrimaryActionDescriptor | null;
+};
+
 export type PackageDependencyStatus =
   | "pending"
   | "satisfied"
@@ -139,6 +149,7 @@ export type PackageDescriptor = {
   name: string;
   version: string;
   author: string | null;
+  presentation: PluginPresentationDescriptor | null;
   runtime: PluginRuntimeDescriptor | null;
   extensionHostStatus?: ExtensionHostRuntimeStatus | null;
   sidecarStatuses: Record<string, SidecarRuntimeStatus>;
@@ -225,6 +236,7 @@ export type BundleInspection = {
     version: string;
     author: string | null;
     bakingrlApi: string;
+    presentation?: PluginPresentationDescriptor | null;
     runtime?: Record<string, unknown> | null;
     contributes?: ManifestContributes | null;
   };
@@ -487,6 +499,7 @@ export type DeveloperErrorEntry = {
   id: string;
   receivedAt: string;
   receivedAtMs: number;
+  severity: "info" | "warning" | "error" | "fatal";
   kind: string;
   source: string;
   message: string;

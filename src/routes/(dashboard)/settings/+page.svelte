@@ -72,15 +72,15 @@
 {#if draftSettings}
   <div class="settings-layout">
     <nav class="settings-nav" aria-label={dashboard.t("nav.settings")}>
-      <button type="button" class:active={section === "general"} onclick={() => (section = "general")}>
+      <button type="button" class:active={section === "general"} aria-pressed={section === "general"} onclick={() => (section = "general")}>
         <span>01</span>
         <strong>{dashboard.t("settings.general")}</strong>
       </button>
-      <button type="button" class:active={section === "runtime"} onclick={() => (section = "runtime")}>
+      <button type="button" class:active={section === "runtime"} aria-pressed={section === "runtime"} onclick={() => (section = "runtime")}>
         <span>02</span>
         <strong>{dashboard.t("settings.runtime")}</strong>
       </button>
-      <button type="button" class:active={section === "advanced"} onclick={() => (section = "advanced")}>
+      <button type="button" class:active={section === "advanced"} aria-pressed={section === "advanced"} onclick={() => (section = "advanced")}>
         <span>03</span>
         <strong>{dashboard.t("settings.advanced")}</strong>
       </button>
@@ -136,10 +136,11 @@
                 <i style={`--swatch:${theme.preview.background}`}></i>
                 <i style={`--swatch:${theme.preview.surface}`}></i>
                 <i style={`--swatch:${theme.preview.accent}`}></i>
-                <strong>{theme.label}</strong>
+                <strong>{dashboard.t(theme.labelKey)}</strong>
               </button>
             {/each}
           </div>
+          <p class="setting-immediate-note">{dashboard.t("settings.appearanceImmediate")}</p>
         </div>
       {:else if section === "runtime"}
         <header class="settings-section-header">
