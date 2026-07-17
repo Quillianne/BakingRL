@@ -19,8 +19,8 @@ use crate::plugin_host::{
     open_package_webview, packages_dir, plugin_registry_get, prepare_marketplace_install,
     prepare_package_from_deep_link, prepare_package_from_git, prepare_package_from_url,
     push_package_webview_diagnostic, read_package_webview_asset, read_package_webview_module_text,
-    reload_packages, remove_package, save_app_settings, save_package_settings, set_package_enabled,
-    set_package_secret, PluginHost,
+    reload_packages, remove_package, respond_plugin_module_request, save_app_settings,
+    save_package_settings, set_package_enabled, set_package_secret, PluginHost,
 };
 use crate::registry::{registry_entries, registry_get, Registry};
 use std::env;
@@ -303,6 +303,9 @@ pub fn run() {
     }
 
     builder
+        .register_uri_scheme_protocol("bakingrl-plugin", |context, request| {
+            respond_plugin_module_request(context.app_handle(), context.webview_label(), request)
+        })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())

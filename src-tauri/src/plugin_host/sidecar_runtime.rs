@@ -15,6 +15,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use thiserror::Error;
 use tracing::{error, info, warn};
 
+use super::child_process::configure_background_process;
 use super::PluginHost;
 use crate::plugin_package::manifest::PluginRuntimeSidecarActivationV4;
 use crate::plugin_package::manifest::PluginRuntimeSidecarHealthCheckV4;
@@ -602,6 +603,7 @@ fn spawn_sidecar_runtime(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    configure_background_process(&mut command);
 
     let child = command
         .spawn()

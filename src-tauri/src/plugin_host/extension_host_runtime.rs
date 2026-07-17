@@ -17,6 +17,7 @@ use tokio::sync::broadcast::error::TryRecvError;
 use tokio::sync::mpsc as tokio_mpsc;
 use tracing::{info, warn};
 
+use super::child_process::configure_background_process;
 use super::diagnostics::{PluginDiagnosticInput, PluginDiagnosticSeverity, PluginDiagnosticsStore};
 use super::plugin_storage::{normalize_storage_path, PluginStorage};
 use super::service_registry::{
@@ -1123,6 +1124,7 @@ fn spawn_runtime_child(launch: &ExtensionHostLaunch) -> Result<Child, ExtensionH
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    configure_background_process(&mut command);
 
     command
         .spawn()

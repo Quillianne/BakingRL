@@ -3,13 +3,17 @@
   import { listen } from "@tauri-apps/api/event";
   import { invoke } from "@tauri-apps/api/core";
   import { importPluginModule } from "$lib/pluginModuleLoader";
+  import { getInitialLocale, translations } from "$lib/i18n";
   import type { PackageConfigurationState } from "$lib/dashboard/types";
   import type { GameEventFrame } from "$lib/rlTelemetry";
 
   const { data } = $props();
+  const t = translations[getInitialLocale()];
 
   let root = $state<HTMLElement | null>(null);
+  let moduleRoot = $state<HTMLElement | null>(null);
   let message = $state("");
+  let loading = $state(true);
   let isSurface = $state(false);
 
   type TelemetryCallback = (event: GameEventFrame) => void | Promise<void>;
@@ -181,6 +185,10 @@
     let disposed = false;
     let unlistenTelemetry: (() => void) | undefined;
     let moduleCleanup: (() => void) | undefined;
+    const moduleObserver = new MutationObserver(() => {
+      if (!disposed && moduleRoot?.hasChildNodes()) loading = false;
+    });
+    if (moduleRoot) moduleObserver.observe(moduleRoot, { childList: true, subtree: true });
     const telemetrySubscriptions = new Set<TelemetrySubscription>();
     let latestTelemetryFrame: GameEventFrame | null = null;
 
@@ -261,7 +269,7 @@
     };
 
     async function mount() {
-      if (!root) return;
+      if (!root || !moduleRoot) return;
       const descriptor = await invoke<PackageWebviewRuntimeDescriptor>(
         "get_package_webview_runtime_descriptor",
         {
@@ -302,7 +310,7 @@
           settings
         };
         const cleanup = await exported.mount({
-          root,
+          root: moduleRoot,
           packageId: descriptor.packageId,
           webviewId: descriptor.webviewId,
           exportName: descriptor.webviewId,
@@ -357,7 +365,10 @@
           if (disposed) cleanup();
           else moduleCleanup = cleanup;
         }
+      } else {
+        throw new Error("The plugin webview module does not export a mount function.");
       }
+      if (!disposed) loading = false;
     }
 
     void listen<GameEventFrame>("bakingrl-telemetry", (event) => {
@@ -371,11 +382,19 @@
     });
 
     void mount().catch((error) => {
-      if (!disposed) message = error instanceof Error ? error.message : String(error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error(`[${data.packageId}/${data.webviewId}] webview mount failed`, error);
+      reportWebviewDiagnostic("error", "Plugin webview mount failed.", errorMessage);
+      if (!disposed) {
+        moduleRoot?.replaceChildren();
+        message = errorMessage;
+        loading = false;
+      }
     });
 
     return () => {
       disposed = true;
+      moduleObserver.disconnect();
       moduleCleanup?.();
       unlistenTelemetry?.();
     };
@@ -387,8 +406,20 @@
 </svelte:head>
 
 <main class="plugin-webview-host" class:surface={isSurface} bind:this={root}>
+  <div class="plugin-webview-mount" bind:this={moduleRoot}></div>
+  {#if loading}
+    <div class="plugin-webview-status" role="status" aria-live="polite">
+      <span class="plugin-webview-spinner" aria-hidden="true"></span>
+      <strong>{t["webview.loading"]}</strong>
+    </div>
+  {/if}
   {#if message}
-    <div class="plugin-webview-error">{message}</div>
+    <div class="plugin-webview-error" role="alert">
+      <span>{t["webview.errorEyebrow"]}</span>
+      <strong>{t["webview.loadError"]}</strong>
+      <p>{message}</p>
+      <small>{t["webview.loadErrorHint"]}</small>
+    </div>
   {/if}
 </main>
 
@@ -398,10 +429,11 @@
   }
 
   .plugin-webview-host {
+    position: relative;
     min-height: calc(100vh - 48px);
     width: 100%;
-    background: var(--bg-primary);
-    color: var(--text-primary);
+    background: var(--bg-primary, #111315);
+    color: var(--text-primary, #f2eee7);
     overflow: hidden;
   }
 
@@ -410,12 +442,78 @@
     background: transparent;
   }
 
+  .plugin-webview-mount {
+    min-height: inherit;
+  }
+
+  .plugin-webview-status,
   .plugin-webview-error {
+    position: absolute;
+    z-index: 10;
+    inset: 0;
     display: grid;
+    align-content: center;
+    justify-items: center;
+    gap: 12px;
     min-height: calc(100vh - 48px);
-    place-items: center;
-    padding: 24px;
-    color: var(--danger);
+    padding: 32px;
+    background: var(--bg-primary, #111315);
     text-align: center;
+  }
+
+  .plugin-webview-status {
+    color: var(--text-muted, #aaa59c);
+  }
+
+  .plugin-webview-spinner {
+    width: 24px;
+    height: 24px;
+    border: 2px solid var(--border-color, #30353a);
+    border-top-color: var(--accent, #e2a64b);
+    border-radius: 50%;
+    animation: plugin-webview-spin 0.8s linear infinite;
+  }
+
+  .plugin-webview-error {
+    color: var(--text-primary, #f2eee7);
+  }
+
+  .plugin-webview-error > span {
+    color: var(--danger, #e18478);
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  .plugin-webview-error > strong {
+    font-size: 22px;
+  }
+
+  .plugin-webview-error > p {
+    max-width: 720px;
+    margin: 0;
+    color: var(--danger, #e18478);
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    font-size: 12px;
+    overflow-wrap: anywhere;
+  }
+
+  .plugin-webview-error > small {
+    max-width: 620px;
+    color: var(--text-muted, #aaa59c);
+  }
+
+  :global(html[data-bakingrl-window="surface"]) .plugin-webview-status,
+  :global(html[data-bakingrl-window="surface"]) .plugin-webview-error,
+  .plugin-webview-host.surface .plugin-webview-status,
+  .plugin-webview-host.surface .plugin-webview-error {
+    display: none;
+  }
+
+  @keyframes plugin-webview-spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
 </style>

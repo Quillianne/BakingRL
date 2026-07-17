@@ -47,6 +47,7 @@ tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 base64 = "0.22"
 ed25519-dalek = "2.2"
 keyring = { version = "3.6.3", features = ["apple-native"] }
+percent-encoding = "2.3.2"
 semver = "1.0.28"
 thiserror = "2.0.18"
 which = "8.0.3"

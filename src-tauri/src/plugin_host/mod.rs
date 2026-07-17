@@ -1,9 +1,11 @@
+mod child_process;
 mod descriptors;
 mod diagnostics;
 pub(crate) mod extension_host_runtime;
 mod json_store;
 mod marketplace;
 mod marketplace_transaction;
+mod module_protocol;
 mod package_files;
 mod plugin_storage;
 mod runtime_specs;
@@ -32,6 +34,7 @@ use crate::plugin_package::install::{
 };
 use crate::plugin_package::manifest::{PluginPackageManifest, HOST_RUNTIME_API_VERSION};
 use crate::registry::Registry;
+use child_process::configure_background_process;
 use descriptors::{
     apply_graph_diagnostics, compatibility_for_manifest, descriptor_for_manifest,
     supported_runtime_api_label,
@@ -48,6 +51,7 @@ use marketplace::MarketplaceService;
 pub use marketplace::MarketplaceSnapshot;
 use marketplace_transaction::MarketplaceInstaller;
 pub use marketplace_transaction::{MarketplaceInstallPlan, MarketplaceInstallResult};
+pub(crate) use module_protocol::respond_plugin_module_request;
 use package_files::{
     find_first_bundle, format_command_error, is_remote_package_source, parse_export_ref,
     read_binary_package_file, safe_installed_package_dir, safe_package_relative_path,
@@ -638,12 +642,15 @@ impl PluginHost {
         fs::create_dir_all(&git_sources_dir)
             .map_err(|e| format!("Unable to create Git source directory: {e}"))?;
         let checkout_dir = git_sources_dir.join(unique_id("git"));
-        let clone = Command::new("git")
+        let mut clone_command = Command::new("git");
+        clone_command
             .arg("clone")
             .arg("--depth")
             .arg("1")
             .arg(repo)
-            .arg(&checkout_dir)
+            .arg(&checkout_dir);
+        configure_background_process(&mut clone_command);
+        let clone = clone_command
             .output()
             .map_err(|e| format!("Unable to run git clone: {e}"))?;
         if !clone.status.success() {
@@ -651,11 +658,14 @@ impl PluginHost {
             return Err(format_command_error("git clone", &clone.stderr));
         }
         if let Some(rev) = &rev {
-            let checkout = Command::new("git")
+            let mut checkout_command = Command::new("git");
+            checkout_command
                 .arg("-C")
                 .arg(&checkout_dir)
                 .arg("checkout")
-                .arg(rev)
+                .arg(rev);
+            configure_background_process(&mut checkout_command);
+            let checkout = checkout_command
                 .output()
                 .map_err(|e| format!("Unable to run git checkout: {e}"))?;
             if !checkout.status.success() {
