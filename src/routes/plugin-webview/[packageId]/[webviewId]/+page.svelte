@@ -9,6 +9,7 @@
 
   const { data } = $props();
   const t = translations[getInitialLocale()];
+  const packageBusEvent = "bakingrl-package-bus-event";
 
   let root = $state<HTMLElement | null>(null);
   let moduleRoot = $state<HTMLElement | null>(null);
@@ -182,8 +183,9 @@
   }
 
   onMount(() => {
+    document.documentElement.dataset.bakingrlPluginReady = "true";
     let disposed = false;
-    let unlistenTelemetry: (() => void) | undefined;
+    let unlistenPackageBus: (() => void) | undefined;
     let moduleCleanup: (() => void) | undefined;
     const moduleObserver = new MutationObserver(() => {
       if (!disposed && moduleRoot?.hasChildNodes()) loading = false;
@@ -194,7 +196,10 @@
 
     async function readTelemetrySnapshot() {
       try {
-        const snapshot = await invoke<GameEventFrame | null>("get_telemetry_snapshot");
+        const snapshot = await invoke<GameEventFrame | null>("get_telemetry_snapshot", {
+          packageId: data.packageId,
+          webviewId: data.webviewId
+        });
         if (snapshot) latestTelemetryFrame = snapshot;
         return snapshot ?? latestTelemetryFrame;
       } catch {
@@ -371,14 +376,14 @@
       if (!disposed) loading = false;
     }
 
-    void listen<GameEventFrame>("bakingrl-telemetry", (event) => {
-      latestTelemetryFrame = event.payload;
+    void listen<GameEventFrame>(packageBusEvent, (event) => {
+      if (!event.payload.Event.startsWith("plugin.")) latestTelemetryFrame = event.payload;
       for (const subscription of telemetrySubscriptions) {
         if (subscription.eventName === event.payload.Event) void subscription.callback(event.payload);
       }
     }).then((unlisten) => {
       if (disposed) unlisten();
-      else unlistenTelemetry = unlisten;
+      else unlistenPackageBus = unlisten;
     });
 
     void mount().catch((error) => {
@@ -394,9 +399,10 @@
 
     return () => {
       disposed = true;
+      delete document.documentElement.dataset.bakingrlPluginReady;
       moduleObserver.disconnect();
       moduleCleanup?.();
-      unlistenTelemetry?.();
+      unlistenPackageBus?.();
     };
   });
 </script>

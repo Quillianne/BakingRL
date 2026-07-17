@@ -50,6 +50,7 @@ const TELEMETRY_HELP_LAUNCH_SHOWN_KEY = "bakingrl.telemetryHelp.launchShown";
 const PACKAGE_TOGGLE_ROLLBACK_MS = 5000;
 const PACKAGE_RELOAD_MIN_SPIN_MS = 450;
 const PACKAGE_FILE_OPENED_EVENT = "bakingrl-package-files-opened";
+const REGISTRY_CHANGED_EVENT = "bakingrl-registry-changed";
 const DEVELOPER_TELEMETRY_FLUSH_MS = 500;
 
 type PendingPackageToggle = {
@@ -1048,6 +1049,7 @@ export class DashboardState {
     let unlistenPackageFiles: (() => void) | undefined;
     let unlistenTelemetryStatus: (() => void) | undefined;
     let unlistenTelemetry: (() => void) | undefined;
+    let unlistenRegistry: (() => void) | undefined;
     let unlistenRuntimeErrors: (() => void) | undefined;
     let unlistenRuntimeLogs: (() => void) | undefined;
     let unlistenExtensionHostStatuses: (() => void) | undefined;
@@ -1099,6 +1101,14 @@ export class DashboardState {
     }).then((unlisten) => {
       unlistenTelemetry = unlisten;
     });
+    void listen<RegistryEntry>(REGISTRY_CHANGED_EVENT, (event) => {
+      this.registryEntries = [
+        ...this.registryEntries.filter((entry) => entry.key !== event.payload.key),
+        event.payload
+      ].sort((left, right) => left.key.localeCompare(right.key));
+    }).then((unlisten) => {
+      unlistenRegistry = unlisten;
+    });
     void listen<RuntimeErrorEvent>("bakingrl-runtime-error", (event) => {
       this.recordRuntimeError(event.payload);
     }).then((unlisten) => {
@@ -1126,6 +1136,7 @@ export class DashboardState {
       unlistenPackageFiles?.();
       unlistenTelemetryStatus?.();
       unlistenTelemetry?.();
+      unlistenRegistry?.();
       unlistenRuntimeErrors?.();
       unlistenRuntimeLogs?.();
       unlistenExtensionHostStatuses?.();

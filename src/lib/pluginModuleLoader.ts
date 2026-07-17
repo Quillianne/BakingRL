@@ -2,6 +2,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { adapter } from "$lib/adapter/index";
 
 const pluginModuleProtocol = "bakingrl-plugin";
+const pluginModuleAppPath = "__bakingrl-plugin";
 
 export async function importPluginModule(packageId: string, webviewId: string, entry: string, version: string | number) {
   if (!adapter.isTauri) {
@@ -11,12 +12,24 @@ export async function importPluginModule(packageId: string, webviewId: string, e
 }
 
 export function pluginModuleUrl(packageId: string, webviewId: string, entry: string, version: string | number) {
-  const normalizedEntry = normalizePackagePath(entry);
-  const path = ["modules", packageId, webviewId, ...normalizedEntry.split("/")]
-    .map((segment) => encodeURIComponent(segment))
-    .join("/");
+  if (import.meta.env.DEV) {
+    return pluginModuleProtocolUrl(packageId, webviewId, entry, version);
+  }
+  const path = pluginModulePath(packageId, webviewId, entry);
+  return new URL(`/${pluginModuleAppPath}/${path}?v=${encodeURIComponent(String(version))}`, window.location.href).href;
+}
+
+function pluginModuleProtocolUrl(packageId: string, webviewId: string, entry: string, version: string | number) {
+  const path = pluginModulePath(packageId, webviewId, entry);
   const base = convertFileSrc("", pluginModuleProtocol);
   return `${base}${path}?v=${encodeURIComponent(String(version))}`;
+}
+
+function pluginModulePath(packageId: string, webviewId: string, entry: string) {
+  const normalizedEntry = normalizePackagePath(entry);
+  return ["modules", packageId, webviewId, ...normalizedEntry.split("/")]
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
 }
 
 function normalizePackagePath(path: string) {

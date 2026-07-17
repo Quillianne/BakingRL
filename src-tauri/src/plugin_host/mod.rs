@@ -32,7 +32,9 @@ use crate::plugin_package::install::{
     download_bundle_to_file, inspect_bundle_file, install_bundle_from_file,
     parse_install_deep_link, InstallReceipt,
 };
-use crate::plugin_package::manifest::{PluginPackageManifest, HOST_RUNTIME_API_VERSION};
+use crate::plugin_package::manifest::{
+    permission_pattern_matches, PluginPackageManifest, HOST_RUNTIME_API_VERSION,
+};
 use crate::registry::Registry;
 use child_process::configure_background_process;
 use descriptors::{
@@ -51,7 +53,9 @@ use marketplace::MarketplaceService;
 pub use marketplace::MarketplaceSnapshot;
 use marketplace_transaction::MarketplaceInstaller;
 pub use marketplace_transaction::{MarketplaceInstallPlan, MarketplaceInstallResult};
-pub(crate) use module_protocol::respond_plugin_module_request;
+pub(crate) use module_protocol::{
+    override_plugin_module_app_response, respond_plugin_module_request,
+};
 use package_files::{
     find_first_bundle, format_command_error, is_remote_package_source, parse_export_ref,
     read_binary_package_file, safe_installed_package_dir, safe_package_relative_path,
@@ -1269,8 +1273,28 @@ impl PluginHost {
         event_name: &str,
     ) -> Result<(), String> {
         let records = self.records.lock().unwrap();
-        self.require_enabled_record(&records, package_id)?;
-        ensure_plugin_namespace(package_id, event_name, "event name")
+        let record = self.require_enabled_record(&records, package_id)?;
+        ensure_plugin_namespace(package_id, event_name, "event name")?;
+        if !package_record_can_publish_event(record, event_name) {
+            return Err(format!(
+                "Package '{package_id}' cannot publish event '{event_name}' without a matching permissions.bus.publish declaration."
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn can_package_read_event(
+        &self,
+        package_id: &str,
+        event_name: &str,
+    ) -> Result<bool, String> {
+        let records = self.records.lock().unwrap();
+        let record = self.require_enabled_record(&records, package_id)?;
+        Ok(package_record_can_read_event(record, event_name))
+    }
+
+    pub fn package_webview_event_targets(&self, event_name: &str) -> Vec<String> {
+        package_webview_event_targets_for_records(&self.records.lock().unwrap(), event_name)
     }
 
     pub fn is_settings_webview(&self, package_id: &str, webview_id: &str) -> Result<bool, String> {
@@ -1737,11 +1761,21 @@ impl PluginHost {
             return Ok(());
         }
 
+        let module_app_handle = self.app_handle.clone();
+        let module_window_label = label.clone();
         let window = WebviewWindowBuilder::new(
             &self.app_handle,
-            label,
+            &label,
             WebviewUrl::App(PathBuf::from(path)),
         )
+        .on_web_resource_request(move |request, response| {
+            override_plugin_module_app_response(
+                &module_app_handle,
+                &module_window_label,
+                request,
+                response,
+            );
+        })
         .title(title)
         .inner_size(width.max(480.0), (height + 48.0).max(368.0))
         .min_inner_size(480.0, 320.0)
@@ -2741,6 +2775,66 @@ mod tests {
     }
 
     #[test]
+    fn package_bus_events_target_only_authorized_plugin_windows() {
+        let record = package_record(serde_json::json!({
+            "schemaVersion": "bakingrl.plugin/4",
+            "id": "bakingrl.viewer",
+            "name": "Viewer",
+            "version": "1.0.0",
+            "bakingrlApi": "2.4.0",
+            "permissions": {
+                "bus": {
+                    "read": ["plugin.bakingrl.provider.*"],
+                    "publish": ["plugin.bakingrl.viewer.*"]
+                }
+            },
+            "contributes": {
+                "webviews": [
+                    {
+                        "id": "settings",
+                        "entry": "dist/settings.js",
+                        "kind": "settings"
+                    },
+                    {
+                        "id": "score",
+                        "entry": "dist/score.js",
+                        "kind": "surface",
+                        "defaultSize": [640, 360],
+                        "surface": {}
+                    }
+                ]
+            }
+        }));
+        let records = HashMap::from([("bakingrl.viewer".to_string(), record)]);
+
+        let targets =
+            package_webview_event_targets_for_records(&records, "plugin.bakingrl.provider.changed");
+
+        assert_eq!(
+            targets,
+            vec![
+                surface_window_label("bakingrl.viewer", "score"),
+                package_webview_window_label("bakingrl.viewer", "settings"),
+            ]
+        );
+        assert!(package_webview_event_targets_for_records(&records, "UpdateState").is_empty());
+        let record = records.get("bakingrl.viewer").unwrap();
+        assert!(package_record_can_read_event(
+            record,
+            "plugin.bakingrl.provider.changed"
+        ));
+        assert!(!package_record_can_read_event(record, "UpdateState"));
+        assert!(package_record_can_publish_event(
+            record,
+            "plugin.bakingrl.viewer.changed"
+        ));
+        assert!(!package_record_can_publish_event(
+            record,
+            "plugin.bakingrl.provider.changed"
+        ));
+    }
+
+    #[test]
     fn package_webview_runtime_descriptor_uses_declared_manifest_entry() {
         let record = package_record(serde_json::json!({
             "schemaVersion": "bakingrl.plugin/4",
@@ -3474,6 +3568,54 @@ fn package_webview_window_label(package_id: &str, webview_id: &str) -> String {
     )
 }
 
+fn package_webview_event_targets_for_records(
+    records: &HashMap<String, PackageRecord>,
+    event_name: &str,
+) -> Vec<String> {
+    let mut targets = records
+        .iter()
+        .filter(|(_, record)| record.descriptor.enabled)
+        .filter(|(_, record)| package_record_can_read_event(record, event_name))
+        .flat_map(|(package_id, record)| {
+            record
+                .manifest
+                .contributes_v4()
+                .webviews
+                .iter()
+                .map(move |webview| {
+                    if webview.surface.is_some() || webview.kind.as_deref() == Some("surface") {
+                        surface_window_label(package_id, &webview.id)
+                    } else {
+                        package_webview_window_label(package_id, &webview.id)
+                    }
+                })
+        })
+        .collect::<Vec<_>>();
+    targets.sort();
+    targets.dedup();
+    targets
+}
+
+fn package_record_can_read_event(record: &PackageRecord, event_name: &str) -> bool {
+    record.manifest.permissions_v4().is_some_and(|permissions| {
+        permissions
+            .bus
+            .read
+            .iter()
+            .any(|pattern| permission_pattern_matches(pattern, event_name))
+    })
+}
+
+fn package_record_can_publish_event(record: &PackageRecord, event_name: &str) -> bool {
+    record.manifest.permissions_v4().is_some_and(|permissions| {
+        permissions
+            .bus
+            .publish
+            .iter()
+            .any(|pattern| permission_pattern_matches(pattern, event_name))
+    })
+}
+
 fn window_label_component(value: &str) -> String {
     value
         .bytes()
@@ -3795,6 +3937,43 @@ pub fn emit_package_webview_event(
         data: payload,
     })));
     Ok(())
+}
+
+#[tauri::command]
+pub fn get_telemetry_snapshot(
+    window: Window,
+    host: State<'_, Arc<PluginHost>>,
+    bus: State<'_, Arc<EventBus>>,
+    package_id: Option<String>,
+    webview_id: Option<String>,
+) -> Result<Option<GameEvent>, String> {
+    let snapshot = bus.latest_game_event().as_deref().cloned();
+    if window.label() == "main" {
+        return Ok(snapshot);
+    }
+
+    let package_id = package_id.ok_or_else(|| {
+        "Plugin webviews must identify their package to read the telemetry snapshot.".to_string()
+    })?;
+    let webview_id = webview_id.ok_or_else(|| {
+        "Plugin webviews must identify their webview to read the telemetry snapshot.".to_string()
+    })?;
+    ensure_package_webview_window_label(
+        window.label(),
+        &package_id,
+        &webview_id,
+        "read the telemetry snapshot",
+    )?;
+    host.package_webview_runtime_descriptor(&package_id, &webview_id)?;
+
+    let Some(snapshot) = snapshot else {
+        return Ok(None);
+    };
+    if host.can_package_read_event(&package_id, &snapshot.event)? {
+        Ok(Some(snapshot))
+    } else {
+        Ok(None)
+    }
 }
 
 #[tauri::command]

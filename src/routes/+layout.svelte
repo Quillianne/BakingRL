@@ -2,6 +2,7 @@
   import "$lib/theme.css";
   import { goto } from "$app/navigation";
   import { onMount } from "svelte";
+  import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { Minus, Square, X } from "@lucide/svelte";
@@ -13,6 +14,9 @@
   const dragZoneHeight = 96;
   const packageFileOpenedEvent = "bakingrl-package-files-opened";
   const isSurfaceWindow = $derived(windowLabel?.startsWith("plugin-surface-") ?? false);
+  const isPluginWindow = $derived(
+    windowLabel?.startsWith("plugin-webview-") || windowLabel?.startsWith("plugin-surface-") || false
+  );
   const showWindowFrame = $derived(windowLabel !== null && !isSurfaceWindow);
 
   $effect(() => {
@@ -55,7 +59,13 @@
 
   type AppWindow = ReturnType<typeof getCurrentWindow>;
 
-  function runWindowAction(action: (appWindow: AppWindow) => Promise<void>) {
+  type PluginWindowAction = "close" | "minimize" | "start-dragging" | "toggle-maximize";
+
+  function runWindowAction(actionName: PluginWindowAction, action: (appWindow: AppWindow) => Promise<void>) {
+    if (isPluginWindow) {
+      void invoke("control_plugin_window", { action: actionName }).catch(() => {});
+      return;
+    }
     try {
       void action(getCurrentWindow()).catch(() => {});
     } catch {
@@ -64,15 +74,15 @@
   }
 
   function minimizeWindow() {
-    runWindowAction((appWindow) => appWindow.minimize());
+    runWindowAction("minimize", (appWindow) => appWindow.minimize());
   }
 
   function toggleMaximizeWindow() {
-    runWindowAction((appWindow) => appWindow.toggleMaximize());
+    runWindowAction("toggle-maximize", (appWindow) => appWindow.toggleMaximize());
   }
 
   function closeWindow() {
-    runWindowAction((appWindow) => appWindow.close());
+    runWindowAction("close", (appWindow) => appWindow.close());
   }
 
   function startWindowDrag(event: PointerEvent) {
@@ -81,7 +91,7 @@
     const target = event.target as HTMLElement | null;
     const isDraggableScrim = Boolean(target?.closest(".modal-scrim"));
     if (!isDraggableScrim && target?.closest("button, a, input, textarea, select")) return;
-    runWindowAction((appWindow) => appWindow.startDragging());
+    runWindowAction("start-dragging", (appWindow) => appWindow.startDragging());
   }
 </script>
 

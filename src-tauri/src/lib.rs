@@ -13,14 +13,15 @@ use crate::plugin_host::{
     complete_marketplace_first_run, delete_package_secret, discard_marketplace_install,
     discard_prepared_package, emit_package_webview_event, get_app_settings,
     get_marketplace_snapshot, get_package_configuration_state, get_package_settings,
-    get_package_webview_runtime_descriptor, get_runtime_info, inspect_package_bundle,
-    install_package_from_file, install_package_from_url, install_prepared_package, list_packages,
-    list_plugin_diagnostics, open_package_configuration, open_package_secrets,
-    open_package_webview, packages_dir, plugin_registry_get, prepare_marketplace_install,
-    prepare_package_from_deep_link, prepare_package_from_git, prepare_package_from_url,
-    push_package_webview_diagnostic, read_package_webview_asset, read_package_webview_module_text,
-    reload_packages, remove_package, respond_plugin_module_request, save_app_settings,
-    save_package_settings, set_package_enabled, set_package_secret, PluginHost,
+    get_package_webview_runtime_descriptor, get_runtime_info, get_telemetry_snapshot,
+    inspect_package_bundle, install_package_from_file, install_package_from_url,
+    install_prepared_package, list_packages, list_plugin_diagnostics, open_package_configuration,
+    open_package_secrets, open_package_webview, packages_dir, plugin_registry_get,
+    prepare_marketplace_install, prepare_package_from_deep_link, prepare_package_from_git,
+    prepare_package_from_url, push_package_webview_diagnostic, read_package_webview_asset,
+    read_package_webview_module_text, reload_packages, remove_package,
+    respond_plugin_module_request, save_app_settings, save_package_settings, set_package_enabled,
+    set_package_secret, PluginHost,
 };
 use crate::registry::{registry_entries, registry_get, Registry};
 use std::env;
@@ -31,6 +32,7 @@ use tracing::{info, warn, Level};
 use tracing_subscriber::FmtSubscriber;
 
 const PACKAGE_FILE_OPENED_EVENT: &str = "bakingrl-package-files-opened";
+const PACKAGE_BUS_EVENT: &str = "bakingrl-package-bus-event";
 #[cfg(desktop)]
 const TRAY_MENU_SHOW_ID: &str = "bakingrl-tray-show";
 #[cfg(desktop)]
@@ -209,8 +211,32 @@ fn get_telemetry_status(
 }
 
 #[tauri::command]
-fn get_telemetry_snapshot(bus: tauri::State<'_, Arc<EventBus>>) -> Option<GameEvent> {
-    bus.latest_game_event().as_deref().cloned()
+fn control_plugin_window(window: tauri::Window, action: String) -> Result<(), String> {
+    ensure_plugin_window_label(window.label(), &action)?;
+    match action.as_str() {
+        "close" => window.close(),
+        "minimize" => window.minimize(),
+        "start-dragging" => window.start_dragging(),
+        "toggle-maximize" => {
+            if window.is_maximized().map_err(|error| error.to_string())? {
+                window.unmaximize()
+            } else {
+                window.maximize()
+            }
+        }
+        _ => return Err(format!("Unsupported plugin window action '{action}'.")),
+    }
+    .map_err(|error| error.to_string())
+}
+
+fn ensure_plugin_window_label(window_label: &str, action: &str) -> Result<(), String> {
+    if window_label.starts_with("plugin-webview-") || window_label.starts_with("plugin-surface-") {
+        Ok(())
+    } else {
+        Err(format!(
+            "Window '{window_label}' cannot run plugin window action '{action}'."
+        ))
+    }
 }
 
 fn ensure_main_window_label(window_label: &str, action: &str) -> Result<(), String> {
@@ -340,6 +366,26 @@ pub fn run() {
             _app.manage(plugin_host.clone());
             plugin_host.initialize();
 
+            #[cfg(debug_assertions)]
+            if let Some(target) = env::var_os("BAKINGRL_SMOKE_PLUGIN_WEBVIEW") {
+                let target = target.to_string_lossy();
+                match target.split_once('/') {
+                    Some((package_id, webview_id)) => {
+                        if let Err(error) = plugin_host
+                            .open_package_webview(package_id.to_string(), webview_id.to_string())
+                        {
+                            warn!(
+                                "Unable to open smoke plugin webview '{}': {}",
+                                target, error
+                            );
+                        }
+                    }
+                    None => {
+                        warn!("BAKINGRL_SMOKE_PLUGIN_WEBVIEW must use '<packageId>/<webviewId>'.")
+                    }
+                }
+            }
+
             if plugin_host.get_app_settings().behavior.start_minimized
                 && !launched_from_package_file
             {
@@ -376,13 +422,33 @@ pub fn run() {
             });
 
             let mut rx = bus.subscribe();
+            let webview_event_host = plugin_host.clone();
             tauri::async_runtime::spawn(async move {
-                use tauri::Emitter;
-                while let Ok(event) = rx.recv().await {
-                    if let BusEvent::GameData(data) = event {
-                        if let Err(e) = app_handle.emit("bakingrl-telemetry", &(*data)) {
-                            tracing::warn!("Failed to emit telemetry via IPC: {}", e);
+                loop {
+                    let event = match rx.recv().await {
+                        Ok(event) => event,
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                            tracing::warn!(
+                                "Package webview event bridge skipped {} lagged event(s).",
+                                skipped
+                            );
+                            continue;
                         }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    };
+                    match event {
+                        BusEvent::GameData(data) => {
+                            if let Err(error) =
+                                app_handle.emit_to("main", "bakingrl-telemetry", &(*data))
+                            {
+                                tracing::warn!("Failed to emit telemetry via IPC: {}", error);
+                            }
+                            emit_package_bus_event(&app_handle, &webview_event_host, data.as_ref());
+                        }
+                        BusEvent::PluginEvent(data) => {
+                            emit_package_bus_event(&app_handle, &webview_event_host, data.as_ref())
+                        }
+                        BusEvent::RawJson(_) => {}
                     }
                 }
             });
@@ -390,6 +456,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            control_plugin_window,
             list_packages,
             get_marketplace_snapshot,
             complete_marketplace_first_run,
@@ -459,25 +526,89 @@ pub fn run() {
         });
 }
 
+fn emit_package_bus_event(
+    app_handle: &tauri::AppHandle,
+    plugin_host: &PluginHost,
+    event: &GameEvent,
+) {
+    for label in plugin_host.package_webview_event_targets(&event.event) {
+        if app_handle.get_webview_window(&label).is_none() {
+            continue;
+        }
+        if let Err(error) = app_handle.emit_to(&label, PACKAGE_BUS_EVENT, event) {
+            tracing::warn!(
+                "Failed to emit package bus event '{}' to '{}': {}",
+                event.event,
+                label,
+                error
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
-    fn default_capability_covers_plugin_webview_and_surface_windows() {
-        let capability: serde_json::Value =
+    fn capabilities_keep_plugin_windows_on_a_restricted_event_api() {
+        let trusted_capability: serde_json::Value =
             serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
-        let windows = capability
+        let trusted_windows = trusted_capability
             .get("windows")
             .and_then(|value| value.as_array())
             .unwrap();
-        let labels = windows
+        let trusted_labels = trusted_windows
             .iter()
             .filter_map(|value| value.as_str())
             .collect::<Vec<_>>();
 
-        assert!(labels.contains(&"main"));
-        assert!(labels.contains(&"page-*"));
-        assert!(labels.contains(&"plugin-webview-*"));
-        assert!(labels.contains(&"plugin-surface-*"));
+        assert!(trusted_labels.contains(&"main"));
+        assert!(trusted_labels.contains(&"page-*"));
+        assert!(!trusted_labels.contains(&"plugin-webview-*"));
+        assert!(!trusted_labels.contains(&"plugin-surface-*"));
+
+        let plugin_capability: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/plugin-windows.json")).unwrap();
+        let plugin_labels = plugin_capability["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|value| value.as_str())
+            .collect::<Vec<_>>();
+        let plugin_permissions = plugin_capability["permissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|value| value.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(plugin_labels.contains(&"plugin-webview-*"));
+        assert!(plugin_labels.contains(&"plugin-surface-*"));
+        assert!(plugin_permissions.contains(&"core:event:allow-listen"));
+        assert!(plugin_permissions.contains(&"core:event:allow-unlisten"));
+        assert!(!plugin_permissions.contains(&"core:default"));
+        assert!(!plugin_permissions.contains(&"core:event:default"));
+        assert!(!plugin_permissions.contains(&"core:event:allow-emit"));
+        assert!(!plugin_permissions.contains(&"core:event:allow-emit-to"));
+        assert!(!plugin_permissions
+            .iter()
+            .any(|permission| permission.starts_with("core:window:")));
+    }
+
+    #[test]
+    fn plugin_window_controls_are_scoped_to_the_calling_plugin_window() {
+        assert!(super::ensure_plugin_window_label(
+            "plugin-webview-bakingrl_2eobs_2dgateway-settings",
+            "close"
+        )
+        .is_ok());
+        assert!(super::ensure_plugin_window_label(
+            "plugin-surface-bakingrl_2eviewer-score",
+            "start-dragging"
+        )
+        .is_ok());
+        assert!(super::ensure_plugin_window_label("main", "close")
+            .unwrap_err()
+            .contains("cannot run plugin window action"));
     }
 
     #[test]

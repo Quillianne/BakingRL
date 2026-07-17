@@ -12,6 +12,79 @@
         } catch {
           document.documentElement.dataset.theme = 'modern-dark';
         }
+
+        const match = window.location.pathname.match(/^\/plugin-webview\/([^/]+)\/([^/]+)/);
+        if (!match) return;
+        const packageId = decodeURIComponent(match[1]);
+        const webviewId = decodeURIComponent(match[2]);
+        const locale = (() => {
+          try {
+            return localStorage.getItem('bakingrl-locale') === 'fr' ? 'fr' : 'en';
+          } catch {
+            return 'en';
+          }
+        })();
+        const copy = locale === 'fr'
+          ? {
+              eyebrow: 'Interface plugin',
+              title: "L’interface n’a pas pu démarrer",
+              hint: 'Le détail a été ajouté aux diagnostics de BakingRL.'
+            }
+          : {
+              eyebrow: 'Plugin interface',
+              title: 'The interface could not start',
+              hint: 'The details were added to BakingRL diagnostics.'
+            };
+        let failureShown = false;
+
+        function report(message) {
+          const invoke = window.__TAURI_INTERNALS__?.invoke;
+          if (typeof invoke !== 'function') return;
+          void invoke('push_package_webview_diagnostic', {
+            packageId,
+            webviewId,
+            severity: 'error',
+            phase: 'bootstrap',
+            message: `Plugin webview bootstrap failed. ${message}`
+          }).catch(() => {});
+        }
+
+        function showFailure(message) {
+          if (failureShown || document.documentElement.dataset.bakingrlPluginReady === 'true') return;
+          failureShown = true;
+          report(message);
+          window.setTimeout(() => {
+            if (!document.body || document.documentElement.dataset.bakingrlPluginReady === 'true') return;
+            document.body.replaceChildren();
+            const panel = document.createElement('main');
+            panel.style.cssText = 'box-sizing:border-box;display:grid;min-height:100vh;align-content:center;justify-items:center;gap:12px;padding:32px;background:#111315;color:#f2eee7;font:14px/1.5 Inter,system-ui,sans-serif;text-align:center';
+            const eyebrow = document.createElement('span');
+            eyebrow.style.cssText = 'color:#e2a64b;font-size:11px;font-weight:800;letter-spacing:.12em;text-transform:uppercase';
+            eyebrow.textContent = copy.eyebrow;
+            const title = document.createElement('strong');
+            title.style.cssText = 'font-size:22px';
+            title.textContent = copy.title;
+            const detail = document.createElement('p');
+            detail.style.cssText = 'max-width:720px;margin:0;color:#c8c2b8;overflow-wrap:anywhere';
+            detail.textContent = message;
+            const hint = document.createElement('small');
+            hint.style.cssText = 'color:#aaa59c';
+            hint.textContent = copy.hint;
+            panel.append(eyebrow, title, detail, hint);
+            document.body.append(panel);
+          }, 0);
+        }
+
+        window.addEventListener('error', (event) => {
+          if (event.error || event.message) showFailure(event.error?.message || event.message || 'Unknown script error.');
+        });
+        window.addEventListener('unhandledrejection', (event) => {
+          const reason = event.reason;
+          showFailure(reason instanceof Error ? reason.message : String(reason));
+        });
+        window.setTimeout(() => {
+          showFailure('The application route did not initialize within 10 seconds.');
+        }, 10000);
       })();
     </script>
     %sveltekit.head%

@@ -2,6 +2,8 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
+pub const REGISTRY_CHANGED_EVENT: &str = "bakingrl-registry-changed";
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct RegistryEntry {
     pub key: String,

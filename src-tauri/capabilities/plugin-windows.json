@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "plugin-windows",
+  "description": "Restricted capability for untrusted plugin webviews and surfaces",
+  "windows": ["plugin-webview-*", "plugin-surface-*"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten"
+  ]
+}

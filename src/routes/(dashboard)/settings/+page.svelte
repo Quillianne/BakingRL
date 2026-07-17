@@ -208,6 +208,10 @@
           <h3>{dashboard.t("settings.about")}</h3>
           <dl class="version-readout">
             <div>
+              <dt>{dashboard.t("settings.appVersion")}</dt>
+              <dd>{dashboard.runtimeInfo?.appVersion ?? "n/a"}</dd>
+            </div>
+            <div>
               <dt>{dashboard.t("developer.runtimeApiVersion")}</dt>
               <dd>{dashboard.runtimeInfo?.runtimeApiVersion ?? "n/a"}</dd>
             </div>

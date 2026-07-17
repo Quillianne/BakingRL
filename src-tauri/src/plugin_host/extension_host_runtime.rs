@@ -36,7 +36,7 @@ use crate::plugin_package::manifest::{
     permission_pattern_covers, permission_pattern_matches, PluginPermissionsV4,
     PluginRuntimeSidecarActivationV4, PluginSurfaceOptionsV4,
 };
-use crate::registry::Registry;
+use crate::registry::{Registry, RegistryEntry, REGISTRY_CHANGED_EVENT};
 
 const MAX_CRASHES_IN_WINDOW: usize = 3;
 const CRASH_WINDOW: Duration = Duration::from_secs(60);
@@ -2483,7 +2483,14 @@ fn registry_set(
         .cloned()
         .unwrap_or(serde_json::Value::Null);
     plugin_host(context)?.can_package_write_registry(&context.package_id, &key)?;
-    context.registry.set(key, value);
+    context.registry.set(key.clone(), value.clone());
+    let entry = RegistryEntry { key, value };
+    if let Err(error) = context
+        .app_handle
+        .emit_to("main", REGISTRY_CHANGED_EVENT, &entry)
+    {
+        warn!("Unable to emit registry update to the dashboard: {}", error);
+    }
     Ok(serde_json::json!({ "ok": true }))
 }
 

@@ -4,6 +4,7 @@ use tauri::{
     AppHandle, LogicalPosition, LogicalSize, Manager, Monitor, WebviewUrl, WebviewWindowBuilder,
 };
 
+use super::override_plugin_module_app_response;
 use crate::plugin_package::manifest::PluginSurfaceOptionsV4;
 
 const MIN_VISIBLE_LOGICAL_PIXELS: f64 = 64.0;
@@ -143,11 +144,21 @@ pub fn open_surface(
         window.show().map_err(|error| error.to_string())?;
         window
     } else {
+        let module_app_handle = app_handle.clone();
+        let module_window_label = label.clone();
         let window = WebviewWindowBuilder::new(
             app_handle,
             &label,
             WebviewUrl::App(PathBuf::from(request.route)),
         )
+        .on_web_resource_request(move |request, response| {
+            override_plugin_module_app_response(
+                &module_app_handle,
+                &module_window_label,
+                request,
+                response,
+            );
+        })
         .title(request.title)
         .inner_size(bounds.width, bounds.height)
         .position(absolute_x, absolute_y)
