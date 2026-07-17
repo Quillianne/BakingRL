@@ -1,0 +1,96 @@
+name: Build BakingRL macOS
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/build-macos.yml"
+      - "package-lock.json"
+      - "package.json"
+      - "scripts/prepare-node-sidecar.mjs"
+      - "scripts/smoke-extension-host.mjs"
+      - "src-tauri/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bakingrl-macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+            triple: aarch64-apple-darwin
+          - runner: macos-15-intel
+            arch: x86_64
+            triple: x86_64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Check frontend
+        run: npm run check
+
+      - name: Prepare Node sidecar
+        run: npm run node:prepare
+
+      - name: Build extension host
+        run: npm run extension-host:build
+
+      - name: Smoke prepared plugin runtime
+        run: >-
+          npm run extension-host:smoke --
+          --node src-tauri/bin/node-${{ matrix.triple }}
+          --bootstrap src-tauri/gen/extension-host/bootstrap.mjs
+
+      - name: Check Rust
+        run: cargo check --manifest-path src-tauri/Cargo.toml
+
+      - name: Test Rust
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib
+
+      - name: Build signed macOS app
+        run: npm run tauri build -- --bundles app
+
+      - name: Verify packaged plugin runtime
+        env:
+          BAKINGRL_MACOS_ARCH: ${{ matrix.arch }}
+        run: |
+          app_path="src-tauri/target/release/bundle/macos/BakingRL.app"
+          node_path="$app_path/Contents/MacOS/node"
+          bootstrap_path="$app_path/Contents/Resources/extension-host/bootstrap.mjs"
+          test -s "$app_path/Contents/Resources/node/LICENSE"
+          file "$node_path"
+          lipo -archs "$node_path" | grep -Fx "$BAKINGRL_MACOS_ARCH"
+          if otool -L "$node_path" | grep -E '@rpath|/opt/homebrew|/usr/local'; then
+            exit 1
+          fi
+          npm run extension-host:smoke -- --node "$node_path" --bootstrap "$bootstrap_path"
+          codesign --verify --strict "$node_path"
+          codesign --verify --deep --strict "$app_path"
+          codesign -d --entitlements - "$node_path" 2>&1 | grep -F 'com.apple.security.cs.allow-jit'
+          plutil -extract LSMinimumSystemVersion raw "$app_path/Contents/Info.plist" | grep -Fx '13.5'
