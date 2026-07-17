@@ -3,8 +3,8 @@ use std::path::Path;
 
 use crate::plugin_package::bundle::BundleInspection;
 use crate::plugin_package::manifest::{
-    parse_runtime_api_version, PluginContributesV4, PluginPackageManifest, PluginRuntimeV4,
-    HOST_RUNTIME_API_VERSION, MIN_SUPPORTED_RUNTIME_API_VERSION,
+    parse_runtime_api_version, PluginContributesV4, PluginPackageManifest, PluginPresentationV4,
+    PluginRuntimeV4, HOST_RUNTIME_API_VERSION, MIN_SUPPORTED_RUNTIME_API_VERSION,
 };
 
 use super::extension_host_runtime::ExtensionHostRuntimeStatus;
@@ -21,6 +21,7 @@ pub struct PackageDescriptor {
     pub name: String,
     pub version: String,
     pub author: Option<String>,
+    pub presentation: Option<PluginPresentationV4>,
     pub runtime: Option<PluginRuntimeV4>,
     #[serde(rename = "extensionHostStatus")]
     pub extension_host_status: Option<ExtensionHostRuntimeStatus>,
@@ -186,6 +187,7 @@ pub(super) fn descriptor_for_manifest(
         name: manifest.name().to_string(),
         version: manifest.version().to_string(),
         author: manifest.author().map(ToOwned::to_owned),
+        presentation: manifest.presentation_v4().cloned(),
         runtime: manifest.runtime_v4().cloned(),
         extension_host_status: None,
         sidecar_statuses: HashMap::new(),
@@ -865,7 +867,7 @@ mod tests {
 
     #[test]
     fn compatibility_accepts_supported_runtime_api_range() {
-        for bakingrl_api in ["2.3.0", "2.3.9"] {
+        for bakingrl_api in ["2.3.0", "2.3.9", "2.4.0", "2.4.9"] {
             let manifest = v4_manifest(serde_json::json!({
                 "schemaVersion": "bakingrl.plugin/4",
                 "id": "com.example.compat",
@@ -900,7 +902,7 @@ mod tests {
             "id": "com.example.newer",
             "name": "Newer",
             "version": "1.0.0",
-            "bakingrlApi": "2.4.0",
+            "bakingrlApi": "2.5.0",
             "contributes": {}
         }));
 

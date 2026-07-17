@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use std::path::{Component, Path};
 
 pub const PLUGIN_SCHEMA_V4: &str = "bakingrl.plugin/4";
-pub const HOST_RUNTIME_API_VERSION: &str = "2.3.0";
+pub const HOST_RUNTIME_API_VERSION: &str = "2.4.0";
 pub const MIN_SUPPORTED_RUNTIME_API_VERSION: &str = "2.3.0";
 
 #[derive(Debug, Clone, PartialEq)]
@@ -110,6 +110,10 @@ impl PluginPackageManifest {
         self.v4.permissions.as_ref()
     }
 
+    pub fn presentation_v4(&self) -> Option<&PluginPresentationV4> {
+        self.v4.presentation.as_ref()
+    }
+
     pub fn contributes_value(&self) -> Option<serde_json::Value> {
         serde_json::to_value(&self.v4.contributes).ok()
     }
@@ -133,6 +137,8 @@ pub struct PluginPackageManifestV4 {
     pub runtime: Option<PluginRuntimeV4>,
     #[serde(default)]
     pub permissions: Option<PluginPermissionsV4>,
+    #[serde(default)]
+    pub presentation: Option<PluginPresentationV4>,
     #[serde(default)]
     pub contributes: PluginContributesV4,
 }
@@ -208,6 +214,98 @@ impl PluginPackageManifestV4 {
             permissions.validate()?;
         }
         self.contributes.validate()?;
+        if let Some(presentation) = &self.presentation {
+            let runtime_api = parse_runtime_api_version(&self.bakingrl_api)
+                .expect("bakingrlApi was validated as an exact semver");
+            if runtime_api < (2, 4, 0) {
+                return Err("presentation requires bakingrlApi 2.4.0 or newer".to_string());
+            }
+            presentation.validate(&self.contributes)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub struct PluginPresentationV4 {
+    #[serde(default)]
+    pub categories: Vec<String>,
+    #[serde(default)]
+    pub primary_action: Option<PluginPrimaryActionV4>,
+}
+
+impl PluginPresentationV4 {
+    fn validate(&self, contributes: &PluginContributesV4) -> Result<(), String> {
+        let mut categories = std::collections::HashSet::new();
+        for category in &self.categories {
+            validate_export_name("presentation.categories", category)?;
+            if !categories.insert(category) {
+                return Err(format!(
+                    "presentation.categories contains duplicate category '{category}'"
+                ));
+            }
+        }
+        if let Some(primary_action) = &self.primary_action {
+            primary_action.validate(contributes)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub struct PluginPrimaryActionV4 {
+    pub kind: String,
+    pub target: Option<String>,
+}
+
+impl PluginPrimaryActionV4 {
+    fn validate(&self, contributes: &PluginContributesV4) -> Result<(), String> {
+        match self.kind.as_str() {
+            "webview" => {
+                let target = self.target.as_deref().ok_or_else(|| {
+                    "presentation.primaryAction.target is required for kind 'webview'".to_string()
+                })?;
+                validate_export_name("presentation.primaryAction.target", target)?;
+                if !contributes
+                    .webviews
+                    .iter()
+                    .any(|webview| webview.id == target)
+                {
+                    return Err(format!(
+                        "presentation.primaryAction.target references unknown contributes.webviews id '{target}'"
+                    ));
+                }
+            }
+            "settings" => {
+                if self.target.is_some() {
+                    return Err(
+                        "presentation.primaryAction.target is not allowed for kind 'settings'"
+                            .to_string(),
+                    );
+                }
+                let Some(settings) = &contributes.settings else {
+                    return Err(
+                        "presentation.primaryAction kind 'settings' requires contributes.settings.schema or contributes.settings.ui"
+                            .to_string(),
+                    );
+                };
+                if settings.schema.is_none() && settings.ui.is_none() {
+                    return Err(
+                        "presentation.primaryAction kind 'settings' requires contributes.settings.schema or contributes.settings.ui"
+                            .to_string(),
+                    );
+                }
+            }
+            _ => {
+                return Err(
+                    "presentation.primaryAction.kind must be webview or settings".to_string(),
+                );
+            }
+        }
         Ok(())
     }
 }
@@ -1326,6 +1424,134 @@ mod tests {
         assert_eq!(manifest.runtime_v4().unwrap().sidecars.len(), 1);
         assert_eq!(manifest.contributes_v4().services.len(), 1);
         assert_eq!(manifest.contributes_v4().commands.len(), 1);
+    }
+
+    #[test]
+    fn accepts_v4_package_presentation_with_primary_webview() {
+        let raw = serde_json::json!({
+            "schemaVersion": "bakingrl.plugin/4",
+            "id": "com.example.studio",
+            "name": "Example Studio",
+            "version": "1.0.0",
+            "bakingrlApi": "2.4.0",
+            "presentation": {
+                "categories": ["layouts", "productivity"],
+                "primaryAction": {
+                    "kind": "webview",
+                    "target": "studio"
+                }
+            },
+            "contributes": {
+                "webviews": [
+                    {
+                        "id": "studio",
+                        "entry": "dist/studio.js",
+                        "kind": "tool"
+                    }
+                ]
+            }
+        })
+        .to_string();
+
+        let manifest = PluginPackageManifest::parse(&raw).unwrap();
+        let presentation = manifest.presentation_v4().unwrap();
+        assert_eq!(presentation.categories, ["layouts", "productivity"]);
+        assert_eq!(
+            presentation
+                .primary_action
+                .as_ref()
+                .and_then(|action| action.target.as_deref()),
+            Some("studio")
+        );
+    }
+
+    #[test]
+    fn rejects_v4_package_presentation_with_unknown_primary_webview() {
+        let raw = serde_json::json!({
+            "schemaVersion": "bakingrl.plugin/4",
+            "id": "com.example.studio",
+            "name": "Example Studio",
+            "version": "1.0.0",
+            "bakingrlApi": "2.4.0",
+            "presentation": {
+                "categories": ["layouts"],
+                "primaryAction": {
+                    "kind": "webview",
+                    "target": "missing"
+                }
+            }
+        })
+        .to_string();
+
+        let error = PluginPackageManifest::parse(&raw).unwrap_err();
+        assert!(error.contains("references unknown contributes.webviews id 'missing'"));
+    }
+
+    #[test]
+    fn rejects_v4_package_presentation_before_runtime_api_2_4() {
+        let raw = serde_json::json!({
+            "schemaVersion": "bakingrl.plugin/4",
+            "id": "com.example.legacy-presentation",
+            "name": "Legacy Presentation",
+            "version": "1.0.0",
+            "bakingrlApi": "2.3.99",
+            "presentation": {
+                "categories": ["layouts"]
+            }
+        })
+        .to_string();
+
+        let error = PluginPackageManifest::parse(&raw).unwrap_err();
+        assert!(error.contains("presentation requires bakingrlApi 2.4.0 or newer"));
+    }
+
+    #[test]
+    fn accepts_v4_package_presentation_with_primary_settings_schema() {
+        let raw = serde_json::json!({
+            "schemaVersion": "bakingrl.plugin/4",
+            "id": "com.example.settings-presentation",
+            "name": "Settings Presentation",
+            "version": "1.0.0",
+            "bakingrlApi": "2.4.0",
+            "presentation": {
+                "primaryAction": {
+                    "kind": "settings"
+                }
+            },
+            "contributes": {
+                "settings": {
+                    "schema": "schemas/settings.json"
+                }
+            }
+        })
+        .to_string();
+
+        PluginPackageManifest::parse(&raw).unwrap();
+    }
+
+    #[test]
+    fn rejects_v4_package_presentation_with_empty_primary_settings() {
+        let raw = serde_json::json!({
+            "schemaVersion": "bakingrl.plugin/4",
+            "id": "com.example.empty-settings-presentation",
+            "name": "Empty Settings Presentation",
+            "version": "1.0.0",
+            "bakingrlApi": "2.4.0",
+            "presentation": {
+                "primaryAction": {
+                    "kind": "settings"
+                }
+            },
+            "contributes": {
+                "settings": {}
+            }
+        })
+        .to_string();
+
+        let error = PluginPackageManifest::parse(&raw).unwrap_err();
+        assert!(error.contains(
+            "primaryAction kind 'settings' requires contributes.settings.schema or contributes.settings.ui"
+        ));
     }
 
     #[test]

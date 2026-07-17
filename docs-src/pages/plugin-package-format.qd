@@ -16,7 +16,7 @@ top-level `bakingrlApi`.
   "name": "Example Extension",
   "version": "1.0.0",
   "author": "Example Author",
-  "bakingrlApi": "2.3.0",
+  "bakingrlApi": "2.4.0",
   "permissions": {
     "bus": { "read": ["UpdateState"], "publish": [] },
     "registry": { "read": [], "write": [] },
@@ -55,8 +55,16 @@ Stable package identity. Use reverse-DNS style values such as
 
 `bakingrlApi`
 
-Must target the host runtime API. Current runtime API is `2.3.0`; the host
-accepts compatible `2.3.x` packages.
+Must target the host runtime API. Current runtime API is `2.4.0`; the host
+accepts compatible `2.3.x` through `2.4.x` packages.
+
+`presentation`
+
+Optional runtime API 2.4 metadata containing filter-only categories and one
+independent primary action pointing to a package webview or settings. Categories
+never affect activation, permissions, visibility, runtime behavior, or
+navigation. Older 2.3 packages may omit it and receive a generic fallback
+presentation.
 
 `permissions`
 

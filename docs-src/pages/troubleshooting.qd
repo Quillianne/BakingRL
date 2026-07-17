@@ -76,7 +76,7 @@ path, use a self-contained Node distribution and point
 ## Incompatible Plugin Package
 
 If a package is installed but disabled, inspect its package details. Packages
-must declare top-level `bakingrlApi` and the current host supports `2.3.x`.
+must declare top-level `bakingrlApi` and the current host supports `2.3.x` through `2.4.x`.
 
 When the declared version is different, rebuild the package with a compatible
 SDK and helper CLI. The host keeps the package visible so users can

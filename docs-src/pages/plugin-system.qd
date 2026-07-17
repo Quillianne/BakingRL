@@ -10,7 +10,7 @@ plugins can be powerful, can own meaningful workflows, and can combine browser
 UI, host APIs, and native helper processes.
 
 The public plugin contract is `bakingrl.plugin/4`, top-level `bakingrlApi:
-"2.3.0"`, and SDK package version `2.3.0`.
+"2.4.0"`, and SDK package version `2.3.1`.
 
 ## What A V4 Plugin Can Do
 
@@ -156,7 +156,7 @@ The live implementation is the object registered from `activate(context)`.
 
 ## Manifest Permissions
 
-Runtime API 2.3 manifests declare structured bus, registry, network, and
+Runtime API 2.4 manifests declare structured bus, registry, network, and
 storage permissions. The host enforces bus, registry, and storage declarations
 on mediated calls. Package publishes and registry writes remain constrained to
 `plugin.<package-id>.*`; cross-package reads require both a matching permission
