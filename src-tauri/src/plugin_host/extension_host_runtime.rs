@@ -1133,20 +1133,18 @@ fn spawn_runtime_child(launch: &ExtensionHostLaunch) -> Result<Child, ExtensionH
 }
 
 fn canonicalize_package_root(path: &Path) -> Result<PathBuf, ExtensionHostRuntimeError> {
-    path.canonicalize()
-        .map_err(|source| ExtensionHostRuntimeError::PackageRoot {
-            path: path.to_path_buf(),
-            source,
-        })
+    dunce::canonicalize(path).map_err(|source| ExtensionHostRuntimeError::PackageRoot {
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 fn canonicalize_package_file(
     package_root: &Path,
     path: &Path,
 ) -> Result<PathBuf, ExtensionHostRuntimeError> {
-    let resolved = path
-        .canonicalize()
-        .map_err(|source| ExtensionHostRuntimeError::Entry {
+    let resolved =
+        dunce::canonicalize(path).map_err(|source| ExtensionHostRuntimeError::Entry {
             path: path.to_path_buf(),
             source,
         })?;
@@ -1266,7 +1264,7 @@ fn resolve_bootstrap_path(app_handle: &AppHandle) -> Result<PathBuf, ExtensionHo
 }
 
 fn canonicalize_bootstrap(path: PathBuf) -> Result<PathBuf, ExtensionHostRuntimeError> {
-    path.canonicalize()
+    dunce::canonicalize(&path)
         .map_err(|source| ExtensionHostRuntimeError::Bootstrap { path, source })
 }
 
@@ -1332,6 +1330,33 @@ mod node_path_tests {
         );
 
         assert_eq!(candidates[1], Path::new("BakingRL.app/Contents/MacOS/node"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn canonicalized_extension_host_paths_are_compatible_with_node_on_windows() {
+        use super::{canonicalize_bootstrap, canonicalize_package_file, canonicalize_package_root};
+        use std::fs;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let entry = temporary.path().join("index.mjs");
+        fs::write(&entry, "export function activate() {}\n").unwrap();
+
+        let package_root = canonicalize_package_root(temporary.path()).unwrap();
+        let entry = canonicalize_package_file(&package_root, &entry).unwrap();
+        let bootstrap = canonicalize_bootstrap(entry.clone()).unwrap();
+
+        for path in [&package_root, &entry, &bootstrap] {
+            assert!(
+                !path.to_string_lossy().starts_with(r"\\?\"),
+                "Node must not receive a verbatim Windows path: {}",
+                path.display()
+            );
+        }
+
+        let entry_url = url::Url::from_file_path(&entry).unwrap().to_string();
+        assert!(entry_url.starts_with("file:///"));
+        assert!(!entry_url.contains("/?/"));
     }
 }
 

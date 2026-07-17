@@ -350,6 +350,7 @@ dependencies = [
  "base64 0.22.1",
  "deno_core",
  "deno_error",
+ "dunce",
  "ed25519-dalek",
  "futures-util",
  "hex",

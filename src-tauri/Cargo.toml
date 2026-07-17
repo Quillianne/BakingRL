@@ -30,6 +30,7 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 deno_core = "0.400.0"
 deno_error = "0.7.1"
+dunce = "1.0.5"
 notify = "8"
 axum = { version = "0.8.9", features = ["ws"] }
 tower-http = { version = "0.6.8", features = ["fs", "cors"] }

@@ -640,23 +640,20 @@ fn spawn_sidecar_runtime(
 }
 
 fn canonicalize_package_root(path: &Path) -> Result<PathBuf, SidecarRuntimeError> {
-    path.canonicalize()
-        .map_err(|source| SidecarRuntimeError::PackageRoot {
-            path: path.to_path_buf(),
-            source,
-        })
+    dunce::canonicalize(path).map_err(|source| SidecarRuntimeError::PackageRoot {
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 fn canonicalize_package_file(
     package_root: &Path,
     path: &Path,
 ) -> Result<PathBuf, SidecarRuntimeError> {
-    let resolved = path
-        .canonicalize()
-        .map_err(|source| SidecarRuntimeError::Binary {
-            path: path.to_path_buf(),
-            source,
-        })?;
+    let resolved = dunce::canonicalize(path).map_err(|source| SidecarRuntimeError::Binary {
+        path: path.to_path_buf(),
+        source,
+    })?;
     if !resolved.starts_with(package_root) {
         return Err(SidecarRuntimeError::BinaryEscapesPackageRoot {
             binary: resolved,
