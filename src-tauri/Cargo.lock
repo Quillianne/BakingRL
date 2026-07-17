@@ -343,7 +343,7 @@ checksum = "be5eb007b7cacc6c660343e96f650fedf4b5a77512399eb952ca6642cf8d13f7"
 
 [[package]]
 name = "bakingrl"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "active-win-pos-rs",
  "axum",
